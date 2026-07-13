@@ -341,12 +341,48 @@ aggregate_matrix <- function(
 }
 
 
+.get_assay_data_compat <- function(
+    object,
+    assay = NULL,
+    layer = 'data',
+    ...
+){
+    if (inherits(object, 'GRNData')){
+        object <- object@data
+    }
+
+    if (!inherits(object, 'Seurat')){
+        stop('object must be a Seurat or GRNData object.')
+    }
+
+    if (is.null(assay)){
+        assay <- Seurat::DefaultAssay(object)
+    }
+
+    if ('LayerData' %in% getNamespaceExports('SeuratObject')){
+        return(SeuratObject::LayerData(
+            object = object,
+            assay = assay,
+            layer = layer,
+            ...
+        ))
+    }
+
+    return(Seurat::GetAssayData(
+        object = object,
+        assay = assay,
+        slot = layer,
+        ...
+    ))
+}
+
+
 #' Aggregate Seurat assay over groups
 #'
 #' @param group_name A character vector indicating the metadata column to aggregate over.
 #' @param fun The summary function to be applied to each group.
 #' @param assay The assay to summarize.
-#' @param slot The slot to summarize.
+#' @param slot The slot or layer to summarize.
 #'
 #' @return A Seurat object.
 #'
@@ -358,9 +394,40 @@ aggregate_assay <- function(
     assay = 'RNA',
     slot = 'data'
 ){
-    ass_mat <- Matrix::t(SeuratObject::LayerData(object, assay=assay, layer=slot))
+    if (!inherits(object, 'Seurat')){
+        stop('object must be a Seurat object.')
+    }
+
+    if (!assay %in% names(object@assays)){
+        stop(paste0("Assay '", assay, "' was not found in the Seurat object."))
+    }
+
+    if (!group_name %in% colnames(object@meta.data)){
+        stop(paste0("Metadata column '", group_name, "' was not found."))
+    }
+
     groups <- as.character(object@meta.data[[group_name]])
-    agg_mat <- aggregate_matrix(ass_mat, groups=groups, fun=fun)
+
+    if (anyNA(groups)){
+        stop(paste0("Metadata column '", group_name, "' contains NA values."))
+    }
+
+    ass_mat <- Matrix::t(.get_assay_data_compat(
+        object = object,
+        assay = assay,
+        layer = slot
+    ))
+
+    if (nrow(ass_mat) != length(groups)){
+        stop('The assay matrix and metadata contain different numbers of cells.')
+    }
+
+    agg_mat <- aggregate_matrix(
+        ass_mat,
+        groups = groups,
+        fun = fun
+    )
+
     if (is.null(object@assays[[assay]]@misc$summary)){
         object@assays[[assay]]@misc$summary <- list()
     }
