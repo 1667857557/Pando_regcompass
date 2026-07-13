@@ -191,25 +191,45 @@ fit_grn_models.GRNData <- function(
     # Get assay data or summary
     if (is.null(aggregate_rna_col)){
         gene_data <- Matrix::t(LayerData(
-            object, assay=params$rna_assay, layer='data'
+            object,
+            assay = params$rna_assay,
+            layer = 'data'
         ))
         gene_groups <- TRUE
     } else {
+        if (!aggregate_rna_col %in% colnames(object@data@meta.data)){
+            stop(paste0(
+                "RNA aggregation column '",
+                aggregate_rna_col,
+                "' was not found in metadata."
+            ))
+        }
+
         gene_data <- GetAssaySummary(
             object,
             assay = params$rna_assay,
             group_name = aggregate_rna_col,
             verbose = FALSE
         )
-        gene_groups <- object@meta.data[[aggregate_rna_col]]
+        gene_groups <- object@data@meta.data[[aggregate_rna_col]]
     }
 
     if (is.null(aggregate_peaks_col)){
         peak_data <- Matrix::t(LayerData(
-            object, assay=params$peak_assay, layer='data'
+            object,
+            assay = params$peak_assay,
+            layer = 'data'
         ))
         peak_groups <- TRUE
     } else {
+        if (!aggregate_peaks_col %in% colnames(object@data@meta.data)){
+            stop(paste0(
+                "Peak aggregation column '",
+                aggregate_peaks_col,
+                "' was not found in metadata."
+            ))
+        }
+
         peak_data <- GetAssaySummary(
             object,
             assay = params$peak_assay,

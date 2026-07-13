@@ -408,8 +408,18 @@ GetAssaySummary.Seurat <- function(object, group_name, assay=NULL, verbose=TRUE)
 #' @rdname GetAssaySummary
 #' @method GetAssaySummary GRNData
 #' @export
-GetAssaySummary.GRNData <- function(object, group_name, assay=NULL, verbose=TRUE){
-    return(GetAssaySummary(object@data, group_name, assay=NULL, verbose=TRUE))
+GetAssaySummary.GRNData <- function(
+    object,
+    group_name,
+    assay = NULL,
+    verbose = TRUE
+){
+    return(GetAssaySummary(
+        object = object@data,
+        group_name = group_name,
+        assay = assay,
+        verbose = verbose
+    ))
 }
 
 
@@ -422,12 +432,27 @@ GetAssay.GRNData <- function(object, assay=NULL){
 }
 
 
-#' Get layer data from GRNData
+#' Get assay data from GRNData
 #' @rdname LayerData
 #' @method LayerData GRNData
 #' @export
-LayerData.GRNData <- function(object, ...){
-    return(SeuratObject::LayerData(object@data, ...))
+LayerData.GRNData <- function(
+    object,
+    assay = NULL,
+    layer = 'data',
+    slot = NULL,
+    ...
+){
+    if (!is.null(slot)){
+        layer <- slot
+    }
+
+    return(.get_assay_data_compat(
+        object = object@data,
+        assay = assay,
+        layer = layer,
+        ...
+    ))
 }
 
 
