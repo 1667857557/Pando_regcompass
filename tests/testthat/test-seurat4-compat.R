@@ -1,3 +1,8 @@
+context('Seurat 4 compatibility tests')
+
+library(testthat)
+library(Pando)
+
 testthat::test_that("Seurat v4 assay accessor is compatible", {
     testthat::skip_if_not_installed("Seurat")
     testthat::skip_if_not_installed("SeuratObject")

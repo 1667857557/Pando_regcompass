@@ -1,3 +1,8 @@
+context('Seurat 4 multiome compatibility tests')
+
+library(testthat)
+library(Pando)
+
 testthat::test_that("GRNData accepts a Seurat v4 multiome object", {
     testthat::skip_if_not_installed("Seurat")
     testthat::skip_if_not_installed("Signac")
