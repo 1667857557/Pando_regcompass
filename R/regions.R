@@ -108,7 +108,13 @@ initiate_grn.GRNData <- function(
         rna_assay = 'RNA',
         exclude_exons = TRUE
 ){
-    initiate_grn(object@data)
+    return(initiate_grn(
+        object = object@data,
+        regions = regions,
+        peak_assay = peak_assay,
+        rna_assay = rna_assay,
+        exclude_exons = exclude_exons
+    ))
 }
 
 #' Scan for motifs in candidate regions.
