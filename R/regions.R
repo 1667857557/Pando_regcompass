@@ -117,6 +117,29 @@ initiate_grn.GRNData <- function(
     ))
 }
 
+.load_default_motif2tf <- function(){
+    data_env <- new.env(parent = emptyenv())
+    utils::data(
+        "motif2tf",
+        package = "Pando",
+        envir = data_env
+    )
+    if (!exists("motif2tf", envir = data_env, inherits = FALSE)){
+        stop(
+            "The bundled Pando `motif2tf` dataset could not be loaded.",
+            call. = FALSE
+        )
+    }
+    motif2tf <- get("motif2tf", envir = data_env, inherits = FALSE)
+    if (!is.data.frame(motif2tf) || ncol(motif2tf) < 2L){
+        stop(
+            "The bundled Pando `motif2tf` dataset must be a data frame with at least two columns.",
+            call. = FALSE
+        )
+    }
+    motif2tf
+}
+
 #' Scan for motifs in candidate regions.
 #'
 #' @importFrom dplyr distinct mutate select
@@ -146,7 +169,13 @@ find_motifs.GRNData <- function(
     if (!is.null(motif_tfs)){
         motif2tf <- motif_tfs
     } else {
-        utils::data(motif2tf, envir = environment())
+        motif2tf <- .load_default_motif2tf()
+    }
+    if (!is.data.frame(motif2tf) || ncol(motif2tf) < 2L){
+        stop(
+            "`motif_tfs` must be a data frame with motif names in the first column and TF names in the second column.",
+            call. = FALSE
+        )
     }
 
     # Spread dataframe to sparse matrix
