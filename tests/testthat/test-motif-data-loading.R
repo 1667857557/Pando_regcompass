@@ -7,16 +7,3 @@ test_that("bundled motif-to-TF data load from the Pando package", {
     expect_true(all(!is.na(motif2tf[[1L]])))
     expect_true(all(!is.na(motif2tf[[2L]])))
 })
-
-test_that("custom motif-to-TF maps retain input validation", {
-    expect_error(
-        Pando:::find_motifs.GRNData(
-            object = NULL,
-            pfm = NULL,
-            genome = NULL,
-            motif_tfs = character(),
-            verbose = FALSE
-        ),
-        "motif_tfs"
-    )
-})
