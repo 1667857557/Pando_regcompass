@@ -61,8 +61,17 @@ prepare_grn_design.GRNData <- function(
     min_peak_detection <- validate_fraction(min_peak_detection, 'min_peak_detection')
     min_target_detection <- validate_fraction(min_target_detection, 'min_target_detection')
     if (!is.numeric(max_edges_per_target) || length(max_edges_per_target) != 1L ||
-        is.na(max_edges_per_target) || max_edges_per_target <= 0) {
-        stop('`max_edges_per_target` must be one positive number or `Inf`.', call. = FALSE)
+        is.na(max_edges_per_target) || max_edges_per_target <= 0 ||
+        (is.finite(max_edges_per_target) &&
+         abs(max_edges_per_target - round(max_edges_per_target)) >
+             sqrt(.Machine$double.eps))) {
+        stop(
+            '`max_edges_per_target` must be one positive integer or `Inf`.',
+            call. = FALSE
+        )
+    }
+    if (is.finite(max_edges_per_target)) {
+        max_edges_per_target <- as.integer(max_edges_per_target)
     }
 
     params <- Params(object)
@@ -133,6 +142,7 @@ prepare_grn_design.GRNData <- function(
             genes = gene_annot,
             upstream = upstream,
             downstream = downstream,
+            extend = extend,
             only_tss = only_tss
         )
     } else {
@@ -142,6 +152,7 @@ prepare_grn_design.GRNData <- function(
             genes = peak_to_gene_domains,
             upstream = 0,
             downstream = 0,
+            extend = extend,
             only_tss = FALSE
         )
     }
@@ -259,7 +270,7 @@ prepare_grn_design.GRNData <- function(
             )
             candidate_edges <- do.call(rbind, lapply(target_rows, function(index) {
                 index <- index[seq_len(min(
-                    length(index), as.integer(max_edges_per_target)
+                    length(index), max_edges_per_target
                 ))]
                 candidate_edges[index, , drop = FALSE]
             }))
