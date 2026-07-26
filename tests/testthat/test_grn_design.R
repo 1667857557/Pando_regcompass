@@ -78,6 +78,21 @@ test_that("design validation rejects edge, feature, mapping and fingerprint drif
   expect_error(validate_grn_design(broken), "fingerprint")
 })
 
+test_that("every supporting region maps to the edge's measured ATAC feature", {
+  design <- make_test_grn_design()
+  broken <- design
+  broken$region_map$atac_feature_id[[2L]] <- "other_peak"
+  broken$feature_contract$atac_feature_ids <- c("peak1", "other_peak")
+  broken$design_fingerprint <- paste0(
+    "md5:", .pando_design_md5(.pando_design_payload(broken))
+  )
+
+  expect_error(
+    validate_grn_design(broken),
+    "Every supporting regulatory region"
+  )
+})
+
 test_that("prepare_grn_design is a public S3 generic", {
   expect_true(is.function(prepare_grn_design))
   expect_true(is.function(prepare_grn_design.GRNData))
