@@ -16,6 +16,12 @@ infer_grn <- function(object, ...){
     UseMethod(generic = 'infer_grn', object = object)
 }
 
+#' @rdname prepare_grn_design
+#' @export prepare_grn_design
+prepare_grn_design <- function(object, ...){
+    UseMethod(generic = 'prepare_grn_design', object = object)
+}
+
 #' @rdname fit_grn_models
 #' @export fit_grn_models
 fit_grn_models <- function(object, ...){
@@ -153,6 +159,3 @@ LayerData <- function(object, ...){
 VariableFeatures <- function(object, ...){
     UseMethod(generic = 'VariableFeatures', object = object)
 }
-
-
-
