@@ -1,15 +1,10 @@
 # Shared pre-fit TF-peak-gene design construction.
 
 .pando_design_hash <- function(x) {
-    text <- paste(as.character(x), collapse = "\n")
-    values <- utf8ToInt(enc2utf8(text))
+    values <- utf8ToInt(enc2utf8(paste(as.character(x), collapse = "\n")))
     hash <- 0
     modulus <- 2147483647
-    if (length(values)) {
-        for (value in values) {
-            hash <- (hash * 131 + value) %% modulus
-        }
-    }
+    for (value in values) hash <- (hash * 131 + value) %% modulus
     sprintf("%08x", as.integer(hash))
 }
 
@@ -20,7 +15,6 @@
 }
 
 .pando_group_max_abs_cor <- function(x, y, groups) {
-    x <- as.matrix(x)
     y <- as.numeric(y)
     groups <- as.character(groups)
     answer <- rep(0, ncol(x))
@@ -29,9 +23,13 @@
         index <- which(groups == group & is.finite(y))
         if (length(index) < 3L) next
         y_group <- y[index]
-        if (!is.finite(stats::sd(y_group)) || stats::sd(y_group) <= 0) next
-        x_group <- x[index, , drop = FALSE]
-        value <- suppressWarnings(stats::cor(x_group, y_group, use = "pairwise.complete.obs"))
+        y_sd <- stats::sd(y_group)
+        if (!is.finite(y_sd) || y_sd <= 0) next
+        value <- suppressWarnings(stats::cor(
+            as.matrix(x[index, , drop = FALSE]),
+            y_group,
+            use = "pairwise.complete.obs"
+        ))
         value <- as.numeric(value)
         value[!is.finite(value)] <- 0
         answer <- pmax(answer, abs(value))
@@ -42,9 +40,6 @@
 .pando_candidate_edge_table <- function(
     peaks2gene, peaks2motif, motif2tf, region_to_peak,
     peak_to_gene_source = "Signac") {
-    peaks2gene <- as.matrix(peaks2gene)
-    peaks2motif <- as.matrix(peaks2motif)
-    motif2tf <- as.matrix(motif2tf)
     if (is.null(rownames(peaks2gene)) || is.null(colnames(peaks2gene)) ||
         is.null(rownames(peaks2motif)) || is.null(colnames(peaks2motif)) ||
         is.null(rownames(motif2tf)) || is.null(colnames(motif2tf))) {
@@ -66,7 +61,9 @@
         for (region in target_regions) {
             region_motifs <- motifs[as.numeric(peaks2motif[region, ]) > 0]
             if (!length(region_motifs)) next
-            tf_present <- colSums(motif2tf[region_motifs, , drop = FALSE] != 0) > 0
+            tf_present <- Matrix::colSums(
+                motif2tf[region_motifs, , drop = FALSE] != 0
+            ) > 0
             tfs <- setdiff(colnames(motif2tf)[tf_present], target)
             for (tf in tfs) {
                 matched <- region_motifs[
@@ -97,11 +94,11 @@
 
 #' Prepare a shared pre-fit TF-peak-gene design
 #'
-#' Builds the structural candidate universe used before coefficient estimation.
-#' The returned edge table is suitable for multi-task models in which every
-#' condition must use the same TF-peak-target columns. By default no target-RNA
-#' correlation filter is applied, so condition-specific sign reversals cannot
-#' be removed by pooled cancellation before fitting.
+#' Builds one structural candidate universe before coefficient estimation. The
+#' returned edge table lets downstream multi-task models use identical
+#' TF-peak-target columns in every condition. The default structural mode does
+#' not use target-RNA correlation, so pooled cancellation cannot discard a true
+#' condition-specific sign reversal before fitting.
 #'
 #' @param object A `GRNData` object after [find_motifs()].
 #' @param genes Target genes. Defaults to RNA variable features.
@@ -110,9 +107,7 @@
 #' @param upstream,downstream,extend,only_tss Regulatory-domain parameters.
 #' @param peak_to_gene_domains Optional supplied regulatory domains.
 #' @param screen_method `"structural"` or
-#'   `"union_within_group_correlation"`. The latter retains an edge when its
-#'   peak-target and TF-target correlations pass thresholds in at least one
-#'   group, while still returning one shared edge universe.
+#'   `"union_within_group_correlation"`.
 #' @param screen_group_col Metadata column defining screening groups.
 #' @param tf_cor,peak_cor Absolute within-group screening thresholds.
 #' @param min_tf_detection,min_peak_detection,min_target_detection Minimum
@@ -120,9 +115,8 @@
 #' @param max_edges_per_target Optional deterministic cap per target.
 #' @param verbose Display progress messages.
 #'
-#' @return A `PandoGRNDesign` list containing `candidate_edges`, `region_map`,
-#'   `target_diagnostics`, a matrix/feature contract, parameters and a stable
-#'   design identifier.
+#' @return A `PandoGRNDesign` list containing candidate edges, explicit source
+#'   feature mappings, target diagnostics and a matrix contract.
 #' @rdname prepare_grn_design
 #' @export
 #' @method prepare_grn_design GRNData
@@ -146,23 +140,17 @@ prepare_grn_design.GRNData <- function(
     verbose = TRUE) {
     peak_to_gene_method <- match.arg(peak_to_gene_method)
     screen_method <- match.arg(screen_method)
-    numeric_probability <- function(value, name) {
+    check_probability <- function(value, name) {
         if (!is.numeric(value) || length(value) != 1L || !is.finite(value) ||
             value < 0 || value > 1) {
             stop("`", name, "` must be one finite number in [0, 1].",
                  call. = FALSE)
         }
     }
-    numeric_probability(min_tf_detection, "min_tf_detection")
-    numeric_probability(min_peak_detection, "min_peak_detection")
-    numeric_probability(min_target_detection, "min_target_detection")
-    if (!is.numeric(tf_cor) || length(tf_cor) != 1L || !is.finite(tf_cor) ||
-        tf_cor < 0 || tf_cor > 1 || !is.numeric(peak_cor) ||
-        length(peak_cor) != 1L || !is.finite(peak_cor) || peak_cor < 0 ||
-        peak_cor > 1) {
-        stop("`tf_cor` and `peak_cor` must be finite numbers in [0, 1].",
-             call. = FALSE)
-    }
+    for (name in c(
+        "min_tf_detection", "min_peak_detection", "min_target_detection",
+        "tf_cor", "peak_cor"
+    )) check_probability(get(name), name)
     if (!is.numeric(max_edges_per_target) || length(max_edges_per_target) != 1L ||
         is.na(max_edges_per_target) || max_edges_per_target <= 0) {
         stop("`max_edges_per_target` must be positive or Inf.", call. = FALSE)
@@ -179,9 +167,7 @@ prepare_grn_design.GRNData <- function(
         stop("Please provide a gene annotation for the ChromatinAssay.",
              call. = FALSE)
     }
-    if (is.null(genes)) {
-        genes <- VariableFeatures(object, assay = params$rna_assay)
-    }
+    if (is.null(genes)) genes <- VariableFeatures(object, assay = params$rna_assay)
     genes <- unique(as.character(genes))
     if (!length(genes)) stop("No target genes were supplied.", call. = FALSE)
 
@@ -206,12 +192,10 @@ prepare_grn_design.GRNData <- function(
     }
 
     regions <- NetworkRegions(object)
-    if (!length(regions@peaks)) {
-        stop("Pando contains no regulatory regions.", call. = FALSE)
-    }
     region_ids <- rownames(regions@motifs@data)
-    if (length(region_ids) != length(regions@peaks)) {
-        stop("Pando region and peak mappings have different lengths.",
+    if (!length(regions@peaks) || length(region_ids) != length(regions@peaks) ||
+        anyNA(region_ids) || any(!nzchar(region_ids)) || anyDuplicated(region_ids)) {
+        stop("Pando regulatory-region mappings are incomplete or duplicated.",
              call. = FALSE)
     }
     source_peak_ids <- colnames(peak_source)[regions@peaks]
@@ -234,6 +218,7 @@ prepare_grn_design.GRNData <- function(
             downstream = downstream,
             only_tss = only_tss
         )
+        peak_to_gene_source <- peak_to_gene_method
     } else {
         peaks_near_gene <- find_peaks_near_genes(
             peaks = regions@ranges,
@@ -243,57 +228,47 @@ prepare_grn_design.GRNData <- function(
             downstream = 0,
             only_tss = FALSE
         )
+        peak_to_gene_source <- "provided_domains"
     }
     peaks2gene <- aggregate_matrix(
         t(peaks_near_gene), groups = colnames(peaks_near_gene), fun = "sum"
     )
-    peaks_at_gene <- as.logical(sparseMatrixStats::colMaxs(peaks2gene))
-    peaks_with_motif <- as.logical(
-        sparseMatrixStats::rowMaxs(peaks2motif * 1)
-    )
-    peaks_use <- peaks_at_gene & peaks_with_motif
-    peaks2gene <- peaks2gene[, peaks_use, drop = FALSE]
-    peaks2motif <- peaks2motif[peaks_use, , drop = FALSE]
-    peak_data <- peak_data[, peaks_use, drop = FALSE]
-    region_to_peak <- region_to_peak[colnames(peak_data)]
+    common_regions <- Reduce(intersect, list(
+        colnames(peaks2gene), rownames(peaks2motif), colnames(peak_data)
+    ))
+    peaks2gene <- peaks2gene[, common_regions, drop = FALSE]
+    peaks2motif <- peaks2motif[common_regions, , drop = FALSE]
+    peak_data <- peak_data[, common_regions, drop = FALSE]
+    keep_region <- as.logical(sparseMatrixStats::colMaxs(peaks2gene)) &
+        as.logical(sparseMatrixStats::rowMaxs(peaks2motif * 1))
+    common_regions <- common_regions[keep_region]
+    peaks2gene <- peaks2gene[, common_regions, drop = FALSE]
+    peaks2motif <- peaks2motif[common_regions, , drop = FALSE]
+    peak_data <- peak_data[, common_regions, drop = FALSE]
+    region_to_peak <- region_to_peak[common_regions]
 
     expressed_tfs <- intersect(colnames(motif2tf), colnames(gene_data))
     motif2tf <- motif2tf[, expressed_tfs, drop = FALSE]
     candidates <- .pando_candidate_edge_table(
-        peaks2gene = peaks2gene,
-        peaks2motif = peaks2motif,
-        motif2tf = motif2tf,
-        region_to_peak = region_to_peak,
-        peak_to_gene_source = if (is.null(peak_to_gene_domains)) {
-            peak_to_gene_method
-        } else {
-            "provided_domains"
-        }
+        peaks2gene, peaks2motif, motif2tf, region_to_peak,
+        peak_to_gene_source = peak_to_gene_source
     )
     if (!nrow(candidates)) {
         stop("No structural TF-peak-target candidates were found.",
              call. = FALSE)
     }
 
-    tf_detection <- vapply(
-        unique(candidates$tf),
-        function(tf) .pando_detection_fraction(gene_data[, tf]),
-        numeric(1)
-    )
-    target_detection <- vapply(
-        unique(candidates$target),
-        function(target) .pando_detection_fraction(gene_data[, target]),
-        numeric(1)
-    )
-    peak_detection <- vapply(
-        unique(candidates$region),
-        function(region) .pando_detection_fraction(peak_data[, region]),
-        numeric(1)
-    )
+    tf_detection <- vapply(unique(candidates$tf), function(tf) {
+        .pando_detection_fraction(gene_data[, tf])
+    }, numeric(1))
+    target_detection <- vapply(unique(candidates$target), function(target) {
+        .pando_detection_fraction(gene_data[, target])
+    }, numeric(1))
+    peak_detection <- vapply(unique(candidates$region), function(region) {
+        .pando_detection_fraction(peak_data[, region])
+    }, numeric(1))
     candidates$tf_detection <- unname(tf_detection[candidates$tf])
-    candidates$target_detection <- unname(
-        target_detection[candidates$target]
-    )
+    candidates$target_detection <- unname(target_detection[candidates$target])
     candidates$peak_detection <- unname(peak_detection[candidates$region])
     candidates <- candidates[
         candidates$tf_detection >= min_tf_detection &
@@ -319,18 +294,18 @@ prepare_grn_design.GRNData <- function(
         }
         for (target in unique(candidates$target)) {
             index <- which(candidates$target == target)
-            regions_target <- unique(candidates$region[index])
-            tfs_target <- unique(candidates$tf[index])
+            target_regions <- unique(candidates$region[index])
+            target_tfs <- unique(candidates$tf[index])
             peak_score <- .pando_group_max_abs_cor(
-                peak_data[, regions_target, drop = FALSE],
+                peak_data[, target_regions, drop = FALSE],
                 gene_data[, target], groups
             )
             tf_score <- .pando_group_max_abs_cor(
-                gene_data[, tfs_target, drop = FALSE],
+                gene_data[, target_tfs, drop = FALSE],
                 gene_data[, target], groups
             )
-            names(peak_score) <- regions_target
-            names(tf_score) <- tfs_target
+            names(peak_score) <- target_regions
+            names(tf_score) <- target_tfs
             candidates$peak_target_screen_score[index] <-
                 unname(peak_score[candidates$region[index]])
             candidates$tf_target_screen_score[index] <-
@@ -355,12 +330,10 @@ prepare_grn_design.GRNData <- function(
                 candidates$tf_target_screen_score[index],
                 na.rm = TRUE
             )
-            score[!is.finite(score)] <-
-                candidates$peak_detection[index] *
+            score[!is.finite(score)] <- candidates$peak_detection[index] *
                 candidates$tf_detection[index]
-            order(-score, candidates$edge_id[index])[
-                seq_len(min(length(index), as.integer(max_edges_per_target)))
-            ] |> function(local) index[local]
+            local <- order(-score, candidates$edge_id[index])
+            index[local[seq_len(min(length(local), as.integer(max_edges_per_target)))]]
         }), use.names = FALSE)
         candidates <- candidates[sort(keep), , drop = FALSE]
     }
@@ -385,8 +358,7 @@ prepare_grn_design.GRNData <- function(
     rownames(target_diagnostics) <- NULL
     region_map <- unique(candidates[, c("region", "atac_feature_id"), drop = FALSE])
     design_id <- paste0(
-        "pando_grn_design_v1_",
-        .pando_design_hash(candidates$edge_id)
+        "pando_grn_design_v1_", .pando_design_hash(candidates$edge_id)
     )
     answer <- list(
         schema_version = "pando_grn_design_v1",
@@ -420,6 +392,7 @@ prepare_grn_design.GRNData <- function(
         design_id = design_id
     )
     class(answer) <- c("PandoGRNDesign", "list")
+    validate_grn_design(answer)
     answer
 }
 
