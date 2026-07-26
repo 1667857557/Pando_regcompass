@@ -33,6 +33,7 @@ jobs:
         run: |
           source("R/grn_design.R", local = globalenv())
           source("R/grn_design_contract.R", local = globalenv())
+          source("R/grn_design_mapping_contract.R", local = globalenv())
           edges <- data.frame(
             edge_id = "TF1::peak1::GENE1",
             candidate_index = 1L,
@@ -91,6 +92,22 @@ jobs:
             design$target_diagnostics$n_candidate_atac_features, 1L
           ))
           stopifnot(isTRUE(validate_grn_design(design)))
+
+          broken <- design
+          broken$region_map$atac_feature_id[[2L]] <- "other_peak"
+          broken$feature_contract$atac_feature_ids <- c("peak1", "other_peak")
+          broken$design_fingerprint <- paste0(
+            "md5:", .pando_design_md5(.pando_design_payload(broken))
+          )
+          failure <- tryCatch({
+            validate_grn_design(broken)
+            NULL
+          }, error = function(error) error)
+          stopifnot(inherits(failure, "error"))
+          stopifnot(grepl(
+            "Every supporting regulatory region",
+            conditionMessage(failure), fixed = TRUE
+          ))
 
           namespace <- readLines("NAMESPACE", warn = FALSE)
           stopifnot(any(namespace == "export(prepare_grn_design)"))
