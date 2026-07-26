@@ -28,30 +28,68 @@ jobs:
           )
           invisible(lapply(files, parse))
 
-      - name: Verify shared design schema without package dependencies
+      - name: Verify shared design v2 schema without package dependencies
         shell: Rscript {0}
         run: |
           source("R/grn_design.R", local = globalenv())
+          source("R/grn_design_contract.R", local = globalenv())
+          edges <- data.frame(
+            edge_id = "TF1::peak1::GENE1",
+            candidate_index = 1L,
+            tf = "TF1",
+            region = "chr1-1-10",
+            target = "GENE1",
+            atac_feature_id = "peak1",
+            tf_feature_id = "TF1",
+            target_feature_id = "GENE1",
+            motif_supported = TRUE,
+            peak_to_gene_supported = TRUE,
+            supporting_regions = "chr1-1-10;chr1-2-9",
+            n_supporting_regions = 2L,
+            tf_detection = 0.5,
+            peak_detection = 0.5,
+            target_detection = 0.5,
+            stringsAsFactors = FALSE
+          )
           design <- structure(list(
             schema_version = "pando_grn_design_v1",
-            candidate_edges = data.frame(
-              edge_id = "TF1::chr1-1-10::GENE1",
-              tf = "TF1",
-              region = "chr1-1-10",
+            candidate_edges = edges,
+            region_map = data.frame(
+              region = c("chr1-1-10", "chr1-2-9"),
+              atac_feature_id = c("peak1", "peak1"),
+              stringsAsFactors = FALSE
+            ),
+            target_diagnostics = data.frame(
               target = "GENE1",
-              atac_feature_id = "chr1-1-10",
-              tf_feature_id = "TF1",
-              target_feature_id = "GENE1",
+              target_detection = 0.5,
+              n_candidate_edges = 1L,
+              n_candidate_tfs = 1L,
+              n_candidate_regions = 1L,
               stringsAsFactors = FALSE
             ),
             feature_contract = list(
               cell_ids = c("c1", "c2"),
               rna_feature_ids = c("TF1", "GENE1"),
-              atac_feature_ids = "chr1-1-10",
+              atac_feature_ids = "peak1",
               rna_assay = "RNA",
-              atac_assay = "ATAC"
-            )
+              atac_assay = "ATAC",
+              rna_layer = "data",
+              atac_layer = "data"
+            ),
+            params = list(
+              candidate_policy = "structural_shared_before_model_fitting"
+            ),
+            design_fingerprint = "legacy"
           ), class = c("PandoGRNDesign", "list"))
+          design <- .pando_refresh_grn_design_contract(design)
+          stopifnot(identical(design$schema_version, "pando_grn_design_v2"))
+          stopifnot(grepl("^md5:", design$design_fingerprint))
+          stopifnot(identical(
+            design$target_diagnostics$n_candidate_regions, 2L
+          ))
+          stopifnot(identical(
+            design$target_diagnostics$n_candidate_atac_features, 1L
+          ))
           stopifnot(isTRUE(validate_grn_design(design)))
 
           namespace <- readLines("NAMESPACE", warn = FALSE)
@@ -60,4 +98,4 @@ jobs:
           stopifnot(any(namespace == "S3method(prepare_grn_design,GRNData)"))
 
           description <- read.dcf("DESCRIPTION")
-          stopifnot(identical(unname(description[1, "Version"]), "1.1.2"))
+          stopifnot(identical(unname(description[1, "Version"]), "1.1.3"))
