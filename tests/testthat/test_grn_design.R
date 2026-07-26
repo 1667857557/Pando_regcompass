@@ -93,6 +93,39 @@ test_that("every supporting region maps to the edge's measured ATAC feature", {
   )
 })
 
+test_that("candidate matrices are aligned by names rather than positions", {
+  peaks2gene <- Matrix::Matrix(
+    matrix(c(1, 0, 0, 1), nrow = 2,
+           dimnames = list(c("G1", "G2"), c("r2", "r1"))),
+    sparse = TRUE
+  )
+  peaks2motif <- Matrix::Matrix(
+    matrix(c(1, 0, 0, 1), nrow = 2,
+           dimnames = list(c("r1", "r2"), c("m2", "m1"))),
+    sparse = TRUE
+  )
+  peak_data <- Matrix::Matrix(
+    matrix(seq_len(6), nrow = 3,
+           dimnames = list(paste0("c", 1:3), c("r1", "r2"))),
+    sparse = TRUE
+  )
+  motif2tf <- Matrix::Matrix(
+    matrix(c(1, 0, 0, 1), nrow = 2,
+           dimnames = list(c("m1", "m2"), c("TF1", "TF2"))),
+    sparse = TRUE
+  )
+
+  aligned <- .pando_align_design_matrices(
+    peaks2gene, peaks2motif, peak_data, motif2tf
+  )
+
+  expect_identical(colnames(aligned$peaks2gene), c("r2", "r1"))
+  expect_identical(rownames(aligned$peaks2motif), c("r2", "r1"))
+  expect_identical(colnames(aligned$peak_data), c("r2", "r1"))
+  expect_identical(colnames(aligned$peaks2motif), c("m2", "m1"))
+  expect_identical(rownames(aligned$motif2tf), c("m2", "m1"))
+})
+
 test_that("prepare_grn_design is a public S3 generic", {
   expect_true(is.function(prepare_grn_design))
   expect_true(is.function(prepare_grn_design.GRNData))
