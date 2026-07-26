@@ -4,7 +4,7 @@
 
 Pando uses paired single-cell RNA and chromatin-accessibility measurements to infer gene regulatory networks through TF-expression by motif-bearing-region accessibility predictors.
 
-This RegCompass fork preserves the original Pando workflow and adds a public pre-fit structural-design contract in version 1.1.2.
+This RegCompass fork preserves the original Pando workflow and adds a public pre-fit structural-design contract. Version 1.1.3 strengthens that contract with exact feature validation and a reproducible content fingerprint.
 
 ## Installation
 
@@ -37,7 +37,7 @@ coef(grn_object)
 
 ## Shared structural GRN design API
 
-`prepare_grn_design()` exposes the TF–peak–target candidate universe before coefficient fitting. This is intended for downstream joint or multitask models that require every condition to use the same edge dictionary.
+`prepare_grn_design()` exposes the TF–peak–target candidate universe before coefficient fitting. This supports downstream joint or multitask models in which every condition must use the same edge dictionary.
 
 ```r
 design <- prepare_grn_design(
@@ -64,7 +64,9 @@ The design API:
 - records the exact measured ATAC feature used for each candidate;
 - deduplicates predictors by `(TF, ATAC feature, target)`;
 - preserves all regulatory regions supporting a deduplicated predictor in `supporting_regions`;
-- returns one deterministic edge ID and candidate order;
+- distinguishes the number of predictor columns, measured ATAC features and supporting regulatory regions per target;
+- validates edge IDs, feature IDs, region-to-peak mappings and candidate order;
+- records an `md5:` fingerprint of the canonical candidate, feature and parameter contract;
 - leaves the original `infer_grn()` interface unchanged.
 
 The principal candidate table fields are:
@@ -85,7 +87,7 @@ peak_detection
 target_detection
 ```
 
-No condition metadata is interpreted by Pando. The caller is responsible for using the same `PandoGRNDesign` in every task or condition model.
+No condition metadata is interpreted by Pando. The caller is responsible for using the same validated `PandoGRNDesign` in every task or condition model.
 
 ## Citation
 
