@@ -1,31 +1,133 @@
-test_that("shared GRN design validation enforces the edge contract", {
+make_test_grn_design <- function() {
+  edges <- data.frame(
+    edge_id = "TF1::peak1::GENE1",
+    candidate_index = 1L,
+    tf = "TF1",
+    region = "chr1-1-10",
+    target = "GENE1",
+    atac_feature_id = "peak1",
+    tf_feature_id = "TF1",
+    target_feature_id = "GENE1",
+    motif_supported = TRUE,
+    peak_to_gene_supported = TRUE,
+    supporting_regions = "chr1-1-10;chr1-2-9",
+    n_supporting_regions = 2L,
+    tf_detection = 0.5,
+    peak_detection = 0.4,
+    target_detection = 0.6,
+    stringsAsFactors = FALSE
+  )
   design <- structure(list(
     schema_version = "pando_grn_design_v1",
-    candidate_edges = data.frame(
-      edge_id = "TF1::chr1-1-10::GENE1",
-      tf = "TF1",
-      region = "chr1-1-10",
+    candidate_edges = edges,
+    region_map = data.frame(
+      region = c("chr1-1-10", "chr1-2-9"),
+      atac_feature_id = c("peak1", "peak1"),
+      stringsAsFactors = FALSE
+    ),
+    target_diagnostics = data.frame(
       target = "GENE1",
-      atac_feature_id = "chr1-1-10",
-      tf_feature_id = "TF1",
-      target_feature_id = "GENE1",
+      target_detection = 0.6,
+      n_candidate_edges = 1L,
+      n_candidate_tfs = 1L,
+      n_candidate_regions = 1L,
       stringsAsFactors = FALSE
     ),
     feature_contract = list(
       cell_ids = c("c1", "c2"),
       rna_feature_ids = c("TF1", "GENE1"),
-      atac_feature_ids = "chr1-1-10",
+      atac_feature_ids = "peak1",
       rna_assay = "RNA",
-      atac_assay = "ATAC"
-    )
+      atac_assay = "ATAC",
+      rna_layer = "data",
+      atac_layer = "data"
+    ),
+    params = list(candidate_policy = "structural_shared_before_model_fitting"),
+    design_fingerprint = "legacy"
   ), class = c("PandoGRNDesign", "list"))
+  .pando_refresh_grn_design_contract(design)
+}
 
+test_that("version-2 shared GRN design validates its exact feature contract", {
+  design <- make_test_grn_design()
+
+  expect_identical(design$schema_version, "pando_grn_design_v2")
+  expect_match(design$design_fingerprint, "^md5:")
   expect_true(validate_grn_design(design))
-  design$candidate_edges$edge_id <- ""
-  expect_error(validate_grn_design(design), "unique and non-empty")
+  expect_identical(design$target_diagnostics$n_candidate_regions, 2L)
+  expect_identical(design$target_diagnostics$n_candidate_atac_features, 1L)
+})
+
+test_that("design validation rejects edge, feature, mapping and fingerprint drift", {
+  design <- make_test_grn_design()
+
+  broken <- design
+  broken$candidate_edges$edge_id <- "wrong"
+  expect_error(validate_grn_design(broken), "uniquely encode")
+
+  broken <- design
+  broken$candidate_edges$atac_feature_id <- "missing_peak"
+  expect_error(validate_grn_design(broken), "feature contract")
+
+  broken <- design
+  broken$region_map$atac_feature_id[[1L]] <- "other_peak"
+  expect_error(validate_grn_design(broken), "Representative regulatory regions")
+
+  broken <- design
+  broken$params$candidate_policy <- "changed"
+  expect_error(validate_grn_design(broken), "fingerprint")
+})
+
+test_that("every supporting region maps to the edge's measured ATAC feature", {
+  design <- make_test_grn_design()
+  broken <- design
+  broken$region_map$atac_feature_id[[2L]] <- "other_peak"
+  broken$feature_contract$atac_feature_ids <- c("peak1", "other_peak")
+  broken$design_fingerprint <- paste0(
+    "md5:", .pando_design_md5(.pando_design_payload(broken))
+  )
+
+  expect_error(
+    validate_grn_design(broken),
+    "Every supporting regulatory region"
+  )
+})
+
+test_that("candidate matrices are aligned by names rather than positions", {
+  peaks2gene <- Matrix::Matrix(
+    matrix(c(1, 0, 0, 1), nrow = 2,
+           dimnames = list(c("G1", "G2"), c("r2", "r1"))),
+    sparse = TRUE
+  )
+  peaks2motif <- Matrix::Matrix(
+    matrix(c(1, 0, 0, 1), nrow = 2,
+           dimnames = list(c("r1", "r2"), c("m2", "m1"))),
+    sparse = TRUE
+  )
+  peak_data <- Matrix::Matrix(
+    matrix(seq_len(6), nrow = 3,
+           dimnames = list(paste0("c", 1:3), c("r1", "r2"))),
+    sparse = TRUE
+  )
+  motif2tf <- Matrix::Matrix(
+    matrix(c(1, 0, 0, 1), nrow = 2,
+           dimnames = list(c("m1", "m2"), c("TF1", "TF2"))),
+    sparse = TRUE
+  )
+
+  aligned <- .pando_align_design_matrices(
+    peaks2gene, peaks2motif, peak_data, motif2tf
+  )
+
+  expect_identical(colnames(aligned$peaks2gene), c("r2", "r1"))
+  expect_identical(rownames(aligned$peaks2motif), c("r2", "r1"))
+  expect_identical(colnames(aligned$peak_data), c("r2", "r1"))
+  expect_identical(colnames(aligned$peaks2motif), c("m2", "m1"))
+  expect_identical(rownames(aligned$motif2tf), c("m2", "m1"))
 })
 
 test_that("prepare_grn_design is a public S3 generic", {
   expect_true(is.function(prepare_grn_design))
   expect_true(is.function(prepare_grn_design.GRNData))
+  expect_true(is.function(validate_grn_design))
 })
