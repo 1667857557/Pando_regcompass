@@ -220,9 +220,6 @@ prepare_grn_design.GRNData <- function(
         if (!length(rows)) return(data.frame())
         out <- unique(do.call(rbind, rows))
         out <- out[order(out$region, out$tf), , drop = FALSE]
-        if (is.finite(max_edges_per_target) && nrow(out) > max_edges_per_target) {
-            out <- out[seq_len(as.integer(max_edges_per_target)), , drop = FALSE]
-        }
         out
     }
 
@@ -230,13 +227,51 @@ prepare_grn_design.GRNData <- function(
     candidate_rows <- candidate_rows[vapply(candidate_rows, nrow, integer(1)) > 0L]
     if (length(candidate_rows)) {
         candidate_edges <- unique(do.call(rbind, candidate_rows))
+        candidate_edges <- candidate_edges[order(
+            candidate_edges$target,
+            candidate_edges$tf,
+            candidate_edges$atac_feature_id,
+            candidate_edges$region
+        ), , drop = FALSE]
+        predictor_key <- paste(
+            candidate_edges$tf,
+            candidate_edges$atac_feature_id,
+            candidate_edges$target,
+            sep = "\001"
+        )
+        predictor_rows <- split(seq_len(nrow(candidate_edges)), predictor_key)
+        candidate_edges <- do.call(rbind, lapply(predictor_rows, function(index) {
+            one <- candidate_edges[index, , drop = FALSE]
+            out <- one[1L, , drop = FALSE]
+            regions <- sort(unique(as.character(one$region)))
+            out$region <- regions[[1L]]
+            out$supporting_regions <- paste(regions, collapse = ";")
+            out$n_supporting_regions <- length(regions)
+            out$tf_detection <- max(one$tf_detection, na.rm = TRUE)
+            out$peak_detection <- max(one$peak_detection, na.rm = TRUE)
+            out$target_detection <- max(one$target_detection, na.rm = TRUE)
+            out
+        }))
         rownames(candidate_edges) <- NULL
+        if (is.finite(max_edges_per_target)) {
+            target_rows <- split(
+                seq_len(nrow(candidate_edges)), candidate_edges$target
+            )
+            candidate_edges <- do.call(rbind, lapply(target_rows, function(index) {
+                index <- index[seq_len(min(
+                    length(index), as.integer(max_edges_per_target)
+                ))]
+                candidate_edges[index, , drop = FALSE]
+            }))
+            rownames(candidate_edges) <- NULL
+        }
     } else {
         candidate_edges <- data.frame(
             tf = character(), target = character(), region = character(),
             atac_feature_id = character(), tf_feature_id = character(),
             target_feature_id = character(), motif_supported = logical(),
-            peak_to_gene_supported = logical(), tf_detection = numeric(),
+            peak_to_gene_supported = logical(), supporting_regions = character(),
+            n_supporting_regions = integer(), tf_detection = numeric(),
             peak_detection = numeric(), target_detection = numeric(),
             stringsAsFactors = FALSE
         )
@@ -244,7 +279,7 @@ prepare_grn_design.GRNData <- function(
     if (nrow(candidate_edges)) {
         candidate_edges$edge_id <- paste(
             candidate_edges$tf,
-            candidate_edges$region,
+            candidate_edges$atac_feature_id,
             candidate_edges$target,
             sep = '::'
         )
@@ -252,8 +287,9 @@ prepare_grn_design.GRNData <- function(
         candidate_edges <- candidate_edges[, c(
             'edge_id', 'candidate_index', 'tf', 'region', 'target',
             'atac_feature_id', 'tf_feature_id', 'target_feature_id',
-            'motif_supported', 'peak_to_gene_supported', 'tf_detection',
-            'peak_detection', 'target_detection'
+            'motif_supported', 'peak_to_gene_supported', 'supporting_regions',
+            'n_supporting_regions', 'tf_detection', 'peak_detection',
+            'target_detection'
         ), drop = FALSE]
     }
 
