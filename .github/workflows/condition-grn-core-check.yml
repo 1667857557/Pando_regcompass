@@ -1,0 +1,76 @@
+name: condition-grn-core-check
+
+on:
+  push:
+    branches:
+      - agent/condition-aware-pando
+  pull_request:
+    branches:
+      - agent/fix-motif2tf-loading
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - name: Install numerical dependency
+        shell: Rscript {0}
+        run: install.packages('Matrix')
+      - name: Parse package R sources
+        shell: Rscript {0}
+        run: |
+          files <- list.files('R', pattern = '\\.R$', full.names = TRUE)
+          invisible(lapply(files, parse))
+      - name: Run condition-aware solver smoke tests
+        shell: Rscript {0}
+        run: |
+          library(Matrix)
+          source('R/condition_grn_solver.R')
+
+          prox_input <- matrix(c(3, 3, 0.2, 0.2), nrow = 2, byrow = TRUE)
+          group_only <- .condition_sparse_group_prox(
+            prox_input, step = 1, lambda = 1, alpha = 1, condition_mix = 0
+          )
+          stopifnot(all(group_only[2, ] == 0))
+
+          set.seed(11)
+          x_control <- Matrix(matrix(rnorm(80), ncol = 1), sparse = TRUE)
+          x_drug <- Matrix(matrix(rnorm(80), ncol = 1), sparse = TRUE)
+          y_control <- 2 * as.numeric(x_control[, 1]) + rnorm(80, sd = 0.05)
+          y_drug <- -2 * as.numeric(x_drug[, 1]) + rnorm(80, sd = 0.05)
+          fit <- .condition_fit_multitask_lambda(
+            X_list = list(Control = x_control, Drug = x_drug),
+            y_list = list(Control = y_control, Drug = y_drug),
+            lambda = 1e-4,
+            alpha = 0.5,
+            condition_mix = 0.5,
+            max_iter = 2000,
+            tol_objective = 1e-9,
+            tol_coef = 1e-8,
+            keep_history = TRUE
+          )
+          stopifnot(fit$beta[1, 1] > 0, fit$beta[1, 2] < 0)
+          stopifnot(all(diff(fit$history) <= 1e-8))
+
+          set.seed(12)
+          X <- list(
+            A = Matrix(matrix(rnorm(80), ncol = 2), sparse = TRUE),
+            B = Matrix(matrix(rnorm(80), ncol = 2), sparse = TRUE)
+          )
+          y <- list(A = rnorm(40), B = rnorm(40))
+          zero_fit <- .condition_fit_multitask_lambda(
+            X_list = X,
+            y_list = y,
+            lambda = 1e6,
+            alpha = 1,
+            condition_mix = 0.5,
+            max_iter = 100
+          )
+          stopifnot(all(zero_fit$beta == 0))

@@ -45,6 +45,7 @@ Imports:
 Suggests: 
     rmarkdown,
     testthat,
+    BiocParallel,
     reticulate,
     xgboost,
     brms
