@@ -176,6 +176,28 @@
     edges <- unique(do.call(rbind, edge_parts))
     rownames(edges) <- NULL
 
+    tf_variance <- .condition_column_variance(
+        gene_data[, unique(edges$tf), drop = FALSE]
+    )
+    names(tf_variance) <- unique(edges$tf)
+    peak_variance <- .condition_column_variance(
+        peak_data[, unique(edges$region), drop = FALSE]
+    )
+    names(peak_variance) <- unique(edges$region)
+    valid_tfs <- names(tf_variance)[
+        is.finite(tf_variance) & tf_variance > .Machine$double.eps
+    ]
+    valid_peaks <- names(peak_variance)[
+        is.finite(peak_variance) & peak_variance > .Machine$double.eps
+    ]
+    edges <- edges[
+        edges$tf %in% valid_tfs & edges$region %in% valid_peaks,
+        , drop = FALSE
+    ]
+    if (nrow(edges) == 0L) {
+        stop('No edges remained after TF and peak variance checks.')
+    }
+
     prepared_design <- .condition_build_design(
         response_raw = response_raw,
         gene_data = gene_data,
