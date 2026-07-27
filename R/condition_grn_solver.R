@@ -319,7 +319,8 @@
 
         acceleration_new <- (1 + sqrt(1 + 4 * acceleration^2)) / 2
         Z_new <- B + ((acceleration - 1) / acceleration_new) * (B - B_previous)
-        if (sum((B - B_previous) * (Z_new - B)) > 0) {
+        restart <- sum((Z - B) * (B - B_previous)) > 0
+        if (restart) {
             acceleration_new <- 1
             Z_new <- B
         }
