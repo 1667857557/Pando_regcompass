@@ -192,18 +192,26 @@ infer_condition_grn.GRNData <- function(
         condition_mix < 0 || condition_mix > 1) {
         stop('condition_mix must be between 0 and 1.')
     }
-    if (!is.numeric(nlambda) || length(nlambda) != 1L || nlambda < 2L) {
-        stop('nlambda must be at least 2.')
+    if (!is.numeric(nlambda) || length(nlambda) != 1L || nlambda < 1L) {
+        stop('nlambda must be a positive integer.')
     }
     if (!is.null(lambda) &&
         (!is.numeric(lambda) || length(lambda) == 0L || any(!is.finite(lambda)) || any(lambda < 0))) {
         stop('lambda must contain finite non-negative values.')
     }
-    if (!is.numeric(nfolds) || length(nfolds) != 1L || nfolds < 2L) {
-        stop('nfolds must be at least 2.')
+    cv_required <- is.null(lambda) || length(unique(as.numeric(lambda))) > 1L
+    if (cv_required && nlambda < 2L) {
+        stop('nlambda must be at least 2 when a lambda path is generated.')
     }
-    if (!is.numeric(min_cells_per_condition) || min_cells_per_condition < nfolds) {
-        stop('min_cells_per_condition must be at least nfolds.')
+    if (!is.numeric(nfolds) || length(nfolds) != 1L || nfolds < 1L) {
+        stop('nfolds must be a positive integer.')
+    }
+    if (cv_required && nfolds < 2L) {
+        stop('nfolds must be at least 2 when cross-validation is required.')
+    }
+    minimum_required <- if (cv_required) nfolds else 1L
+    if (!is.numeric(min_cells_per_condition) || min_cells_per_condition < minimum_required) {
+        stop('min_cells_per_condition is too small for the requested validation scheme.')
     }
     if (!is.numeric(active_tol) || active_tol < 0 || !is.finite(active_tol)) {
         stop('active_tol must be finite and non-negative.')
