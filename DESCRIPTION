@@ -1,5 +1,5 @@
 Package: Pando
-Version: 1.2.0
+Version: 1.2.1
 Type: Package
 Title: Inferring regulomes from multi-modal single-cell genomics data
 Authors@R: person(given = "Jonas Simon",
@@ -13,8 +13,9 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     Condition-aware models use one exact TF-peak-target edge dictionary, pooled
     edge scaling, and a shared regularization path while estimating each
     condition independently. Complete fitted coefficients, reference contrasts,
-    eligibility masks, transformations, and diagnostics are exposed through a
-    versioned fit contract for reproducible downstream comparisons.
+    eligibility and reference-comparison masks, transformations, and diagnostics
+    are exposed through a versioned fit contract for reproducible downstream
+    comparisons.
 License: MIT
 Encoding: UTF-8
 LazyData: true
