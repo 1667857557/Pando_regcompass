@@ -74,8 +74,14 @@ jobs:
             identical(sort(control$nodes$tf), c("TF1", "TF3")),
             identical(sort(drug$nodes$tf), c("TF2", "TF3")),
             isTRUE(contrast$sign_switch[contrast$edge_id == "e3"]),
-            identical(contrast$active_1, fit$active_mask[, "Control"]),
-            identical(contrast$active_2, fit$active_mask[, "Drug"])
+            identical(
+              unname(contrast$active_1),
+              unname(fit$active_mask[, "Control"])
+            ),
+            identical(
+              unname(contrast$active_2),
+              unname(fit$active_mask[, "Drug"])
+            )
           )
 
           raw_predictor <- c(2, 5, 8)

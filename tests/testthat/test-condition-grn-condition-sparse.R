@@ -196,6 +196,10 @@ test_that('subgraphs can have different nodes and pairwise sign switches', {
     expect_setequal(graph_b$nodes$tf, c('TF2', 'TF3'))
     expect_true(contrast$sign_switch[contrast$edge_id == 'e3'])
     expect_equal(contrast$delta_beta, c(-1, 2, -1) * 1e-12)
-    expect_identical(contrast$active_1, fit$active_mask[, 'A'])
-    expect_identical(contrast$active_2, fit$active_mask[, 'B'])
+    expect_identical(
+        unname(contrast$active_1), unname(fit$active_mask[, 'A'])
+    )
+    expect_identical(
+        unname(contrast$active_2), unname(fit$active_mask[, 'B'])
+    )
 })
