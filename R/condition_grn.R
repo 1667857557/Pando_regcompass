@@ -1,11 +1,14 @@
 # Condition-aware extension of the Pando TF-peak-target model.
 
-#' Infer cell-type Universal and condition-specific gene regulatory networks
+#' Infer shared-design, condition-comparable gene regulatory networks
 #'
 #' Extends Pando's TF-expression by motif-bearing peak-accessibility interaction
-#' model to a sparse-group multi-task model. Cell types are fit independently
-#' across conditions. All generated networks remain standard Pando Network
-#' objects inside the returned GRNData object.
+#' model to condition-comparable elastic-net models. Each cell type uses one
+#' edge dictionary and one pooled edge scale; within each target, conditions
+#' also share one lambda path and selected lambda while their coefficient
+#' layers are estimated independently by default. All generated
+#' networks remain standard Pando Network objects inside the returned GRNData
+#' object, and the complete fit is stored as a ConditionGRNFit contract.
 #'
 #' @param object A GRNData object containing paired RNA and ATAC measurements.
 #' @param cell_type_col Metadata column containing cell-type labels.
@@ -18,11 +21,15 @@
 #' @param tf_cor,peak_cor Correlation screening thresholds.
 #' @param candidate_screen Candidate screening strategy.
 #' @param aggregate_rna_col,aggregate_peaks_col Optional shared aggregation label.
-#' @param method Must be multitask_glmnet.
+#' @param method Shared-design independent elastic net by default. The legacy
+#' sparse-group multi-task engine is retained as multitask_glmnet.
 #' @param family Must be gaussian.
 #' @param interaction_term Must be colon, matching default Pando behavior.
 #' @param alpha Elastic-net mixing parameter.
 #' @param condition_mix Group-versus-condition sparsity mixing parameter.
+#' Must equal one for shared_design_independent.
+#' @param reference_condition Condition used for explicit coefficient contrasts.
+#' Defaults to the first condition level within each cell type.
 #' @param condition_weight Equal-condition or cell-count loss weighting.
 #' @param nlambda Number of lambda values when lambda is not supplied.
 #' @param lambda Optional fixed lambda value or decreasing lambda path.
@@ -31,7 +38,8 @@
 #' @param lambda_selection Selection of lambda.1se or lambda.min.
 #' @param min_cells_per_condition Minimum cells or aggregate units per condition.
 #' @param on_small_condition Action when a cell type contains a small condition.
-#' @param scale Whether to reproduce Pando scaling before interaction creation.
+#' @param scale Whether to standardize the final TF-by-peak predictor and target
+#' once across all conditions of a cell type.
 #' @param active_tol Numerical threshold used for network summaries.
 #' @param parallel Use the existing Pando foreach mapping backend.
 #' @param BPPARAM Optional BiocParallel parameter object.
@@ -40,7 +48,8 @@
 #' @param max_iter,tol_objective,tol_coef Solver controls.
 #' @param verbose Display progress messages.
 #' @param ... Reserved for future extensions.
-#' @return A GRNData object containing standard Pando Network objects.
+#' @return A GRNData object containing standard Pando Network objects and
+#' versioned ConditionGRNFit contracts retrievable with condition_grn_fit().
 #' @export
 infer_condition_grn <- function(object, ...) {
     UseMethod(generic = 'infer_condition_grn', object = object)
@@ -66,11 +75,12 @@ infer_condition_grn.GRNData <- function(
     candidate_screen = c('condition_union', 'pooled', 'motif_domain'),
     aggregate_rna_col = NULL,
     aggregate_peaks_col = NULL,
-    method = 'multitask_glmnet',
+    method = c('shared_design_independent', 'multitask_glmnet'),
     family = 'gaussian',
     interaction_term = ':',
     alpha = 0.5,
-    condition_mix = 0.5,
+    condition_mix = 1,
+    reference_condition = NULL,
     condition_weight = c('equal', 'cell_count'),
     nlambda = 50L,
     lambda = NULL,
@@ -79,7 +89,7 @@ infer_condition_grn.GRNData <- function(
     lambda_selection = c('lambda.1se', 'lambda.min'),
     min_cells_per_condition = 50L,
     on_small_condition = c('skip_cell_type', 'drop_condition', 'error'),
-    scale = FALSE,
+    scale = TRUE,
     active_tol = 1e-8,
     parallel = FALSE,
     BPPARAM = NULL,
@@ -93,6 +103,7 @@ infer_condition_grn.GRNData <- function(
 ) {
     peak_to_gene_method <- match.arg(peak_to_gene_method)
     candidate_screen <- match.arg(candidate_screen)
+    method <- match.arg(method)
     condition_weight <- match.arg(condition_weight)
     lambda_selection <- match.arg(lambda_selection)
     on_small_condition <- match.arg(on_small_condition)
@@ -100,7 +111,8 @@ infer_condition_grn.GRNData <- function(
     .condition_validate_public_args(
         object, cell_type_col, condition_col, aggregate_rna_col,
         aggregate_peaks_col, method, family, interaction_term, alpha,
-        condition_mix, nlambda, lambda, nfolds, min_cells_per_condition,
+        condition_mix, reference_condition, condition_weight, nlambda, lambda, nfolds,
+        min_cells_per_condition,
         active_tol, max_iter, tol_objective, tol_coef
     )
     prepared <- .condition_prepare_global_data(
@@ -123,7 +135,8 @@ infer_condition_grn.GRNData <- function(
         peak_to_gene_method = peak_to_gene_method, upstream = upstream,
         downstream = downstream, extend = extend, only_tss = only_tss,
         tf_cor = tf_cor, peak_cor = peak_cor, candidate_screen = candidate_screen,
-        alpha = alpha, condition_mix = condition_mix,
+        method = method, alpha = alpha, condition_mix = condition_mix,
+        reference_condition = reference_condition,
         condition_weight = condition_weight, nlambda = nlambda, lambda = lambda,
         lambda_min_ratio = lambda_min_ratio, nfolds = nfolds,
         lambda_selection = lambda_selection,
@@ -146,6 +159,8 @@ infer_condition_grn.GRNData <- function(
     interaction_term,
     alpha,
     condition_mix,
+    reference_condition,
+    condition_weight,
     nlambda,
     lambda,
     nfolds,
@@ -176,8 +191,8 @@ infer_condition_grn.GRNData <- function(
     if (!is.null(aggregate_rna_col) && !aggregate_rna_col %in% colnames(metadata)) {
         stop('Aggregation column was not found in metadata.')
     }
-    if (!identical(method, 'multitask_glmnet')) {
-        stop("condition-aware inference currently requires method = 'multitask_glmnet'.")
+    if (!method %in% c('shared_design_independent', 'multitask_glmnet')) {
+        stop('Unsupported condition-aware inference method.')
     }
     if (!identical(family, 'gaussian')) {
         stop("condition-aware inference currently requires family = 'gaussian'.")
@@ -191,6 +206,19 @@ infer_condition_grn.GRNData <- function(
     if (!is.numeric(condition_mix) || length(condition_mix) != 1L ||
         condition_mix < 0 || condition_mix > 1) {
         stop('condition_mix must be between 0 and 1.')
+    }
+    if (identical(method, 'shared_design_independent') &&
+        !isTRUE(all.equal(condition_mix, 1))) {
+        stop('shared_design_independent requires condition_mix = 1.')
+    }
+    if (identical(method, 'shared_design_independent') &&
+        !identical(condition_weight, 'equal')) {
+        stop('shared_design_independent requires condition_weight = equal.')
+    }
+    if (!is.null(reference_condition) &&
+        (length(reference_condition) != 1L || is.na(reference_condition) ||
+         !nzchar(trimws(as.character(reference_condition))))) {
+        stop('reference_condition must be NULL or one non-empty condition label.')
     }
     if (!is.numeric(nlambda) || length(nlambda) != 1L || nlambda < 1L) {
         stop('nlambda must be a positive integer.')

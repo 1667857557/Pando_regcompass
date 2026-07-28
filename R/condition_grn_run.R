@@ -14,8 +14,10 @@
     tf_cor,
     peak_cor,
     candidate_screen,
+    method,
     alpha,
     condition_mix,
+    reference_condition,
     condition_weight,
     nlambda,
     lambda,
@@ -62,8 +64,10 @@
             tf_cor = tf_cor,
             peak_cor = peak_cor,
             candidate_screen = candidate_screen,
+            method = method,
             alpha = alpha,
             condition_mix = condition_mix,
+            reference_condition = reference_condition,
             condition_weight = condition_weight,
             nlambda = nlambda,
             lambda = lambda,
@@ -142,8 +146,10 @@
     tf_cor,
     peak_cor,
     candidate_screen,
+    method,
     alpha,
     condition_mix,
+    reference_condition,
     condition_weight,
     nlambda,
     lambda,
@@ -213,6 +219,17 @@
     if (anyDuplicated(safe_conditions)) {
         stop('Condition labels are not unique after network-name sanitization in cell type ', cell_type, '.')
     }
+    reference_condition_cell <- if (is.null(reference_condition)) {
+        condition_levels[[1L]]
+    } else {
+        as.character(reference_condition)
+    }
+    if (!reference_condition_cell %in% condition_levels) {
+        stop(
+            'Reference condition ', reference_condition_cell,
+            ' was not found in cell type ', cell_type, '.'
+        )
+    }
     universal_id <- paste(network_name, safe_cell_type, 'universal', sep = '__')
     condition_ids <- paste(network_name, safe_cell_type, 'condition', safe_conditions, sep = '__')
     intended_ids <- c(universal_id, condition_ids)
@@ -242,8 +259,10 @@
         tf_cor = tf_cor,
         peak_cor = peak_cor,
         scale = scale,
+        method = method,
         alpha = alpha,
         condition_mix = condition_mix,
+        reference_condition = reference_condition_cell,
         condition_weight = condition_weight,
         nlambda = nlambda,
         lambda = lambda,
@@ -274,6 +293,27 @@
     }
 
     successful_features <- names(successful)
+    fit_engine <- if (identical(method, 'shared_design_independent')) {
+        'shared_design_independent_elastic_net'
+    } else {
+        'multitask_sparse_group_glmnet'
+    }
+    fit_contract_key <- paste(network_name, safe_cell_type, sep = '__')
+    fit_contract <- .condition_combine_fit_contracts(
+        successful = successful,
+        network_name = network_name,
+        cell_type = cell_type,
+        cell_type_col = cell_type_col,
+        condition_col = condition_col,
+        reference_condition = reference_condition_cell,
+        candidate_screen = candidate_screen,
+        scale = scale,
+        fit_engine = fit_engine
+    )
+    fit_contracts <- object@grn@params$condition_grn_fits
+    if (is.null(fit_contracts)) fit_contracts <- list()
+    fit_contracts[[fit_contract_key]] <- fit_contract
+    object@grn@params$condition_grn_fits <- fit_contracts
     universal_coefs <- do.call(rbind, lapply(successful, function(x) x$universal_coefs))
     universal_gof <- do.call(rbind, lapply(successful, function(x) x$universal_gof))
     common_params <- list(
@@ -282,9 +322,12 @@
         condition_col = condition_col,
         condition_levels = condition_levels,
         candidate_screen = candidate_screen,
+        fit_engine = fit_engine,
         condition_weight = condition_weight,
         alpha = alpha,
         condition_mix = condition_mix,
+        reference_condition = reference_condition_cell,
+        fit_contract_key = fit_contract_key,
         lambda_selection = lambda_selection,
         nlambda = nlambda,
         nfolds = nfolds,
@@ -316,7 +359,10 @@
         n_cells = nrow(metadata_cell_type),
         coefs = universal_coefs,
         n_targets = length(successful_features),
-        active_tol = active_tol
+        active_tol = active_tol,
+        fit_engine = fit_engine,
+        reference_condition = reference_condition_cell,
+        fit_contract_key = fit_contract_key
     ))
 
     for (condition_index in seq_along(condition_levels)) {
@@ -344,7 +390,10 @@
             n_cells = sum(as.character(metadata_cell_type[[condition_col]]) == condition_name),
             coefs = condition_coefs,
             n_targets = length(successful_features),
-            active_tol = active_tol
+            active_tol = active_tol,
+            fit_engine = fit_engine,
+            reference_condition = reference_condition_cell,
+            fit_contract_key = fit_contract_key
         )
     }
 

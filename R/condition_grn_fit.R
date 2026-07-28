@@ -12,8 +12,10 @@
     tf_cor,
     peak_cor,
     scale,
+    method,
     alpha,
     condition_mix,
+    reference_condition,
     condition_weight,
     nlambda,
     lambda,
@@ -43,8 +45,10 @@
                 tf_cor = tf_cor,
                 peak_cor = peak_cor,
                 scale = scale,
+                method = method,
                 alpha = alpha,
                 condition_mix = condition_mix,
+                reference_condition = reference_condition,
                 condition_weight = condition_weight,
                 nlambda = nlambda,
                 lambda = lambda,
@@ -99,8 +103,10 @@
     tf_cor,
     peak_cor,
     scale,
+    method,
     alpha,
     condition_mix,
+    reference_condition,
     condition_weight,
     nlambda,
     lambda,
@@ -122,15 +128,11 @@
     }
 
     response_raw <- gene_data[, target, drop = FALSE]
+    condition_levels <- levels(condition)
     peak_raw <- peak_data[, candidate_peaks, drop = FALSE]
-    peak_keep <- .condition_screen_columns(
+    peak_mask <- .condition_component_masks(
         peak_raw, response_raw, condition, peak_cor, candidate_screen
     )
-    candidate_peaks <- candidate_peaks[peak_keep]
-    if (length(candidate_peaks) == 0L) {
-        stop('No peaks passed candidate screening.')
-    }
-
     peak_motifs <- peaks2motif[candidate_peaks, , drop = FALSE]
     peak_tfs <- lapply(candidate_peaks, function(peak) {
         motif_flag <- as.logical(peak_motifs[peak, ])
@@ -149,16 +151,11 @@
     }
 
     tf_raw <- gene_data[, gene_tfs, drop = FALSE]
-    tf_keep <- .condition_screen_columns(
+    tf_mask <- .condition_component_masks(
         tf_raw, response_raw, condition, tf_cor, candidate_screen
     )
-    retained_tfs <- gene_tfs[tf_keep]
-    if (length(retained_tfs) == 0L) {
-        stop('No TFs passed candidate screening.')
-    }
-
     edge_parts <- lapply(names(peak_tfs), function(peak) {
-        tfs <- intersect(peak_tfs[[peak]], retained_tfs)
+        tfs <- peak_tfs[[peak]]
         if (length(tfs) == 0L) {
             return(NULL)
         }
@@ -175,6 +172,13 @@
     }
     edges <- unique(do.call(rbind, edge_parts))
     rownames(edges) <- NULL
+    edges$edge_id <- paste(edges$tf, edges$region, edges$target, sep = '\001')
+    edge_mask <- .condition_edge_mask(edges, peak_mask, tf_mask)
+    edges <- edges[rowSums(edge_mask) > 0L, , drop = FALSE]
+    edge_mask <- edge_mask[edges$edge_id, , drop = FALSE]
+    if (nrow(edges) == 0L) {
+        stop('No TF-peak-target edge passed screening within the same condition.')
+    }
 
     tf_variance <- .condition_column_variance(
         gene_data[, unique(edges$tf), drop = FALSE]
@@ -194,6 +198,7 @@
         edges$tf %in% valid_tfs & edges$region %in% valid_peaks,
         , drop = FALSE
     ]
+    edge_mask <- edge_mask[edges$edge_id, , drop = FALSE]
     if (nrow(edges) == 0L) {
         stop('No edges remained after TF and peak variance checks.')
     }
@@ -208,11 +213,39 @@
     edges <- prepared_design$edges
     X <- prepared_design$X
     y <- prepared_design$y
+    edge_mask <- edge_mask[edges$edge_id, , drop = FALSE]
     if (ncol(X) == 0L) {
         stop('No non-constant interaction predictors remained.')
     }
 
-    condition_levels <- levels(condition)
+    for (level in condition_levels) {
+        variance <- .condition_column_variance(
+            X[condition == level, , drop = FALSE]
+        )
+        edge_mask[, level] <- edge_mask[, level] &
+            is.finite(variance) & variance > .Machine$double.eps
+    }
+    keep_edge <- rowSums(edge_mask) > 0L
+    X <- X[, keep_edge, drop = FALSE]
+    edges <- edges[keep_edge, , drop = FALSE]
+    edge_mask <- edge_mask[keep_edge, , drop = FALSE]
+    prepared_design$predictor_center <-
+        prepared_design$predictor_center[keep_edge]
+    prepared_design$predictor_scale <-
+        prepared_design$predictor_scale[keep_edge]
+    if (!ncol(X)) {
+        stop('No edge has a non-constant predictor in an eligible condition.')
+    }
+    if (is.null(reference_condition)) {
+        reference_condition <- condition_levels[[1L]]
+    }
+    reference_condition <- as.character(reference_condition)
+    if (!reference_condition %in% condition_levels) {
+        stop(
+            'reference_condition was not found for target ', target, ': ',
+            reference_condition, '.'
+        )
+    }
     X_list <- lapply(condition_levels, function(level) {
         X[condition == level, , drop = FALSE]
     })
@@ -226,6 +259,7 @@
             alpha = alpha,
             condition_mix = condition_mix,
             condition_weight = condition_weight,
+            coefficient_mask = edge_mask,
             nlambda = nlambda,
             lambda_min_ratio = lambda_min_ratio
         )
@@ -251,6 +285,7 @@
             alpha = alpha,
             condition_mix = condition_mix,
             condition_weight = condition_weight,
+            coefficient_mask = edge_mask,
             nfolds = nfolds,
             lambda_selection = lambda_selection,
             seed = seed,
@@ -267,6 +302,7 @@
         alpha = alpha,
         condition_mix = condition_mix,
         condition_weight = condition_weight,
+        coefficient_mask = edge_mask,
         max_iter = max_iter,
         tol_objective = tol_objective,
         tol_coef = tol_coef
@@ -358,13 +394,51 @@
         error_message = NA_character_,
         stringsAsFactors = FALSE
     )
+    reference_beta <- beta[, reference_condition]
+    contrast <- sweep(beta, 1L, reference_beta, '-')
+    fit_engine <- if (identical(method, 'shared_design_independent')) {
+        'shared_design_independent_elastic_net'
+    } else {
+        'multitask_sparse_group_glmnet'
+    }
+    fit_contract <- list(
+        target = target,
+        edge_table = edges[, c(
+            'edge_id', 'tf', 'target', 'region', 'term'
+        ), drop = FALSE],
+        beta = beta,
+        reference_beta = reference_beta,
+        contrast = contrast,
+        eligibility_mask = edge_mask,
+        predictor_center = stats::setNames(
+            prepared_design$predictor_center, edges$edge_id
+        ),
+        predictor_scale = stats::setNames(
+            prepared_design$predictor_scale, edges$edge_id
+        ),
+        response_center = prepared_design$response_center,
+        response_scale = prepared_design$response_scale,
+        intercept = stats::setNames(selected$intercept, condition_levels),
+        condition_rsq = vapply(
+            condition_gof, function(x) x$rsq[[1L]], numeric(1)
+        ),
+        selected_lambda = selected$lambda,
+        lambda_path = lambda_path,
+        cv_mean = cv$cv_mean,
+        cv_se = cv$cv_se,
+        alpha = alpha,
+        condition_mix = condition_mix,
+        fit_engine = fit_engine,
+        reference_condition = reference_condition
+    )
 
     list(
         universal_coefs = universal_coefs,
         condition_coefs = condition_coefs,
         universal_gof = universal_gof,
         condition_gof = condition_gof,
-        diagnostics = diagnostics
+        diagnostics = diagnostics,
+        fit_contract = fit_contract
     )
 }
 
@@ -375,28 +449,6 @@
     tf_matrix <- gene_data[, tf_names, drop = FALSE]
     peak_matrix <- peak_data[, peak_names, drop = FALSE]
 
-    if (scale) {
-        scaled_y <- .condition_scale_vector(y)
-        if (is.null(scaled_y)) {
-            stop('Target response has zero variance.')
-        }
-        y <- scaled_y
-        tf_matrix <- .condition_scale_matrix(tf_matrix)
-        peak_matrix <- .condition_scale_matrix(peak_matrix)
-        edges <- edges[
-            edges$tf %in% colnames(tf_matrix) & edges$region %in% colnames(peak_matrix),
-            , drop = FALSE
-        ]
-    } else {
-        response_variance <- stats::var(y)
-        if (!is.finite(response_variance) || response_variance <= .Machine$double.eps) {
-            stop('Target response has zero variance.')
-        }
-    }
-    if (nrow(edges) == 0L) {
-        stop('No edges remained after variance checks.')
-    }
-
     tf_edge <- tf_matrix[, match(edges$tf, colnames(tf_matrix)), drop = FALSE]
     peak_edge <- peak_matrix[, match(edges$region, colnames(peak_matrix)), drop = FALSE]
     X <- tf_edge * peak_edge
@@ -404,13 +456,46 @@
     keep <- is.finite(edge_variance) & edge_variance > .Machine$double.eps
     X <- X[, keep, drop = FALSE]
     edges <- edges[keep, , drop = FALSE]
+    response_center <- 0
+    response_scale <- 1
+    predictor_center <- rep(0, ncol(X))
+    predictor_scale <- rep(1, ncol(X))
+    if (scale) {
+        response_center <- mean(y)
+        response_scale <- stats::sd(y)
+        if (!is.finite(response_scale) ||
+            response_scale <= .Machine$double.eps) {
+            stop('Target response has zero variance.')
+        }
+        y <- (y - response_center) / response_scale
+        predictor_center <- as.numeric(Matrix::colMeans(X))
+        predictor_scale <- sqrt(.condition_column_variance(X))
+        X <- sweep(as.matrix(X), 2L, predictor_center, '-')
+        X <- sweep(X, 2L, predictor_scale, '/')
+        X <- Matrix::Matrix(X, sparse = FALSE)
+    } else {
+        response_variance <- stats::var(y)
+        if (!is.finite(response_variance) ||
+            response_variance <= .Machine$double.eps) {
+            stop('Target response has zero variance.')
+        }
+    }
     edges$term <- paste(
         .condition_model_name(edges$region),
         .condition_model_name(edges$tf),
         sep = ':'
     )
     colnames(X) <- edges$term
-    list(X = X, y = y, edges = edges)
+    names(predictor_center) <- names(predictor_scale) <- edges$edge_id
+    list(
+        X = X,
+        y = y,
+        edges = edges,
+        predictor_center = predictor_center,
+        predictor_scale = predictor_scale,
+        response_center = response_center,
+        response_scale = response_scale
+    )
 }
 
 .condition_scale_vector <- function(x) {
@@ -438,21 +523,58 @@
 }
 
 .condition_screen_columns <- function(x, y, condition, threshold, candidate_screen) {
+    rowSums(.condition_component_masks(
+        x, y, condition, threshold, candidate_screen
+    )) > 0L
+}
+
+.condition_edge_mask <- function(edges, peak_mask, tf_mask) {
+    condition_levels <- colnames(peak_mask)
+    if (!identical(condition_levels, colnames(tf_mask))) {
+        stop('TF and peak screening masks must use identical condition levels.')
+    }
+    edge_mask <- vapply(condition_levels, function(level) {
+        peak_mask[edges$region, level] & tf_mask[edges$tf, level]
+    }, logical(nrow(edges)))
+    if (is.null(dim(edge_mask))) {
+        edge_mask <- matrix(edge_mask, nrow = nrow(edges))
+    }
+    dimnames(edge_mask) <- list(edges$edge_id, condition_levels)
+    edge_mask
+}
+
+.condition_component_masks <- function(
+    x, y, condition, threshold, candidate_screen
+) {
+    levels_condition <- levels(condition)
     if (candidate_screen == 'motif_domain') {
-        return(rep(TRUE, ncol(x)))
+        out <- matrix(
+            TRUE, nrow = ncol(x), ncol = length(levels_condition),
+            dimnames = list(colnames(x), levels_condition)
+        )
+        return(out)
     }
     if (candidate_screen == 'pooled') {
         score <- abs(.condition_named_cor(x, y))
-        return(is.finite(score) & score > threshold)
+        keep <- is.finite(score) & score > threshold
+        return(matrix(
+            keep, nrow = length(keep), ncol = length(levels_condition),
+            dimnames = list(names(score), levels_condition)
+        ))
     }
-    scores <- lapply(levels(condition), function(level) {
-        abs(.condition_named_cor(
+    out <- vapply(levels_condition, function(level) {
+        score <- abs(.condition_named_cor(
             x[condition == level, , drop = FALSE],
             y[condition == level, , drop = FALSE]
         ))
-    })
-    score <- Reduce(pmax, scores)
-    is.finite(score) & score > threshold
+        is.finite(score) & score > threshold
+    }, logical(ncol(x)))
+    if (is.null(dim(out))) {
+        out <- matrix(out, nrow = ncol(x))
+    }
+    rownames(out) <- colnames(x)
+    colnames(out) <- levels_condition
+    out
 }
 
 .condition_named_cor <- function(x, y) {

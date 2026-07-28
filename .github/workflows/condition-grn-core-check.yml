@@ -3,10 +3,11 @@ name: condition-grn-core-check
 on:
   push:
     branches:
-      - agent/condition-aware-pando
+      - main
+      - agent/shared-design-independent-v2
   pull_request:
     branches:
-      - agent/fix-motif2tf-loading
+      - main
   workflow_dispatch:
 
 permissions:
@@ -61,13 +62,40 @@ jobs:
 
           set.seed(12)
           X <- list(
+            Control = Matrix(matrix(rnorm(160), ncol = 4), sparse = TRUE),
+            Drug = Matrix(matrix(rnorm(160), ncol = 4), sparse = TRUE)
+          )
+          y <- list(Control = rnorm(40), Drug = rnorm(40))
+          independent <- .condition_fit_multitask_lambda(
+            X, y, lambda = 0.05, alpha = 0.5, condition_mix = 1,
+            condition_weight = 'equal', max_iter = 5000,
+            tol_objective = 1e-10, tol_coef = 1e-9
+          )
+          changed_y <- y
+          changed_y$Drug <- changed_y$Drug + 10 * as.numeric(X$Drug[, 1])
+          independent_changed <- .condition_fit_multitask_lambda(
+            X, changed_y, lambda = 0.05, alpha = 0.5, condition_mix = 1,
+            condition_weight = 'equal', max_iter = 5000,
+            tol_objective = 1e-10, tol_coef = 1e-9
+          )
+          stopifnot(isTRUE(all.equal(
+            independent$beta[, 1], independent_changed$beta[, 1],
+            tolerance = 1e-7
+          )))
+          stopifnot(!isTRUE(all.equal(
+            independent$beta[, 2], independent_changed$beta[, 2],
+            tolerance = 1e-3
+          )))
+
+          set.seed(12)
+          X_zero <- list(
             A = Matrix(matrix(rnorm(80), ncol = 2), sparse = TRUE),
             B = Matrix(matrix(rnorm(80), ncol = 2), sparse = TRUE)
           )
-          y <- list(A = rnorm(40), B = rnorm(40))
+          y_zero <- list(A = rnorm(40), B = rnorm(40))
           zero_fit <- .condition_fit_multitask_lambda(
-            X_list = X,
-            y_list = y,
+            X_list = X_zero,
+            y_list = y_zero,
             lambda = 1e6,
             alpha = 1,
             condition_mix = 0.5,

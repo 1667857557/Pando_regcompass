@@ -4,7 +4,9 @@
 
 Pando uses paired single-cell RNA and chromatin-accessibility measurements to infer gene regulatory networks through TF-expression by motif-bearing-region accessibility predictors.
 
-This RegCompass fork preserves the original Pando workflow and adds a public pre-fit structural-design contract. Version 1.1.3 strengthens that contract with exact feature validation and a reproducible content fingerprint.
+This RegCompass fork preserves the original Pando workflow and adds two public
+interfaces for comparable condition models: a pre-fit structural-design
+contract and a lossless post-fit `ConditionGRNFit` contract.
 
 ## Installation
 
@@ -87,7 +89,55 @@ peak_detection
 target_detection
 ```
 
-No condition metadata is interpreted by Pando. The caller is responsible for using the same validated `PandoGRNDesign` in every task or condition model.
+The structural API does not interpret condition metadata. Use
+`infer_condition_grn()` when Pando should construct and fit the comparable
+condition models itself.
+
+## Condition-comparable GRNs
+
+The default condition-aware engine estimates each condition independently
+inside a cell type, while sharing the quantities required for direct
+comparison:
+
+- one exact TF–peak–target edge dictionary;
+- an edge-by-condition eligibility mask;
+- pooled scaling of the final `TF expression × peak accessibility` predictor;
+- one target-specific lambda path and one selected lambda shared by conditions.
+
+```r
+grn_object <- infer_condition_grn(
+  grn_object,
+  cell_type_col = "cell_type",
+  condition_col = "condition",
+  genes = metabolic_genes,
+  method = "shared_design_independent",
+  candidate_screen = "condition_union",
+  condition_mix = 1,
+  condition_weight = "equal",
+  reference_condition = "Control",
+  scale = TRUE
+)
+
+fit <- condition_grn_fit(
+  grn_object,
+  network_name = "condition_grn",
+  cell_type = "Tumor_cell"
+)
+fit$edge_table
+fit$beta
+fit$contrast
+fit$eligibility_mask
+fit$predictor_transform
+fit$target_rsq
+```
+
+`fit$contrast` is exactly
+`beta_condition - beta_reference`. Candidate union is performed at edge level:
+the TF and peak must both pass inside the same condition, so Pando never creates
+an edge by combining a TF retained only in one condition with a peak retained
+only in another. Standard Pando `Network` objects are still written for
+compatibility. Their Universal coefficient is an equal-condition summary for
+visualization, not the condition-effect baseline.
 
 ## Citation
 

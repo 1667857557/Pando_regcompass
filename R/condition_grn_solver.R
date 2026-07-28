@@ -68,7 +68,8 @@
     alpha,
     condition_mix,
     group_factor = NULL,
-    element_factor = NULL
+    element_factor = NULL,
+    coefficient_mask = NULL
 ) {
     if (is.null(group_factor)) {
         group_factor <- rep(1, nrow(B))
@@ -91,13 +92,17 @@
     alpha,
     condition_mix,
     group_factor = NULL,
-    element_factor = NULL
+    element_factor = NULL,
+    coefficient_mask = NULL
 ) {
     if (is.null(group_factor)) {
         group_factor <- rep(1, nrow(V))
     }
     if (is.null(element_factor)) {
         element_factor <- matrix(1, nrow(V), ncol(V))
+    }
+    if (!is.null(coefficient_mask)) {
+        V[!coefficient_mask] <- 0
     }
 
     element_threshold <- step * lambda * alpha * condition_mix * element_factor
@@ -108,7 +113,11 @@
     row_scale <- rep(0, length(row_norm))
     nonzero <- row_norm > 0
     row_scale[nonzero] <- pmax(1 - group_threshold[nonzero] / row_norm[nonzero], 0)
-    U * row_scale
+    U <- U * row_scale
+    if (!is.null(coefficient_mask)) {
+        U[!coefficient_mask] <- 0
+    }
+    U
 }
 
 .condition_objective <- function(
@@ -161,6 +170,7 @@
     initial_step = NULL,
     group_factor = NULL,
     element_factor = NULL,
+    coefficient_mask = NULL,
     max_iter = 5000L,
     tol_objective = 1e-7,
     tol_coef = 1e-6,
@@ -203,6 +213,15 @@
     if (!identical(dim(element_factor), c(p, n_tasks))) {
         stop('element_factor must have dimensions predictors by conditions.')
     }
+    if (is.null(coefficient_mask)) {
+        coefficient_mask <- matrix(TRUE, p, n_tasks)
+    }
+    coefficient_mask <- as.matrix(coefficient_mask)
+    if (!identical(dim(coefficient_mask), c(p, n_tasks)) ||
+        !is.logical(coefficient_mask) || anyNA(coefficient_mask) ||
+        any(rowSums(coefficient_mask) == 0L)) {
+        stop('coefficient_mask must be a logical predictors-by-conditions matrix with one eligible condition per predictor.')
+    }
 
     loss_weights <- .condition_loss_weights(X_list, condition_weight)
     ridge <- lambda * (1 - alpha)
@@ -210,6 +229,7 @@
     if (!identical(dim(B), c(p, n_tasks))) {
         stop('initial_B must have dimensions predictors by conditions.')
     }
+    B[!coefficient_mask] <- 0
     Z <- B
     acceleration <- 1
     step <- if (is.null(initial_step)) {
@@ -239,7 +259,8 @@
                 alpha = alpha,
                 condition_mix = condition_mix,
                 group_factor = group_factor,
-                element_factor = element_factor
+                element_factor = element_factor,
+                coefficient_mask = coefficient_mask
             )
             smooth_candidate <- .condition_profiled_smooth(
                 candidate, X_list, y_list, loss_weights, ridge
@@ -277,7 +298,8 @@
                     alpha = alpha,
                     condition_mix = condition_mix,
                     group_factor = group_factor,
-                    element_factor = element_factor
+                    element_factor = element_factor,
+                    coefficient_mask = coefficient_mask
                 )
                 smooth_candidate <- .condition_profiled_smooth(
                     candidate, X_list, y_list, loss_weights, ridge
@@ -351,7 +373,8 @@
     y_list,
     alpha,
     condition_mix,
-    condition_weight = c('equal', 'cell_count')
+    condition_weight = c('equal', 'cell_count'),
+    coefficient_mask = NULL
 ) {
     condition_weight <- match.arg(condition_weight)
     p <- ncol(X_list[[1L]])
@@ -361,6 +384,9 @@
     gradient <- .condition_profiled_smooth(
         zero, X_list, y_list, loss_weights, ridge = 0
     )$gradient
+    if (!is.null(coefficient_mask)) {
+        gradient[!coefficient_mask] <- 0
+    }
 
     if (alpha <= .Machine$double.eps) {
         value <- max(abs(gradient))
@@ -381,6 +407,7 @@
     alpha = 0.5,
     condition_mix = 0.5,
     condition_weight = c('equal', 'cell_count'),
+    coefficient_mask = NULL,
     nlambda = 50L,
     lambda_min_ratio = NULL
 ) {
@@ -396,7 +423,8 @@
         stop('lambda_min_ratio must be between 0 and 1.')
     }
     lambda_max <- .condition_lambda_max(
-        X_list, y_list, alpha, condition_mix, condition_weight
+        X_list, y_list, alpha, condition_mix, condition_weight,
+        coefficient_mask = coefficient_mask
     )
     exp(seq(log(lambda_max), log(lambda_max * lambda_min_ratio), length.out = nlambda))
 }
@@ -408,6 +436,7 @@
     alpha = 0.5,
     condition_mix = 0.5,
     condition_weight = c('equal', 'cell_count'),
+    coefficient_mask = NULL,
     max_iter = 5000L,
     tol_objective = 1e-7,
     tol_coef = 1e-6,
@@ -430,6 +459,7 @@
             alpha = alpha,
             condition_mix = condition_mix,
             condition_weight = condition_weight,
+            coefficient_mask = coefficient_mask,
             initial_B = initial_B,
             initial_step = initial_step,
             max_iter = max_iter,
@@ -464,6 +494,7 @@
     alpha = 0.5,
     condition_mix = 0.5,
     condition_weight = c('equal', 'cell_count'),
+    coefficient_mask = NULL,
     nfolds = 5L,
     lambda_selection = c('lambda.1se', 'lambda.min'),
     seed = 12345L,
@@ -497,6 +528,7 @@
             alpha = alpha,
             condition_mix = condition_mix,
             condition_weight = condition_weight,
+            coefficient_mask = coefficient_mask,
             max_iter = max_iter,
             tol_objective = tol_objective,
             tol_coef = tol_coef

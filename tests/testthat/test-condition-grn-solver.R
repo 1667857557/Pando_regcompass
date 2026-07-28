@@ -14,6 +14,49 @@ test_that('condition-wise screening retains cancelling condition effects', {
     expect_false(pooled_keep[[1]])
 })
 
+test_that('edge union never pairs TF and peak retained in different conditions', {
+    edges <- data.frame(
+        tf = 'TF1', region = 'peak1', target = 'GENE1',
+        edge_id = 'TF1\001peak1\001GENE1'
+    )
+    peak_mask <- matrix(
+        c(TRUE, FALSE), nrow = 1,
+        dimnames = list('peak1', c('Control', 'Drug'))
+    )
+    tf_mask <- matrix(
+        c(FALSE, TRUE), nrow = 1,
+        dimnames = list('TF1', c('Control', 'Drug'))
+    )
+
+    mask <- Pando:::.condition_edge_mask(edges, peak_mask, tf_mask)
+    expect_false(any(mask))
+})
+
+test_that('final TF by peak predictors use one pooled edge transform', {
+    gene_data <- Matrix::Matrix(
+        cbind(TF1 = c(1, 2, 4, 8)), sparse = TRUE
+    )
+    peak_data <- Matrix::Matrix(
+        cbind(peak1 = c(1, 3, 2, 5)), sparse = TRUE
+    )
+    response <- Matrix::Matrix(cbind(GENE1 = c(2, 3, 5, 9)), sparse = TRUE)
+    edges <- data.frame(
+        tf = 'TF1', region = 'peak1', target = 'GENE1',
+        edge_id = 'TF1\001peak1\001GENE1'
+    )
+    design <- Pando:::.condition_build_design(
+        response, gene_data, peak_data, edges, scale = TRUE
+    )
+    raw_edge <- as.numeric(gene_data[, 'TF1'] * peak_data[, 'peak1'])
+
+    expect_equal(design$predictor_center, mean(raw_edge))
+    expect_equal(design$predictor_scale, stats::sd(raw_edge))
+    expect_equal(as.numeric(Matrix::colMeans(design$X)), 0, tolerance = 1e-12)
+    expect_equal(
+        Pando:::.condition_column_variance(design$X), 1, tolerance = 1e-12
+    )
+})
+
 test_that('sparse-group proximal map supports group and element sparsity', {
     value <- matrix(c(3, 3, 0.2, 0.2), nrow = 2, byrow = TRUE)
 
@@ -77,6 +120,55 @@ test_that('large lambda produces an all-zero coefficient matrix', {
     )
 
     expect_equal(fit$beta, matrix(0, 2, 2))
+})
+
+test_that('shared-design independent coefficients are separable by condition', {
+    set.seed(14)
+    X <- list(
+        Control = Matrix::Matrix(matrix(stats::rnorm(160), ncol = 4)),
+        Drug = Matrix::Matrix(matrix(stats::rnorm(160), ncol = 4))
+    )
+    y <- list(Control = stats::rnorm(40), Drug = stats::rnorm(40))
+    first <- Pando:::.condition_fit_multitask_lambda(
+        X, y, lambda = 0.05, alpha = 0.5, condition_mix = 1,
+        condition_weight = 'equal', max_iter = 5000,
+        tol_objective = 1e-10, tol_coef = 1e-9
+    )
+    changed_y <- y
+    changed_y$Drug <- changed_y$Drug + 10 * as.numeric(X$Drug[, 1])
+    second <- Pando:::.condition_fit_multitask_lambda(
+        X, changed_y, lambda = 0.05, alpha = 0.5, condition_mix = 1,
+        condition_weight = 'equal', max_iter = 5000,
+        tol_objective = 1e-10, tol_coef = 1e-9
+    )
+
+    expect_equal(
+        first$beta[, 1L], second$beta[, 1L],
+        tolerance = 1e-7
+    )
+    expect_false(isTRUE(all.equal(
+        first$beta[, 2L], second$beta[, 2L], tolerance = 1e-3
+    )))
+})
+
+test_that('eligibility mask fixes absent condition edges at zero', {
+    set.seed(15)
+    X <- list(
+        Control = Matrix::Matrix(matrix(stats::rnorm(120), ncol = 3)),
+        Drug = Matrix::Matrix(matrix(stats::rnorm(120), ncol = 3))
+    )
+    y <- list(Control = stats::rnorm(40), Drug = stats::rnorm(40))
+    mask <- matrix(
+        c(TRUE, TRUE, TRUE, FALSE, TRUE, FALSE),
+        nrow = 3, ncol = 2,
+        dimnames = list(NULL, c('Control', 'Drug'))
+    )
+    fit <- Pando:::.condition_fit_multitask_lambda(
+        X, y, lambda = 0.01, alpha = 0.5, condition_mix = 1,
+        coefficient_mask = mask
+    )
+
+    expect_equal(fit$beta[!mask], rep(0, sum(!mask)))
 })
 
 test_that('condition-stratified folds contain every fold in every condition', {
