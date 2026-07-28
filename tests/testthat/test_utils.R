@@ -85,6 +85,37 @@ test_that('aggregate_matrix works with groups.', {
     )
 })
 
+test_that('aggregate_matrix retains its group crosswalk without grr', {
+    vector_groups <- c('A', 'A', 'B', 'C')
+    vector_result <- aggregate_matrix(
+        test_mat, groups = vector_groups, fun = 'mean'
+    )
+    expect_identical(
+        attr(vector_result, 'crosswalk'),
+        c('A', 'B', 'C')
+    )
+
+    frame_groups <- data.frame(
+        condition = c('A', 'A', 'B', 'B'),
+        cell_type = c('T', 'T', 'T', 'B'),
+        stringsAsFactors = FALSE
+    )
+    frame_result <- aggregate_matrix(
+        test_mat, groups = frame_groups, fun = 'mean'
+    )
+    frame_key <- interaction(
+        data.frame(lapply(frame_groups, as.factor)), sep = '_'
+    )
+    frame_index <- match(rownames(frame_result), frame_key)
+    expected_crosswalk <- as.data.frame(lapply(
+        frame_groups, function(value) value[frame_index]
+    ))
+    expect_identical(
+        attr(frame_result, 'crosswalk'),
+        expected_crosswalk
+    )
+})
+
 test_that('aggregate_matrix works with function input.', {
     expect_true(
         all(aggregate_matrix(test_mat, groups=c('A', 'A', 'B', 'A'), fun=colMeans2)[1, ] == colMeans2(test_mat[c(1:2,4), ]))
@@ -144,8 +175,6 @@ test_that('map_par works on in parallel', {
     expect_mapequal(map_par(test_vec, sqrt, verbose=F, parallel=T), lapply(test_vec, sqrt))
     expect_mapequal(map_par(test_list, sqrt, verbose=F, parallel=T), lapply(test_list, sqrt))
 })
-
-
 
 
 

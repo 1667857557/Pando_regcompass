@@ -46,8 +46,7 @@ Imports:
     foreach,
     sparseMatrixStats (>= 1.10.0),
     irlba,
-    uwot,
-    grr
+    uwot
 Suggests: 
     knitr,
     rmarkdown,
