@@ -1,5 +1,5 @@
 Package: Pando
-Version: 1.2.1
+Version: 1.3.0
 Type: Package
 Title: Inferring regulomes from multi-modal single-cell genomics data
 Authors@R: person(given = "Jonas Simon",
@@ -14,9 +14,10 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     pooled single-cell effect scale. The default engine performs sparse-group
     shared-support selection, permits condition-specific active edges and sign
     reversals, and then applies a support-constrained hierarchical-ridge refit.
-    Complete shared, condition, deviation, contrast, eligibility, activity,
-    transformation, and diagnostic layers are exposed through a versioned fit
-    contract for reproducible downstream comparisons.
+    Standard Pando networks remain the compatibility surface. Complete shared,
+    condition, deviation, contrast, estimability, activity, transformation,
+    direction, and single-cell projection layers are exposed through a
+    versioned contract for reproducible downstream metacell comparisons.
 License: MIT
 Encoding: UTF-8
 LazyData: true

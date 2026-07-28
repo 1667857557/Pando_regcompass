@@ -1,8 +1,8 @@
 ---
-title: "Condition-comparable GRNs"
+title: "Condition-specific sub-GRNs and RegCompass handoff"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Condition-comparable GRNs}
+  %\VignetteIndexEntry{Condition-specific sub-GRNs and RegCompass handoff}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
@@ -11,25 +11,16 @@ vignette: >
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = FALSE)
 ```
 
-## Goal
+## Two Pando workflows
 
-This workflow estimates a GRN for each condition of the same cell type while
-keeping coefficient differences in a common model space. The default
-`shared_design_independent` engine deliberately separates two concerns:
+Pando retains its original `infer_grn()` workflow unchanged. Use
+`infer_condition_grn()` when conditions of the same cell type must be compared
+directly. The condition workflow still writes standard Pando `Network` objects,
+so `coef()`, `gof()` and `NetworkParams()` continue to work. Its
+`ConditionGRNFit` and projection objects add the lossless information required
+by RegCompass.
 
-1. Comparability is enforced by one complete edge dictionary, pooled
-   final-predictor scaling, and, within each target, one regularization path
-   and selected regularization level shared by conditions.
-2. Biological condition coefficients are estimated independently and are not
-   shrunk toward each other by a cross-condition group penalty.
-
-This is the closest shared-design analogue of running separate Pando models,
-without allowing edge definitions or coefficient units to drift.
-
-## Fit the shared design
-
-Start with the same normalized paired RNA/ATAC `GRNData` used by the standard
-Pando workflow, including motif matches.
+## Fit one shared candidate graph
 
 ```{r fit}
 condition_object <- infer_condition_grn(
@@ -38,10 +29,9 @@ condition_object <- infer_condition_grn(
   condition_col = "condition",
   genes = metabolic_genes,
   network_name = "condition_grn",
-  method = "shared_design_independent",
-  candidate_screen = "condition_union",
+  candidate_screen = "pooled_within_condition",
   alpha = 0.5,
-  condition_mix = 1,
+  condition_mix = 0.5,
   condition_weight = "equal",
   reference_condition = "Control",
   nfolds = 5,
@@ -51,82 +41,127 @@ condition_object <- infer_condition_grn(
 )
 ```
 
-For `candidate_screen = "condition_union"`, an edge is eligible in a condition
-only when both its TF and its motif-bearing peak pass screening in that same
-condition. Pando takes the union of those complete edges across conditions; it
-does not independently union TFs and peaks before pairing them.
-
-With `scale = TRUE`, Pando first forms each raw interaction
+Pando forms each candidate interaction on paired single cells:
 
 \[
-x_e = \mathrm{RNA}_{TF(e)} \times \mathrm{ATAC}_{peak(e)}
+x_{i,e}=\mathrm{RNA}_{i,TF(e)}\mathrm{ATAC}_{i,peak(e)}.
 \]
 
-and then stores one pooled center and scale for that complete edge predictor
-across the cell type. The target is standardized once over the same pooled
-cells. Every condition therefore uses identical coefficient units.
+Every condition uses the same motif/domain edge dictionary and the same pooled
+edge and target transforms. `pooled_within_condition` scores each candidate by
+the weighted root-mean-square of its within-condition correlations. This
+removes pure between-condition mean shifts without cancelling a positive effect
+in one condition against a negative effect in another.
 
-## Inspect the lossless fit contract
+Sparse multi-task selection may choose different active edges in each
+condition. The common-scale refit keeps an inactive but estimable edge at exact
+zero and an unavailable edge at `NA`.
 
-```{r inspect}
+## Standard Pando-compatible networks
+
+```{r networks}
+Params(condition_object)$condition_network_index
+
+control_network <- GetNetwork(
+  condition_object,
+  network = "condition_grn__Tumor_cell__condition__Control"
+)
+coef(control_network)
+gof(control_network)
+NetworkParams(control_network)
+```
+
+The shared network is
+`condition_grn__<cell_type>__shared`; condition networks are
+`condition_grn__<cell_type>__condition__<condition>`. Their coefficient tables
+retain the original Pando columns:
+
+```text
+tf  target  region  term  estimate  corr
+```
+
+`estimate` is the absolute refitted condition coefficient, not a reference
+contrast. An unavailable edge has `estimate = NA`; an estimable inactive edge
+has `estimate = 0`.
+
+## Lossless v3 contract
+
+```{r contract}
 fit <- condition_grn_fit(
   condition_object,
   network_name = "condition_grn",
   cell_type = "Tumor_cell"
 )
 
-fit$schema_version
-fit$fit_engine
-fit$edge_table
-fit$eligibility_mask
-fit$beta
-fit$contrast
-fit$predictor_transform
-fit$response_transform
-fit$target_fit
-fit$target_rsq
+fit$beta_condition_std
+fit$beta_shared_std
+fit$delta_condition_std
+fit$active_mask
+fit$estimability_mask
+fit$absolute_direction
 ```
 
-The explicit contrast is
+For every shared candidate edge:
 
 \[
-\Delta\beta_{e,c} = \beta_{e,c} - \beta_{e,reference}.
+\beta_{e,c}=\beta_{e,shared}+\delta_{e,c}.
 \]
 
-The reference column is therefore exactly zero. The `eligibility_mask` should
-always accompany the coefficient matrix so that a structural absence is not
-mistaken for a fitted zero.
+Different condition sub-GRNs are induced by their own active masks, so their TF,
+peak and target node sets may differ. Effects may also reverse sign. These
+differences do not change the edge coordinate system or coefficient units.
 
-## Downstream model-space projection
+```{r compare}
+condition_grn_subgraph(fit, "Control")
+condition_grn_subgraph(fit, "Drug")
 
-A downstream method can reproduce Pando's model space for edge \(e\) in unit
-\(u\) with the stored transform:
+contrast <- condition_grn_contrast(fit, "Control", "Drug")
+contrast[, c(
+  "tf", "region", "target",
+  "beta_condition_1", "beta_condition_2",
+  "delta_beta", "pairwise_direction", "sign_switch", "comparable"
+)]
+```
 
-\[
-z_{e,u} =
-\frac{
-  \mathrm{RNA}_{TF(e),u}\mathrm{ATAC}_{peak(e),u}
-  - \mathrm{center}_e
-}{
-  \mathrm{scale}_e
-}.
-\]
+`delta_condition` means deviation from the shared coefficient. It is not the
+same as repression: absolute regulatory direction is always
+`sign(beta_condition)`.
 
-Condition differences should be projected as
-\(\sum_e \Delta\beta_{e,c}z_{e,u}\). Do not renormalize
-\(\Delta\beta\) by its absolute sum: that would erase the fitted effect
-magnitude that the shared scale was designed to preserve.
+## Project before constructing metacells
 
-## Compatibility networks
-
-```{r compatibility}
-Params(condition_object)$condition_network_index
-coef(
+```{r projection}
+projection <- project_condition_grn_cells(
   condition_object,
-  network = "condition_grn__Tumor_cell__condition__Drug"
+  fit = fit,
+  component = "condition",
+  scale = "std",
+  output = "gene_score",
+  targets = metabolic_genes,
+  nonestimable = "propagate"
 )
+
+projection$gene_score
+projection$gene_direction
+projection$target_condition_status
+projection$aggregation_contract
 ```
 
-These remain standard Pando `Network` objects. The Universal network stores an
-equal-condition coefficient mean for existing visualization interfaces only;
-it is not used as the baseline for condition contrasts.
+For a cell in condition \(c\), Pando computes
+
+\[
+R_{i,g,c}=\sum_{e\rightarrow g}z_{i,e}\beta_{e,c}
+\]
+
+with the exact transforms stored during fitting. The score is signed. If any
+candidate edge needed by a target is unavailable in that condition, the target
+score is `NA`; it is never silently converted to zero.
+The projection also verifies the exact fitted cell IDs, RNA/ATAC assays and
+condition labels before calculating scores.
+
+RegCompass should construct metacells only after this projection and aggregate
+each target column by the arithmetic mean within
+cell type × condition × sample/donor. It must not multiply aggregated TF and
+peak values, recompute TF-IDF or pooled transforms, refit Pando coefficients, or
+replace `NA` with zero. Because every condition projection has identical target
+columns and scale, metacells from different conditions remain directly
+comparable for the same GEM reaction.

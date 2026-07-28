@@ -1,17 +1,16 @@
-test_that('condition-wise screening retains cancelling condition effects', {
+test_that('shared screening retains opposite condition effects', {
     x <- Matrix::Matrix(cbind(feature = c(1:8, 1:8)), sparse = TRUE)
     y <- Matrix::Matrix(c(c(1:8), rev(1:8)), ncol = 1, sparse = TRUE)
     condition <- factor(rep(c('Control', 'Drug'), each = 8))
 
-    union_keep <- Pando:::.condition_screen_columns(
-        x, y, condition, threshold = 0.8, candidate_screen = 'condition_union'
-    )
-    pooled_keep <- Pando:::.condition_screen_columns(
-        x, y, condition, threshold = 0.8, candidate_screen = 'pooled'
+    score <- Pando:::.condition_within_association_score(x, y, condition)
+    shared_keep <- Pando:::.condition_screen_columns(
+        x, y, condition, threshold = 0.8,
+        candidate_screen = 'pooled_within_condition'
     )
 
-    expect_true(union_keep[[1]])
-    expect_false(pooled_keep[[1]])
+    expect_equal(score[['feature']], 1, tolerance = 1e-12)
+    expect_true(shared_keep[[1]])
 })
 
 test_that('edge union never pairs TF and peak retained in different conditions', {

@@ -14,7 +14,6 @@
     tf_cor,
     peak_cor,
     candidate_screen,
-    method,
     alpha,
     condition_mix,
     reference_condition,
@@ -26,7 +25,6 @@
     lambda_selection,
     min_cells_per_condition,
     on_small_condition,
-    scale,
     active_tol,
     parallel,
     BPPARAM,
@@ -64,7 +62,6 @@
             tf_cor = tf_cor,
             peak_cor = peak_cor,
             candidate_screen = candidate_screen,
-            method = method,
             alpha = alpha,
             condition_mix = condition_mix,
             reference_condition = reference_condition,
@@ -76,7 +73,6 @@
             lambda_selection = lambda_selection,
             min_cells_per_condition = min_cells_per_condition,
             on_small_condition = on_small_condition,
-            scale = scale,
             active_tol = active_tol,
             parallel = parallel,
             BPPARAM = BPPARAM,
@@ -146,7 +142,6 @@
     tf_cor,
     peak_cor,
     candidate_screen,
-    method,
     alpha,
     condition_mix,
     reference_condition,
@@ -158,7 +153,6 @@
     lambda_selection,
     min_cells_per_condition,
     on_small_condition,
-    scale,
     active_tol,
     parallel,
     BPPARAM,
@@ -230,7 +224,7 @@
             ' was not found in cell type ', cell_type, '.'
         )
     }
-    universal_id <- paste(network_name, safe_cell_type, 'universal', sep = '__')
+    universal_id <- paste(network_name, safe_cell_type, 'shared', sep = '__')
     condition_ids <- paste(network_name, safe_cell_type, 'condition', safe_conditions, sep = '__')
     intended_ids <- c(universal_id, condition_ids)
     conflicts <- intersect(intended_ids, names(object@grn@networks))
@@ -258,10 +252,10 @@
         candidate_screen = candidate_screen,
         tf_cor = tf_cor,
         peak_cor = peak_cor,
-        scale = scale,
-        method = method,
+        scale = TRUE,
         alpha = alpha,
         condition_mix = condition_mix,
+        active_tol = active_tol,
         reference_condition = reference_condition_cell,
         condition_weight = condition_weight,
         nlambda = nlambda,
@@ -293,11 +287,7 @@
     }
 
     successful_features <- names(successful)
-    fit_engine <- if (identical(method, 'shared_design_independent')) {
-        'shared_design_independent_elastic_net'
-    } else {
-        'multitask_sparse_group_glmnet'
-    }
+    fit_engine <- 'condition_sparse_common_scale_refit'
     fit_contract_key <- paste(network_name, safe_cell_type, sep = '__')
     fit_contract <- .condition_combine_fit_contracts(
         successful = successful,
@@ -307,9 +297,23 @@
         condition_col = condition_col,
         reference_condition = reference_condition_cell,
         candidate_screen = candidate_screen,
-        scale = scale,
+        scale = TRUE,
         fit_engine = fit_engine
     )
+    fit_contract$cell_ids <- rownames(metadata_cell_type)
+    fit_contract$cell_condition <- stats::setNames(
+        as.character(metadata_cell_type[[condition_col]]),
+        rownames(metadata_cell_type)
+    )
+    object_params <- Params(object)
+    fit_contract$assay_contract <- list(
+        rna_assay = object_params$rna_assay,
+        peak_assay = object_params$peak_assay,
+        rna_layer = 'data',
+        peak_layer = 'data'
+    )
+    fit_contract$projection_contract$cell_scope <-
+        'exact paired cell_ids used for fitting'
     fit_contracts <- object@grn@params$condition_grn_fits
     if (is.null(fit_contracts)) fit_contracts <- list()
     fit_contracts[[fit_contract_key]] <- fit_contract
@@ -331,7 +335,7 @@
         lambda_selection = lambda_selection,
         nlambda = nlambda,
         nfolds = nfolds,
-        scale = scale,
+        scale = TRUE,
         active_tol = active_tol,
         seed = seed,
         upstream = upstream,
@@ -345,7 +349,7 @@
 
     universal_params <- do.call(
         .condition_network_params,
-        c(list(network_level = 'universal', condition = NA_character_), common_params)
+        c(list(network_level = 'shared', condition = NA_character_), common_params)
     )
     object@grn@networks[[universal_id]] <- .condition_build_network(
         successful_features, universal_coefs, universal_gof, universal_params
@@ -354,7 +358,7 @@
         network_id = universal_id,
         network_name = network_name,
         cell_type = cell_type,
-        network_level = 'universal',
+        network_level = 'shared',
         condition = NA_character_,
         n_cells = nrow(metadata_cell_type),
         coefs = universal_coefs,
