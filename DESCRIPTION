@@ -1,5 +1,5 @@
 Package: Pando
-Version: 1.1.3
+Version: 1.2.0
 Type: Package
 Title: Inferring regulomes from multi-modal single-cell genomics data
 Authors@R: person(given = "Jonas Simon",
@@ -8,7 +8,13 @@ Authors@R: person(given = "Jonas Simon",
                email = "jonas.fleck@bsse.ethz.ch",
                comment = c(ORCID = "0000-0002-4686-7254"))
 Maintainer: Jonas Simon Fleck <jonas.fleck@bsse.ethz.ch>
-Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer regulatory relationships between TF-binding site pairs and target genes. It also exposes a condition-agnostic structural TF-peak-target design contract for downstream multitask modelling, with exact measured-feature identifiers and a reproducible content fingerprint.
+Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
+    regulatory relationships between TF-binding site pairs and target genes.
+    Condition-aware models use one exact TF-peak-target edge dictionary, pooled
+    edge scaling, and a shared regularization path while estimating each
+    condition independently. Complete fitted coefficients, reference contrasts,
+    eligibility masks, transformations, and diagnostics are exposed through a
+    versioned fit contract for reproducible downstream comparisons.
 License: MIT
 Encoding: UTF-8
 LazyData: true
@@ -40,9 +46,9 @@ Imports:
     foreach,
     sparseMatrixStats (>= 1.10.0),
     irlba,
-    uwot,
-    grr
+    uwot
 Suggests: 
+    knitr,
     rmarkdown,
     testthat,
     BiocParallel,

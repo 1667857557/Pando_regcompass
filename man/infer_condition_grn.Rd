@@ -3,7 +3,7 @@
 \name{infer_condition_grn}
 \alias{infer_condition_grn}
 \alias{infer_condition_grn.GRNData}
-\title{Infer cell-type Universal and condition-specific gene regulatory networks}
+\title{Infer shared-design, condition-comparable gene regulatory networks}
 \usage{
 infer_condition_grn(object, ...)
 
@@ -24,11 +24,12 @@ infer_condition_grn(object, ...)
   candidate_screen = c("condition_union", "pooled", "motif_domain"),
   aggregate_rna_col = NULL,
   aggregate_peaks_col = NULL,
-  method = "multitask_glmnet",
+  method = c("shared_design_independent", "multitask_glmnet"),
   family = "gaussian",
   interaction_term = ":",
   alpha = 0.5,
-  condition_mix = 0.5,
+  condition_mix = 1,
+  reference_condition = NULL,
   condition_weight = c("equal", "cell_count"),
   nlambda = 50L,
   lambda = NULL,
@@ -37,7 +38,7 @@ infer_condition_grn(object, ...)
   lambda_selection = c("lambda.1se", "lambda.min"),
   min_cells_per_condition = 50L,
   on_small_condition = c("skip_cell_type", "drop_condition", "error"),
-  scale = FALSE,
+  scale = TRUE,
   active_tol = 1e-08,
   parallel = FALSE,
   BPPARAM = NULL,
@@ -62,11 +63,17 @@ infer_condition_grn(object, ...)
 \item{tf_cor, peak_cor}{Correlation screening thresholds.}
 \item{candidate_screen}{One of \code{condition_union}, \code{pooled}, or \code{motif_domain}.}
 \item{aggregate_rna_col, aggregate_peaks_col}{Optional shared aggregation label. Both values must be NULL or identical.}
-\item{method}{Currently must be \code{multitask_glmnet}.}
+\item{method}{Use \code{shared_design_independent} (default) for independently
+estimated condition coefficients with shared design and tuning, or the legacy
+\code{multitask_glmnet} sparse-group engine.}
 \item{family}{Currently must be \code{gaussian}.}
 \item{interaction_term}{Currently must be \code{:}, matching the default Pando interaction.}
 \item{alpha}{Elastic-net mixing parameter.}
-\item{condition_mix}{Mixing between edge-level group sparsity and condition-specific element sparsity.}
+\item{condition_mix}{Mixing between edge-level group sparsity and
+condition-specific element sparsity. Must equal one for
+\code{shared_design_independent}.}
+\item{reference_condition}{Condition used for explicit coefficient contrasts.
+Defaults to the first condition level within each cell type.}
 \item{condition_weight}{Use equal-condition or cell-count loss weighting.}
 \item{nlambda}{Number of lambda values when \code{lambda} is not supplied.}
 \item{lambda}{Optional fixed lambda value or lambda path.}
@@ -75,7 +82,9 @@ infer_condition_grn(object, ...)
 \item{lambda_selection}{Select \code{lambda.1se} or \code{lambda.min}.}
 \item{min_cells_per_condition}{Minimum cells or aggregate units per condition.}
 \item{on_small_condition}{Action when a cell type contains a condition below the minimum.}
-\item{scale}{Whether to scale RNA and accessibility variables before creating interactions.}
+\item{scale}{Whether to standardize each final TF-expression by
+peak-accessibility predictor and target once across all conditions of a cell
+type.}
 \item{active_tol}{Numerical threshold used for active-edge network summaries.}
 \item{parallel}{Use the existing Pando foreach mapping backend.}
 \item{BPPARAM}{Optional \code{BiocParallel} parameter object.}
@@ -87,20 +96,28 @@ infer_condition_grn(object, ...)
 }
 \value{
 A \code{GRNData} object. For each eligible cell type, the object contains one
-Universal and one network per condition, all stored as standard Pando
-\code{Network} objects.
+Universal compatibility summary and one network per condition, all stored as
+standard Pando \code{Network} objects. The complete versioned fit is available
+through \code{condition_grn_fit()}.
 }
 \description{
 Extends the standard Pando TF-expression by motif-bearing peak-accessibility
-interaction model to a sparse-group elastic-net multi-task model. Each cell
-type is fit independently across conditions. Condition networks are columns of
-the joint coefficient matrix, and the Universal coefficient is their equal
-mean.
+interaction model to condition-comparable elastic-net fits. By default, each
+condition coefficient vector is estimated independently while all conditions
+share the exact edge dictionary and pooled final-predictor scale. Within each
+target, they also share the lambda path and selected lambda. This retains the
+interpretation of separate condition fits
+while making coefficient differences directly comparable.
 }
 \details{
 Generated networks are named
 \code{<network_name>__<cell_type>__universal} and
 \code{<network_name>__<cell_type>__condition__<condition>}.
+The \code{condition_union} screen retains an edge only when its TF and peak pass
+within the same condition; it never constructs a cross-condition TF/peak
+combination. Reference contrasts are
+\code{beta_condition - beta_reference}. The Universal coefficient is an
+equal-condition mean for Network compatibility and visualization only.
 The function does not modify the behavior of \code{infer_grn()}.
 }
 \examples{
@@ -110,11 +127,16 @@ object <- infer_condition_grn(
   cell_type_col = "cell_type",
   condition_col = "condition",
   candidate_screen = "condition_union",
+  method = "shared_design_independent",
   alpha = 0.5,
-  condition_mix = 0.5
+  condition_mix = 1,
+  reference_condition = "Control",
+  scale = TRUE
 )
 
 Params(object)$condition_network_index
-coef(object, network = "condition_grn__Tumor_cell__universal")
+fit <- condition_grn_fit(object, cell_type = "Tumor_cell")
+fit$contrast
+fit$predictor_transform
 }
 }

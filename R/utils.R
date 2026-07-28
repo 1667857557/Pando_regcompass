@@ -210,7 +210,17 @@ fast_aggregate <- function(
     if (fun=='mean'){
         result@x <- result@x/(fast_aggregate(x, groupings2, fun='count'))@x
     }
-    attr(result,'crosswalk') <- grr::extract(groupings, match(rownames(result), groupings2$A))
+    crosswalk_index <- match(rownames(result), groupings2$A)
+    crosswalk <- if (is.null(dim(groupings))) {
+        groupings[crosswalk_index]
+    } else if (is.data.frame(groupings)) {
+        as.data.frame(lapply(groupings, function(value) {
+            value[crosswalk_index]
+        }))
+    } else {
+        groupings[crosswalk_index, ]
+    }
+    attr(result, 'crosswalk') <- crosswalk
     return(result)
 }
 

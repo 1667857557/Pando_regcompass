@@ -1,0 +1,132 @@
+---
+title: "Condition-comparable GRNs"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Condition-comparable GRNs}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = FALSE)
+```
+
+## Goal
+
+This workflow estimates a GRN for each condition of the same cell type while
+keeping coefficient differences in a common model space. The default
+`shared_design_independent` engine deliberately separates two concerns:
+
+1. Comparability is enforced by one complete edge dictionary, pooled
+   final-predictor scaling, and, within each target, one regularization path
+   and selected regularization level shared by conditions.
+2. Biological condition coefficients are estimated independently and are not
+   shrunk toward each other by a cross-condition group penalty.
+
+This is the closest shared-design analogue of running separate Pando models,
+without allowing edge definitions or coefficient units to drift.
+
+## Fit the shared design
+
+Start with the same normalized paired RNA/ATAC `GRNData` used by the standard
+Pando workflow, including motif matches.
+
+```{r fit}
+condition_object <- infer_condition_grn(
+  grn_object,
+  cell_type_col = "cell_type",
+  condition_col = "condition",
+  genes = metabolic_genes,
+  network_name = "condition_grn",
+  method = "shared_design_independent",
+  candidate_screen = "condition_union",
+  alpha = 0.5,
+  condition_mix = 1,
+  condition_weight = "equal",
+  reference_condition = "Control",
+  nfolds = 5,
+  lambda_selection = "lambda.1se",
+  scale = TRUE,
+  seed = 12345
+)
+```
+
+For `candidate_screen = "condition_union"`, an edge is eligible in a condition
+only when both its TF and its motif-bearing peak pass screening in that same
+condition. Pando takes the union of those complete edges across conditions; it
+does not independently union TFs and peaks before pairing them.
+
+With `scale = TRUE`, Pando first forms each raw interaction
+
+\[
+x_e = \mathrm{RNA}_{TF(e)} \times \mathrm{ATAC}_{peak(e)}
+\]
+
+and then stores one pooled center and scale for that complete edge predictor
+across the cell type. The target is standardized once over the same pooled
+cells. Every condition therefore uses identical coefficient units.
+
+## Inspect the lossless fit contract
+
+```{r inspect}
+fit <- condition_grn_fit(
+  condition_object,
+  network_name = "condition_grn",
+  cell_type = "Tumor_cell"
+)
+
+fit$schema_version
+fit$fit_engine
+fit$edge_table
+fit$eligibility_mask
+fit$beta
+fit$contrast
+fit$predictor_transform
+fit$response_transform
+fit$target_fit
+fit$target_rsq
+```
+
+The explicit contrast is
+
+\[
+\Delta\beta_{e,c} = \beta_{e,c} - \beta_{e,reference}.
+\]
+
+The reference column is therefore exactly zero. The `eligibility_mask` should
+always accompany the coefficient matrix so that a structural absence is not
+mistaken for a fitted zero.
+
+## Downstream model-space projection
+
+A downstream method can reproduce Pando's model space for edge \(e\) in unit
+\(u\) with the stored transform:
+
+\[
+z_{e,u} =
+\frac{
+  \mathrm{RNA}_{TF(e),u}\mathrm{ATAC}_{peak(e),u}
+  - \mathrm{center}_e
+}{
+  \mathrm{scale}_e
+}.
+\]
+
+Condition differences should be projected as
+\(\sum_e \Delta\beta_{e,c}z_{e,u}\). Do not renormalize
+\(\Delta\beta\) by its absolute sum: that would erase the fitted effect
+magnitude that the shared scale was designed to preserve.
+
+## Compatibility networks
+
+```{r compatibility}
+Params(condition_object)$condition_network_index
+coef(
+  condition_object,
+  network = "condition_grn__Tumor_cell__condition__Drug"
+)
+```
+
+These remain standard Pando `Network` objects. The Universal network stores an
+equal-condition coefficient mean for existing visualization interfaces only;
+it is not used as the baseline for condition contrasts.
