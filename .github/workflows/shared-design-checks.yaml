@@ -146,4 +146,4 @@ jobs:
           stopifnot(any(namespace == "S3method(prepare_grn_design,GRNData)"))
 
           description <- read.dcf("DESCRIPTION")
-          stopifnot(identical(unname(description[1, "Version"]), "1.2.0"))
+          stopifnot(identical(unname(description[1, "Version"]), "1.2.1"))
