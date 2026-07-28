@@ -14,30 +14,25 @@ condition_grn_fit(object, network_name = NULL, cell_type = NULL)
 )
 }
 \arguments{
-\item{object}{A \code{GRNData} object returned by
-\code{infer_condition_grn()}.}
+\item{object}{A \code{GRNData} returned by \code{infer_condition_grn()}.}
 \item{network_name}{Optional network prefix.}
 \item{cell_type}{Optional cell-type label.}
 }
 \value{
-One \code{ConditionGRNFit} object when exactly one fit matches, otherwise a
-named list of matching objects. Each contract contains the exact edge
-dictionary, condition coefficient matrix, reference contrasts,
-edge-by-condition eligibility mask, pooled predictor and response
-transformations, target-specific lambda selection, condition-level fit quality, and
-reproducibility metadata.
+One \code{ConditionGRNFit}, or a named list when multiple fits match.
 }
 \description{
-Extracts the versioned fitted-model contract stored by
-\code{infer_condition_grn()}. It is the lossless interface for downstream
-condition comparisons; standard Pando \code{Network} objects remain available
-for existing visualization and analysis functions.
+Returns the lossless \code{pando_condition_grn_fit_v3} contract while the
+condition and shared results remain available as standard Pando networks.
 }
 \details{
-For schema \code{pando_condition_grn_fit_v2}, \code{contrast} is exactly
-\code{beta_condition - beta_reference}. With the default
-\code{shared_design_independent} engine, conditions share the complete
-TF-peak-target edge dictionary and pooled final-predictor scale. Within each
-target they also share a lambda path and selected lambda, but their coefficients
-are not coupled by a group penalty.
+The contract contains the shared candidate dictionary; selection, absolute
+condition, shared and deviation coefficient layers; standardized and raw
+scales; topology, estimability and activity masks; absolute and deviation
+directions; pooled transforms; the fitted cell and assay identifiers; target
+diagnostics; pairwise comparison semantics; and the single-cell projection
+contract.
+
+Use \code{beta_condition_std} for comparable condition effects.
+\code{beta_selection} is only a support-selection intermediate.
 }

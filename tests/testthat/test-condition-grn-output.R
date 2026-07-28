@@ -3,16 +3,16 @@ test_that('condition-aware API is exported', {
     expect_true(is.function(condition_grn_fit))
 })
 
-test_that('shared-design independent inference is the public default', {
+test_that('condition-sparse inference is the public default', {
     defaults <- formals(Pando:::infer_condition_grn.GRNData)
     expect_identical(
-        eval(defaults$method),
-        c('shared_design_independent', 'multitask_glmnet')
+        eval(defaults$method)[[1L]],
+        'shared_baseline_condition_sparse'
     )
-    expect_identical(defaults$condition_mix, 1)
+    expect_identical(defaults$condition_mix, 0.5)
     expect_null(eval(defaults$reference_condition))
     expect_identical(eval(defaults$condition_weight), c('equal', 'cell_count'))
-    expect_true(defaults$scale)
+    expect_true(eval(defaults$scale))
 })
 
 test_that('condition coefficient tables preserve Pando columns', {
@@ -24,14 +24,14 @@ test_that('condition coefficient tables preserve Pando columns', {
         stringsAsFactors = FALSE
     )
     coefs <- Pando:::.condition_format_coefs(
-        edges, estimate = c(0.5, 0), corr = c(0.2, -0.1)
+        edges, estimate = c(0.5, NA_real_), corr = c(0.2, -0.1)
     )
 
     expect_identical(
         colnames(coefs),
         c('tf', 'target', 'region', 'term', 'estimate', 'corr')
     )
-    expect_equal(coefs$estimate, c(0.5, 0))
+    expect_equal(coefs$estimate, c(0.5, NA_real_))
 })
 
 test_that('generated networks remain standard Pando Network objects', {
@@ -52,7 +52,7 @@ test_that('generated networks remain standard Pando Network objects', {
         nvariables = 1L,
         stringsAsFactors = FALSE
     )
-    params <- list(method = 'glmnet', fit_engine = 'multitask_sparse_group_glmnet')
+    params <- list(method = 'glmnet', fit_engine = 'condition_sparse_common_scale_refit')
     network <- Pando:::.condition_build_network('GENE', coefs, fit, params)
 
     expect_s4_class(network, 'Network')
@@ -61,7 +61,7 @@ test_that('generated networks remain standard Pando Network objects', {
     expect_identical(NetworkParams(network)$method, 'glmnet')
 })
 
-test_that('Universal coefficients remain compatibility summaries only', {
+test_that('shared coefficients remain standard Pando compatibility summaries', {
     beta <- matrix(c(1, 3, -2, 2), nrow = 2, byrow = TRUE)
     expect_equal(rowMeans(beta), c(2, 0))
 })
@@ -76,8 +76,24 @@ test_that('fit contracts retain reference contrasts and pooled transforms', {
                     region = 'peak1', term = 'peak1:TF1'
                 ),
                 beta = beta,
+                beta_selection = beta,
+                beta_condition = beta,
+                beta_shared = rowMeans(beta),
+                delta_condition = sweep(beta, 1L, rowMeans(beta), '-'),
                 contrast = sweep(beta, 1L, beta[, 'Control'], '-'),
                 eligibility_mask = matrix(
+                    TRUE, nrow = 1, ncol = 2,
+                    dimnames = list(edge_id, c('Control', 'Drug'))
+                ),
+                estimability_mask = matrix(
+                    TRUE, nrow = 1, ncol = 2,
+                    dimnames = list(edge_id, c('Control', 'Drug'))
+                ),
+                active_mask = matrix(
+                    TRUE, nrow = 1, ncol = 2,
+                    dimnames = list(edge_id, c('Control', 'Drug'))
+                ),
+                support_mask = matrix(
                     TRUE, nrow = 1, ncol = 2,
                     dimnames = list(edge_id, c('Control', 'Drug'))
                 ),
@@ -92,7 +108,10 @@ test_that('fit contracts retain reference contrasts and pooled transforms', {
                 cv_mean = c(2, 1),
                 cv_se = c(0.2, 0.1),
                 alpha = 0.5,
-                condition_mix = 1
+                condition_mix = 0.5,
+                condition_weight = 'equal',
+                active_tol = 1e-8,
+                refit = list(method = 'test')
             )
         )
     }
@@ -107,17 +126,36 @@ test_that('fit contracts retain reference contrasts and pooled transforms', {
         cell_type_col = 'cell_type',
         condition_col = 'condition',
         reference_condition = 'Control',
-        candidate_screen = 'condition_union',
+        candidate_screen = 'pooled_within_condition',
         scale = TRUE,
-        fit_engine = 'shared_design_independent_elastic_net'
+        fit_engine = 'condition_sparse_common_scale_refit'
     )
 
     expect_s3_class(fit, 'ConditionGRNFit')
-    expect_identical(fit$schema_version, 'pando_condition_grn_fit_v2')
+    expect_identical(fit$schema_version, 'pando_condition_grn_fit_v3')
     expect_equal(fit$contrast[, 'Control'], 0)
     expect_equal(fit$contrast[, 'Drug'], 0.5)
     expect_equal(fit$predictor_transform$center, 2)
     expect_equal(fit$predictor_transform$scale, 3)
+    expect_equal(fit$beta_condition_raw, beta * 5 / 3)
+})
+
+test_that('single-cell projection preserves standardized and raw score identity', {
+    raw_predictor <- c(2, 5, 8)
+    center <- 2
+    predictor_scale <- 3
+    response_scale <- 4
+    beta_std <- 0.75
+    beta_raw <- beta_std * response_scale / predictor_scale
+
+    standardized <- Pando:::.condition_projection_predictor(
+        raw_predictor, center, predictor_scale, scale = 'std'
+    ) * beta_std
+    raw <- Pando:::.condition_projection_predictor(
+        raw_predictor, center, predictor_scale, scale = 'raw'
+    ) * beta_raw
+
+    expect_equal(raw, standardized * response_scale)
 })
 
 test_that('network names are sanitized deterministically', {

@@ -1,5 +1,12 @@
 # Target-level fitting for condition-aware Pando.
 
+.condition_target_skip <- function(message) {
+    stop(structure(
+        list(message = message, call = NULL),
+        class = c('condition_target_skip', 'error', 'condition')
+    ))
+}
+
 .condition_fit_cell_type <- function(
     features,
     gene_data,
@@ -12,9 +19,9 @@
     tf_cor,
     peak_cor,
     scale,
-    method,
     alpha,
     condition_mix,
+    active_tol,
     reference_condition,
     condition_weight,
     nlambda,
@@ -45,9 +52,9 @@
                 tf_cor = tf_cor,
                 peak_cor = peak_cor,
                 scale = scale,
-                method = method,
                 alpha = alpha,
                 condition_mix = condition_mix,
+                active_tol = active_tol,
                 reference_condition = reference_condition,
                 condition_weight = condition_weight,
                 nlambda = nlambda,
@@ -60,12 +67,12 @@
                 tol_objective = tol_objective,
                 tol_coef = tol_coef
             ),
-            error = function(error) {
+            condition_target_skip = function(error) {
                 list(
                     error = conditionMessage(error),
                     diagnostics = data.frame(
                         target = gene,
-                        stage = 'target_fit',
+                        stage = 'target_skip',
                         converged = FALSE,
                         iterations = NA_integer_,
                         objective = NA_real_,
@@ -103,9 +110,9 @@
     tf_cor,
     peak_cor,
     scale,
-    method,
     alpha,
     condition_mix,
+    active_tol,
     reference_condition,
     condition_weight,
     nlambda,
@@ -119,12 +126,14 @@
     tol_coef
 ) {
     if (!target %in% rownames(peaks2gene)) {
-        stop('Target was not found in the peak-to-gene domain matrix.')
+        .condition_target_skip(
+            'Target was not found in the peak-to-gene domain matrix.'
+        )
     }
     gene_peak_flag <- as.logical(peaks2gene[target, ])
     candidate_peaks <- colnames(peaks2gene)[gene_peak_flag]
     if (length(candidate_peaks) == 0L) {
-        stop('No candidate regulatory peaks were found.')
+        .condition_target_skip('No candidate regulatory peaks were found.')
     }
 
     response_raw <- gene_data[, target, drop = FALSE]
@@ -147,7 +156,9 @@
     names(peak_tfs) <- candidate_peaks
     gene_tfs <- unique(unlist(peak_tfs, use.names = FALSE))
     if (length(gene_tfs) == 0L) {
-        stop('No motif-mapped TFs were found for candidate peaks.')
+        .condition_target_skip(
+            'No motif-mapped TFs were found for candidate peaks.'
+        )
     }
 
     tf_raw <- gene_data[, gene_tfs, drop = FALSE]
@@ -168,7 +179,9 @@
     })
     edge_parts <- edge_parts[!vapply(edge_parts, is.null, logical(1))]
     if (length(edge_parts) == 0L) {
-        stop('No TF-peak-target edges remained after screening.')
+        .condition_target_skip(
+            'No TF-peak-target edges remained after screening.'
+        )
     }
     edges <- unique(do.call(rbind, edge_parts))
     rownames(edges) <- NULL
@@ -177,7 +190,9 @@
     edges <- edges[rowSums(edge_mask) > 0L, , drop = FALSE]
     edge_mask <- edge_mask[edges$edge_id, , drop = FALSE]
     if (nrow(edges) == 0L) {
-        stop('No TF-peak-target edge passed screening within the same condition.')
+        .condition_target_skip(
+            'No TF-peak-target edge passed shared candidate screening.'
+        )
     }
 
     tf_variance <- .condition_column_variance(
@@ -200,7 +215,9 @@
     ]
     edge_mask <- edge_mask[edges$edge_id, , drop = FALSE]
     if (nrow(edges) == 0L) {
-        stop('No edges remained after TF and peak variance checks.')
+        .condition_target_skip(
+            'No edges remained after TF and peak variance checks.'
+        )
     }
 
     prepared_design <- .condition_build_design(
@@ -215,7 +232,9 @@
     y <- prepared_design$y
     edge_mask <- edge_mask[edges$edge_id, , drop = FALSE]
     if (ncol(X) == 0L) {
-        stop('No non-constant interaction predictors remained.')
+        .condition_target_skip(
+            'No non-constant interaction predictors remained.'
+        )
     }
 
     for (level in condition_levels) {
@@ -234,7 +253,9 @@
     prepared_design$predictor_scale <-
         prepared_design$predictor_scale[keep_edge]
     if (!ncol(X)) {
-        stop('No edge has a non-constant predictor in an eligible condition.')
+        .condition_target_skip(
+            'No edge has a non-constant predictor in an eligible condition.'
+        )
     }
     if (is.null(reference_condition)) {
         reference_condition <- condition_levels[[1L]]
@@ -309,9 +330,20 @@
     )
     selected_index <- match(cv$selected_lambda, full_path$lambda)
     selected <- full_path$fits[[selected_index]]
-    beta <- selected$beta
-    colnames(beta) <- condition_levels
-    rownames(beta) <- edges$term
+    beta_selection <- selected$beta
+    colnames(beta_selection) <- condition_levels
+    rownames(beta_selection) <- edges$edge_id
+    refit <- .condition_refit_shared_baseline(
+        X_list = X_list,
+        y_list = y_list,
+        beta_selection = beta_selection,
+        estimability_mask = edge_mask,
+        ridge = max(selected$lambda * (1 - alpha), 1e-6),
+        active_tol = active_tol,
+        condition_weight = condition_weight
+    )
+    beta <- refit$beta
+    rownames(beta) <- edges$edge_id
 
     pooled_tf_corr <- .condition_named_cor(
         gene_data[, unique(edges$tf), drop = FALSE], response_raw
@@ -324,22 +356,26 @@
     })
     names(condition_tf_corr) <- condition_levels
 
-    universal_beta <- rowMeans(beta)
+    universal_beta <- refit$beta_shared
     universal_coefs <- .condition_format_coefs(
         edges, universal_beta, pooled_tf_corr[edges$tf]
     )
     condition_coefs <- lapply(condition_levels, function(level) {
         .condition_format_coefs(
-            edges, beta[, level], condition_tf_corr[[level]][edges$tf]
+            edges,
+            refit$beta_condition[, level],
+            condition_tf_corr[[level]][edges$tf]
         )
     })
     names(condition_coefs) <- condition_levels
 
-    condition_gof <- vector('list', length(condition_levels))
+    condition_gof <- stats::setNames(
+        vector('list', length(condition_levels)), condition_levels
+    )
     universal_rsq <- numeric(length(condition_levels))
     for (task in seq_along(condition_levels)) {
         level <- condition_levels[[task]]
-        condition_prediction <- selected$intercept[[task]] + as.numeric(
+        condition_prediction <- refit$intercept[[task]] + as.numeric(
             X_list[[task]] %*% beta[, task]
         )
         condition_rsq <- .condition_rsq(y_list[[task]], condition_prediction)
@@ -384,32 +420,35 @@
     diagnostics <- data.frame(
         target = target,
         stage = 'complete',
-        converged = selected$converged,
-        iterations = selected$iterations,
+        converged = selected$converged && refit$converged,
+        iterations = selected$iterations + refit$iterations,
         objective = selected$objective,
-        coef_change = selected$coef_change,
+        coef_change = max(selected$coef_change, refit$coef_change),
         selected_lambda = selected$lambda,
         cv_mean = selected_cv_mean,
         cv_se = selected_cv_se,
         error_message = NA_character_,
         stringsAsFactors = FALSE
     )
-    reference_beta <- beta[, reference_condition]
-    contrast <- sweep(beta, 1L, reference_beta, '-')
-    fit_engine <- if (identical(method, 'shared_design_independent')) {
-        'shared_design_independent_elastic_net'
-    } else {
-        'multitask_sparse_group_glmnet'
-    }
+    reference_beta <- refit$beta_condition[, reference_condition]
+    contrast <- sweep(refit$beta_condition, 1L, reference_beta, '-')
+    fit_engine <- 'condition_sparse_common_scale_refit'
     fit_contract <- list(
         target = target,
         edge_table = edges[, c(
             'edge_id', 'tf', 'target', 'region', 'term'
         ), drop = FALSE],
         beta = beta,
+        beta_selection = beta_selection,
+        beta_condition = refit$beta_condition,
+        beta_shared = refit$beta_shared,
+        delta_condition = refit$delta_condition,
         reference_beta = reference_beta,
         contrast = contrast,
         eligibility_mask = edge_mask,
+        estimability_mask = refit$estimability_mask,
+        support_mask = refit$support_mask,
+        active_mask = refit$active_mask,
         predictor_center = stats::setNames(
             prepared_design$predictor_center, edges$edge_id
         ),
@@ -418,7 +457,7 @@
         ),
         response_center = prepared_design$response_center,
         response_scale = prepared_design$response_scale,
-        intercept = stats::setNames(selected$intercept, condition_levels),
+        intercept = refit$intercept,
         condition_rsq = vapply(
             condition_gof, function(x) x$rsq[[1L]], numeric(1)
         ),
@@ -428,8 +467,21 @@
         cv_se = cv$cv_se,
         alpha = alpha,
         condition_mix = condition_mix,
+        condition_weight = condition_weight,
+        active_tol = active_tol,
         fit_engine = fit_engine,
-        reference_condition = reference_condition
+        reference_condition = reference_condition,
+        refit = list(
+            method = 'support_constrained_common_metric_ridge',
+            ridge = refit$ridge,
+            common_metric = refit$common_metric,
+            converged = refit$converged,
+            iterations = refit$iterations,
+            coef_change = refit$coef_change,
+            support_source = 'condition_sparse_selection',
+            inactive_semantics = 'estimable_zero',
+            unavailable_semantics = 'NA'
+        )
     )
 
     list(
@@ -465,7 +517,7 @@
         response_scale <- stats::sd(y)
         if (!is.finite(response_scale) ||
             response_scale <= .Machine$double.eps) {
-            stop('Target response has zero variance.')
+            .condition_target_skip('Target response has zero variance.')
         }
         y <- (y - response_center) / response_scale
         predictor_center <- as.numeric(Matrix::colMeans(X))
@@ -477,7 +529,7 @@
         response_variance <- stats::var(y)
         if (!is.finite(response_variance) ||
             response_variance <= .Machine$double.eps) {
-            stop('Target response has zero variance.')
+            .condition_target_skip('Target response has zero variance.')
         }
     }
     edges$term <- paste(
@@ -554,27 +606,79 @@
         )
         return(out)
     }
-    if (candidate_screen == 'pooled') {
-        score <- abs(.condition_named_cor(x, y))
-        keep <- is.finite(score) & score > threshold
-        return(matrix(
-            keep, nrow = length(keep), ncol = length(levels_condition),
-            dimnames = list(names(score), levels_condition)
-        ))
+    if (candidate_screen != 'pooled_within_condition') {
+        stop('Unsupported candidate screening strategy.')
     }
-    out <- vapply(levels_condition, function(level) {
-        score <- abs(.condition_named_cor(
-            x[condition == level, , drop = FALSE],
-            y[condition == level, , drop = FALSE]
-        ))
-        is.finite(score) & score > threshold
-    }, logical(ncol(x)))
-    if (is.null(dim(out))) {
-        out <- matrix(out, nrow = ncol(x))
+    score <- .condition_within_association_score(x, y, condition)
+    keep <- is.finite(score) & score > threshold
+    matrix(
+        keep,
+        nrow = length(keep),
+        ncol = length(levels_condition),
+        dimnames = list(names(score), levels_condition)
+    )
+}
+
+.condition_within_association_score <- function(x, y, condition) {
+    if (ncol(x) == 0L) {
+        return(stats::setNames(numeric(), character()))
     }
-    rownames(out) <- colnames(x)
-    colnames(out) <- levels_condition
-    out
+    condition <- droplevels(condition)
+    squared <- numeric(ncol(x))
+    total_weight <- 0
+    for (level in levels(condition)) {
+        keep <- condition == level
+        weight <- max(sum(keep) - 1L, 0L)
+        if (weight == 0L) {
+            next
+        }
+        correlation <- .condition_named_cor(
+            x[keep, , drop = FALSE], y[keep, , drop = FALSE]
+        )
+        squared <- squared + weight * correlation^2
+        total_weight <- total_weight + weight
+    }
+    score <- if (total_weight > 0) {
+        sqrt(squared / total_weight)
+    } else {
+        rep(0, ncol(x))
+    }
+    score[!is.finite(score)] <- 0
+    stats::setNames(score, colnames(x))
+}
+
+.condition_within_named_cor <- function(x, y, condition) {
+    if (ncol(x) == 0L) {
+        return(stats::setNames(numeric(), character()))
+    }
+    condition <- droplevels(condition)
+    y <- as.numeric(y[, 1L])
+    cross_total <- numeric(ncol(x))
+    ssx_total <- numeric(ncol(x))
+    ssy_total <- 0
+    for (level in levels(condition)) {
+        keep <- condition == level
+        n_level <- sum(keep)
+        if (n_level <= 1L) {
+            next
+        }
+        x_level <- x[keep, , drop = FALSE]
+        y_level <- y[keep]
+        sum_x <- as.numeric(Matrix::colSums(x_level))
+        sum_y <- sum(y_level)
+        cross_total <- cross_total +
+            as.numeric(crossprod(x_level, y_level)) -
+            sum_x * sum_y / n_level
+        ssx_total <- ssx_total +
+            as.numeric(Matrix::colSums(x_level * x_level)) -
+            sum_x * sum_x / n_level
+        ssy_total <- ssy_total + sum(y_level * y_level) -
+            sum_y * sum_y / n_level
+    }
+    denominator <- sqrt(pmax(ssx_total, 0) * max(ssy_total, 0))
+    correlation <- cross_total / denominator
+    correlation[!is.finite(correlation)] <- 0
+    stats::setNames(correlation, colnames(x))
 }
 
 .condition_named_cor <- function(x, y) {

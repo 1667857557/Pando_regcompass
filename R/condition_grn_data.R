@@ -11,7 +11,6 @@
     extend,
     only_tss,
     peak_to_gene_domains,
-    aggregate_col,
     verbose
 ) {
     params <- Params(object)
@@ -29,7 +28,7 @@
     }
 
     model_data <- .condition_get_model_data(
-        object, params, cell_type_col, condition_col, aggregate_col
+        object, params
     )
     gene_data <- model_data$gene_data
     peak_data <- model_data$peak_data
@@ -125,62 +124,30 @@
 
 .condition_get_model_data <- function(
     object,
-    params,
-    cell_type_col,
-    condition_col,
-    aggregate_col = NULL
+    params
 ) {
     metadata <- object@data@meta.data
-    if (is.null(aggregate_col)) {
-        gene_data <- Matrix::t(LayerData(
-            object, assay = params$rna_assay, layer = 'data'
-        ))
-        peak_data <- Matrix::t(LayerData(
-            object, assay = params$peak_assay, layer = 'data'
-        ))
-        common_cells <- intersect(rownames(gene_data), rownames(peak_data))
-        if (length(common_cells) != nrow(gene_data) || length(common_cells) != nrow(peak_data)) {
-            stop('RNA and ATAC data must contain the same paired cells.')
-        }
-        gene_data <- gene_data[common_cells, , drop = FALSE]
-        peak_data <- peak_data[common_cells, , drop = FALSE]
-        metadata <- metadata[common_cells, , drop = FALSE]
-        return(list(gene_data = gene_data, peak_data = peak_data, metadata = metadata))
+    gene_data <- Matrix::t(LayerData(
+        object, assay = params$rna_assay, layer = 'data'
+    ))
+    peak_data <- Matrix::t(LayerData(
+        object, assay = params$peak_assay, layer = 'data'
+    ))
+    gene_cells <- rownames(gene_data)
+    peak_cells <- rownames(peak_data)
+    if (is.null(gene_cells) || is.null(peak_cells) ||
+        anyDuplicated(gene_cells) || anyDuplicated(peak_cells) ||
+        !setequal(gene_cells, peak_cells)) {
+        stop('RNA and ATAC data must contain the same paired single cells.')
     }
-
-    gene_data <- GetAssaySummary(
-        object, assay = params$rna_assay, group_name = aggregate_col, verbose = FALSE
-    )
-    peak_data <- GetAssaySummary(
-        object, assay = params$peak_assay, group_name = aggregate_col, verbose = FALSE
-    )
-    common_units <- intersect(rownames(gene_data), rownames(peak_data))
-    if (length(common_units) != nrow(gene_data) || length(common_units) != nrow(peak_data)) {
-        stop('Aggregated RNA and ATAC summaries must contain the same paired units.')
+    if (is.null(rownames(metadata)) || anyDuplicated(rownames(metadata)) ||
+        !all(gene_cells %in% rownames(metadata))) {
+        stop('Metadata must contain one unique row for every paired single cell.')
     }
-    unit_label <- as.character(metadata[[aggregate_col]])
-    unit_metadata <- lapply(common_units, function(unit) {
-        rows <- which(unit_label == unit)
-        cell_type_values <- unique(as.character(metadata[[cell_type_col]][rows]))
-        condition_values <- unique(as.character(metadata[[condition_col]][rows]))
-        if (length(cell_type_values) != 1L || length(condition_values) != 1L) {
-            stop(
-                'Aggregation unit ', unit,
-                ' spans more than one cell type or condition.'
-            )
-        }
-        data.frame(
-            cell_type_value = cell_type_values,
-            condition_value = condition_values,
-            stringsAsFactors = FALSE
-        )
-    })
-    unit_metadata <- do.call(rbind, unit_metadata)
-    rownames(unit_metadata) <- common_units
-    colnames(unit_metadata) <- c(cell_type_col, condition_col)
+    common_cells <- gene_cells
     list(
-        gene_data = gene_data[common_units, , drop = FALSE],
-        peak_data = peak_data[common_units, , drop = FALSE],
-        metadata = unit_metadata
+        gene_data = gene_data[common_cells, , drop = FALSE],
+        peak_data = peak_data[common_cells, , drop = FALSE],
+        metadata = metadata[common_cells, , drop = FALSE]
     )
 }

@@ -3,7 +3,7 @@
 \name{infer_condition_grn}
 \alias{infer_condition_grn}
 \alias{infer_condition_grn.GRNData}
-\title{Infer shared-design, condition-comparable gene regulatory networks}
+\title{Infer condition-specific sub-GRNs on one shared coordinate system}
 \usage{
 infer_condition_grn(object, ...)
 
@@ -21,14 +21,11 @@ infer_condition_grn(object, ...)
   peak_to_gene_domains = NULL,
   tf_cor = 0.1,
   peak_cor = 0,
-  candidate_screen = c("condition_union", "pooled", "motif_domain"),
-  aggregate_rna_col = NULL,
-  aggregate_peaks_col = NULL,
-  method = c("shared_design_independent", "multitask_glmnet"),
-  family = "gaussian",
-  interaction_term = ":",
+  candidate_screen = c("pooled_within_condition", "motif_domain"),
+  method = c("shared_baseline_condition_sparse", "shared_design_independent",
+    "multitask_glmnet"),
   alpha = 0.5,
-  condition_mix = 1,
+  condition_mix = 0.5,
   reference_condition = NULL,
   condition_weight = c("equal", "cell_count"),
   nlambda = 50L,
@@ -52,73 +49,61 @@ infer_condition_grn(object, ...)
 )
 }
 \arguments{
-\item{object}{A \code{GRNData} object containing paired RNA and ATAC measurements.}
+\item{object}{A \code{GRNData} object containing paired RNA and ATAC single cells.}
 \item{cell_type_col}{Metadata column containing cell-type labels.}
 \item{condition_col}{Metadata column containing condition labels.}
 \item{genes}{Target genes. Defaults to RNA variable features.}
 \item{network_name}{Prefix used for generated network names.}
 \item{peak_to_gene_method}{Peak-to-gene method, either \code{Signac} or \code{GREAT}.}
-\item{upstream, downstream, extend, only_tss}{Regulatory-domain parameters passed to Pando peak-to-gene mapping.}
-\item{peak_to_gene_domains}{Optional custom gene regulatory domains.}
-\item{tf_cor, peak_cor}{Correlation screening thresholds.}
-\item{candidate_screen}{One of \code{condition_union}, \code{pooled}, or \code{motif_domain}.}
-\item{aggregate_rna_col, aggregate_peaks_col}{Optional shared aggregation label. Both values must be NULL or identical.}
-\item{method}{Use \code{shared_design_independent} (default) for independently
-estimated condition coefficients with shared design and tuning, or the legacy
-\code{multitask_glmnet} sparse-group engine.}
-\item{family}{Currently must be \code{gaussian}.}
-\item{interaction_term}{Currently must be \code{:}, matching the default Pando interaction.}
-\item{alpha}{Elastic-net mixing parameter.}
-\item{condition_mix}{Mixing between edge-level group sparsity and
-condition-specific element sparsity. Must equal one for
-\code{shared_design_independent}.}
-\item{reference_condition}{Condition used for explicit coefficient contrasts.
-Defaults to the first condition level within each cell type.}
-\item{condition_weight}{Use equal-condition or cell-count loss weighting.}
-\item{nlambda}{Number of lambda values when \code{lambda} is not supplied.}
-\item{lambda}{Optional fixed lambda value or lambda path.}
-\item{lambda_min_ratio}{Smallest lambda relative to lambda maximum.}
-\item{nfolds}{Number of condition-stratified cell folds.}
-\item{lambda_selection}{Select \code{lambda.1se} or \code{lambda.min}.}
-\item{min_cells_per_condition}{Minimum cells or aggregate units per condition.}
-\item{on_small_condition}{Action when a cell type contains a condition below the minimum.}
-\item{scale}{Whether to standardize each final TF-expression by
-peak-accessibility predictor and target once across all conditions of a cell
-type.}
-\item{active_tol}{Numerical threshold used for active-edge network summaries.}
-\item{parallel}{Use the existing Pando foreach mapping backend.}
-\item{BPPARAM}{Optional \code{BiocParallel} parameter object.}
-\item{overwrite}{Replace generated networks with matching names.}
-\item{seed}{Random seed for condition-stratified folds.}
-\item{max_iter, tol_objective, tol_coef}{Solver controls.}
+\item{upstream, downstream, extend, only_tss}{Regulatory-domain parameters.}
+\item{peak_to_gene_domains}{Optional custom regulatory domains.}
+\item{tf_cor, peak_cor}{Candidate screening thresholds.}
+\item{candidate_screen}{Use \code{pooled_within_condition} for a shared
+weighted-RMS within-condition screen, or \code{motif_domain} to retain every
+motif/domain candidate.}
+\item{method}{The condition-sparse engine. Retired method names are accepted as
+call-compatibility aliases and invoke the same engine.}
+\item{alpha}{Elastic-net mixing during support selection.}
+\item{condition_mix}{Mixing between shared row support and
+condition-specific element support. Must be greater than zero.}
+\item{reference_condition}{Condition used for the stored compatibility contrast.}
+\item{condition_weight}{Equal-condition or cell-count loss weighting.}
+\item{nlambda}{Number of generated lambda values.}
+\item{lambda}{Optional fixed lambda or lambda path.}
+\item{lambda_min_ratio}{Smallest lambda relative to the maximum.}
+\item{nfolds}{Condition-stratified cell folds.}
+\item{lambda_selection}{Use \code{lambda.1se} or \code{lambda.min}.}
+\item{min_cells_per_condition}{Minimum single cells per condition.}
+\item{on_small_condition}{Skip, drop or stop for small conditions.}
+\item{scale}{Must be \code{TRUE}; the pooled scale is required for comparability.}
+\item{active_tol}{Threshold defining an active refitted edge.}
+\item{parallel}{Use the Pando mapping backend.}
+\item{BPPARAM}{Optional \code{BiocParallel} backend.}
+\item{overwrite}{Replace networks with the same names.}
+\item{seed}{Random seed.}
+\item{max_iter, tol_objective, tol_coef}{Selection solver controls.}
 \item{verbose}{Display progress messages.}
-\item{...}{Reserved for future extensions.}
+\item{...}{Must be empty; retired condition modules do not accept additional
+arguments.}
 }
 \value{
-A \code{GRNData} object. For each eligible cell type, the object contains one
-Universal compatibility summary and one network per condition, all stored as
-standard Pando \code{Network} objects. The complete versioned fit is available
-through \code{condition_grn_fit()}.
+A \code{GRNData} object containing standard Pando \code{Network} objects named
+\code{<network_name>__<cell_type>__shared} and
+\code{<network_name>__<cell_type>__condition__<condition>}. The lossless v3
+contract is available through \code{condition_grn_fit()}.
 }
 \description{
-Extends the standard Pando TF-expression by motif-bearing peak-accessibility
-interaction model to condition-comparable elastic-net fits. By default, each
-condition coefficient vector is estimated independently while all conditions
-share the exact edge dictionary and pooled final-predictor scale. Within each
-target, they also share the lambda path and selected lambda. This retains the
-interpretation of separate condition fits
-while making coefficient differences directly comparable.
+Fits one shared TF-peak-target candidate dictionary on paired single cells,
+permits different condition-specific active nodes, edges, magnitudes and signs,
+and refits selected supports on one pooled effect scale.
 }
 \details{
-Generated networks are named
-\code{<network_name>__<cell_type>__universal} and
-\code{<network_name>__<cell_type>__condition__<condition>}.
-The \code{condition_union} screen retains an edge only when its TF and peak pass
-within the same condition; it never constructs a cross-condition TF/peak
-combination. Reference contrasts are
-\code{beta_condition - beta_reference}. The Universal coefficient is an
-equal-condition mean for Network compatibility and visualization only.
-The function does not modify the behavior of \code{infer_grn()}.
+The within-condition screen uses a weighted root-mean-square of
+condition-specific correlations. Consequently, pure condition mean shifts are
+removed but opposite signs do not cancel during screening.
+
+Unavailable coefficients are \code{NA}; estimable inactive coefficients are
+exact zero. Pando does not create metacells in this workflow.
 }
 \examples{
 \dontrun{
@@ -126,17 +111,10 @@ object <- infer_condition_grn(
   object,
   cell_type_col = "cell_type",
   condition_col = "condition",
-  candidate_screen = "condition_union",
-  method = "shared_design_independent",
-  alpha = 0.5,
-  condition_mix = 1,
-  reference_condition = "Control",
-  scale = TRUE
+  genes = metabolic_genes,
+  condition_mix = 0.5,
+  reference_condition = "Control"
 )
-
-Params(object)$condition_network_index
 fit <- condition_grn_fit(object, cell_type = "Tumor_cell")
-fit$contrast
-fit$predictor_transform
 }
 }

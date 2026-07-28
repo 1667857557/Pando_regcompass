@@ -1,4 +1,4 @@
-name: Shared GRN design checks
+name: Condition sub-GRN contract checks
 
 on:
   pull_request:
@@ -12,7 +12,7 @@ jobs:
   static-contract:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
 
       - uses: r-lib/actions/setup-r@v2
         with:
@@ -28,122 +28,98 @@ jobs:
           )
           invisible(lapply(files, parse))
 
-      - name: Verify shared design v2 schema without package dependencies
+      - name: Verify the v3 condition sub-GRN contract
         shell: Rscript {0}
         run: |
-          source("R/grn_design.R", local = globalenv())
-          source("R/grn_design_alignment.R", local = globalenv())
-          source("R/grn_design_contract.R", local = globalenv())
-          source("R/grn_design_mapping_contract.R", local = globalenv())
+          source("R/condition_grn_solver.R", local = globalenv())
+          source("R/condition_grn_refit.R", local = globalenv())
+          source("R/condition_grn_output.R", local = globalenv())
+          source("R/condition_grn_projection.R", local = globalenv())
 
-          peaks2gene <- Matrix::Matrix(
-            matrix(c(1, 0, 0, 1), nrow = 2,
-                   dimnames = list(c("G1", "G2"), c("r2", "r1"))),
-            sparse = TRUE
-          )
-          peaks2motif <- Matrix::Matrix(
-            matrix(c(1, 0, 0, 1), nrow = 2,
-                   dimnames = list(c("r1", "r2"), c("m2", "m1"))),
-            sparse = TRUE
-          )
-          peak_data <- Matrix::Matrix(
-            matrix(seq_len(6), nrow = 3,
-                   dimnames = list(paste0("c", 1:3), c("r1", "r2"))),
-            sparse = TRUE
-          )
-          motif2tf <- Matrix::Matrix(
-            matrix(c(1, 0, 0, 1), nrow = 2,
-                   dimnames = list(c("m1", "m2"), c("TF1", "TF2"))),
-            sparse = TRUE
-          )
-          aligned <- .pando_align_design_matrices(
-            peaks2gene, peaks2motif, peak_data, motif2tf
-          )
-          stopifnot(identical(colnames(aligned$peaks2gene), c("r2", "r1")))
-          stopifnot(identical(rownames(aligned$peaks2motif), c("r2", "r1")))
-          stopifnot(identical(colnames(aligned$peak_data), c("r2", "r1")))
-          stopifnot(identical(colnames(aligned$peaks2motif), c("m2", "m1")))
-          stopifnot(identical(rownames(aligned$motif2tf), c("m2", "m1")))
-
-          edges <- data.frame(
-            edge_id = "TF1::peak1::GENE1",
-            candidate_index = 1L,
-            tf = "TF1",
-            region = "chr1-1-10",
-            target = "GENE1",
-            atac_feature_id = "peak1",
-            tf_feature_id = "TF1",
-            target_feature_id = "GENE1",
-            motif_supported = TRUE,
-            peak_to_gene_supported = TRUE,
-            supporting_regions = "chr1-1-10;chr1-2-9",
-            n_supporting_regions = 2L,
-            tf_detection = 0.5,
-            peak_detection = 0.5,
-            target_detection = 0.5,
+          edge <- data.frame(
+            edge_id = c("e1", "e2", "e3"),
+            tf = c("TF1", "TF2", "TF3"),
+            target = c("G1", "G2", "G3"),
+            region = c("P1", "P2", "P3"),
+            term = c("P1:TF1", "P2:TF2", "P3:TF3"),
             stringsAsFactors = FALSE
           )
-          design <- structure(list(
-            schema_version = "pando_grn_design_v1",
-            candidate_edges = edges,
-            region_map = data.frame(
-              region = c("chr1-1-10", "chr1-2-9"),
-              atac_feature_id = c("peak1", "peak1"),
-              stringsAsFactors = FALSE
-            ),
-            target_diagnostics = data.frame(
-              target = "GENE1",
-              target_detection = 0.5,
-              n_candidate_edges = 1L,
-              n_candidate_tfs = 1L,
-              n_candidate_regions = 1L,
-              stringsAsFactors = FALSE
-            ),
-            feature_contract = list(
-              cell_ids = c("c1", "c2"),
-              rna_feature_ids = c("TF1", "GENE1"),
-              atac_feature_ids = "peak1",
-              rna_assay = "RNA",
-              atac_assay = "ATAC",
-              rna_layer = "data",
-              atac_layer = "data"
-            ),
-            params = list(
-              candidate_policy = "structural_shared_before_model_fitting"
-            ),
-            design_fingerprint = "legacy"
-          ), class = c("PandoGRNDesign", "list"))
-          design <- .pando_refresh_grn_design_contract(design)
-          stopifnot(identical(design$schema_version, "pando_grn_design_v2"))
-          stopifnot(grepl("^md5:", design$design_fingerprint))
-          stopifnot(identical(
-            design$target_diagnostics$n_candidate_regions, 2L
-          ))
-          stopifnot(identical(
-            design$target_diagnostics$n_candidate_atac_features, 1L
-          ))
-          stopifnot(isTRUE(validate_grn_design(design)))
-
-          broken <- design
-          broken$region_map$atac_feature_id[[2L]] <- "other_peak"
-          broken$feature_contract$atac_feature_ids <- c("peak1", "other_peak")
-          broken$design_fingerprint <- paste0(
-            "md5:", .pando_design_md5(.pando_design_payload(broken))
+          beta <- matrix(
+            c(1, 0, 0, 2, 0.5, -0.5),
+            nrow = 3L,
+            byrow = TRUE,
+            dimnames = list(edge$edge_id, c("Control", "Drug"))
           )
-          failure <- tryCatch({
-            validate_grn_design(broken)
-            NULL
-          }, error = function(error) error)
-          stopifnot(inherits(failure, "error"))
-          stopifnot(grepl(
-            "Every supporting regulatory region",
-            conditionMessage(failure), fixed = TRUE
+          fit <- structure(
+            list(
+              schema_version = "pando_condition_grn_fit_v3",
+              condition_levels = c("Control", "Drug"),
+              edge_table = edge,
+              beta_condition_std = beta,
+              beta_condition_raw = beta * 1e-12,
+              estimability_mask = matrix(
+                TRUE, 3L, 2L, dimnames = dimnames(beta)
+              ),
+              active_mask = abs(beta) > 1e-8,
+              active_tol = 1e-8
+            ),
+            class = c("ConditionGRNFit", "list")
+          )
+          control <- condition_grn_subgraph(fit, "Control", scale = "raw")
+          drug <- condition_grn_subgraph(fit, "Drug", scale = "raw")
+          contrast <- condition_grn_contrast(
+            fit, "Control", "Drug", scale = "raw"
+          )
+          stopifnot(
+            identical(sort(control$nodes$tf), c("TF1", "TF3")),
+            identical(sort(drug$nodes$tf), c("TF2", "TF3")),
+            isTRUE(contrast$sign_switch[contrast$edge_id == "e3"]),
+            identical(
+              unname(contrast$active_1),
+              unname(fit$active_mask[, "Control"])
+            ),
+            identical(
+              unname(contrast$active_2),
+              unname(fit$active_mask[, "Drug"])
+            )
+          )
+
+          raw_predictor <- c(2, 5, 8)
+          beta_std <- 0.75
+          response_scale <- 4
+          standardized <- .condition_projection_predictor(
+            raw_predictor, center = 2, predictor_scale = 3, scale = "std"
+          ) * beta_std
+          raw <- .condition_projection_predictor(
+            raw_predictor, center = 2, predictor_scale = 3, scale = "raw"
+          ) * (beta_std * response_scale / 3)
+          stopifnot(isTRUE(all.equal(raw, standardized * response_scale)))
+
+          coefs <- .condition_format_coefs(
+            edge, estimate = beta[, "Control"], corr = rep(0, nrow(edge))
+          )
+          stopifnot(identical(
+            colnames(coefs),
+            c("tf", "target", "region", "term", "estimate", "corr")
           ))
 
           namespace <- readLines("NAMESPACE", warn = FALSE)
-          stopifnot(any(namespace == "export(prepare_grn_design)"))
-          stopifnot(any(namespace == "export(validate_grn_design)"))
-          stopifnot(any(namespace == "S3method(prepare_grn_design,GRNData)"))
+          stopifnot(
+            any(namespace == "export(infer_grn)"),
+            any(namespace == "export(infer_condition_grn)"),
+            any(namespace == "export(project_condition_grn_cells)"),
+            !any(grepl("prepare_grn_design|validate_grn_design", namespace))
+          )
+
+          removed <- c(
+            "R/grn_design.R",
+            "R/grn_design_alignment.R",
+            "R/grn_design_contract.R",
+            "R/grn_design_mapping_contract.R",
+            "R/zzz_condition_grn_comparability.R",
+            "R/zzz_condition_grn_condition_sparse.R"
+          )
+          stopifnot(!any(file.exists(removed)))
 
           description <- read.dcf("DESCRIPTION")
-          stopifnot(identical(unname(description[1, "Version"]), "1.2.1"))
+          stopifnot(identical(unname(description[1, "Version"]), "1.3.0"))
