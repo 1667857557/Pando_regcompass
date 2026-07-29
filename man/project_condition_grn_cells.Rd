@@ -14,18 +14,26 @@ project_condition_grn_cells(
   output = c("gene_score", "edge_contribution"),
   targets = NULL,
   nonestimable = c("propagate", "error"),
+  support_policy = c("strict", "condition_estimable", "global_common",
+    "pairwise_common"),
+  comparison_conditions = NULL,
   active_tol = if (is.null(fit)) 1e-08 else fit$active_tol
 )
 }
 \arguments{
 \item{object}{The \code{GRNData} containing the paired RNA and ATAC cells.}
-\item{fit}{Optional v3 fit; otherwise retrieved from \code{object}.}
-\item{network_name, cell_type}{Optional fit filters.}
+\item{fit}{Optional v4 fit; otherwise retrieved from \code{object}.}
+\item{network_name, cell_type}{Optional fit filters used when \code{fit} is
+omitted.}
 \item{component}{Absolute condition, shared or deviation component.}
 \item{scale}{Pooled standardized target units or raw target units.}
 \item{output}{Gene scores or gene scores plus edge contributions.}
 \item{targets}{Optional target subset.}
 \item{nonestimable}{Propagate unavailable effects to \code{NA}, or stop.}
+\item{support_policy}{Use strict, condition-estimable, global-common, or
+pairwise-common estimability support.}
+\item{comparison_conditions}{Two conditions defining pairwise-common support
+when the fit contains more than two conditions.}
 \item{active_tol}{Minimum absolute standardized effect recorded as active in
 edge metadata, independent of the returned score scale.}
 }

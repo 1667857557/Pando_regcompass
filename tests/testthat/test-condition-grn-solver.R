@@ -170,14 +170,16 @@ test_that('eligibility mask fixes absent condition edges at zero', {
     expect_equal(fit$beta[!mask], rep(0, sum(!mask)))
 })
 
-test_that('condition-stratified folds contain every fold in every condition', {
-    folds <- Pando:::.condition_make_folds(
-        list(A = numeric(20), B = numeric(25)), nfolds = 5, seed = 99
+test_that('within-cell-type folds contain every fold in every condition', {
+    fold_info <- Pando:::.condition_make_within_cell_type_folds(
+        y_list = list(A = numeric(20), B = numeric(20)),
+        nfolds = 5,
+        seed = 99
     )
-    expect_equal(sort(unique(folds$A)), 1:5)
-    expect_equal(sort(unique(folds$B)), 1:5)
-    expect_equal(length(folds$A), 20)
-    expect_equal(length(folds$B), 25)
+    expect_equal(sort(unique(fold_info$folds$A)), 1:5)
+    expect_equal(sort(unique(fold_info$folds$B)), 1:5)
+    expect_equal(length(fold_info$folds$A), 20)
+    expect_equal(length(fold_info$folds$B), 20)
 })
 
 test_that('lambda path is decreasing and begins at a zero-model scale', {

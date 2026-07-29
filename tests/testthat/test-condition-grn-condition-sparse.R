@@ -144,15 +144,12 @@ test_that('condition GOF target fitter creates named condition lists', {
     expect_match(body_text, 'setNames', fixed = TRUE)
 })
 
-test_that('new defaults select the condition-sparse engine', {
+test_that('canonical defaults select response-independent cell-type fits', {
     defaults <- formals(Pando:::infer_condition_grn.GRNData)
-    expect_identical(
-        eval(defaults$method)[[1L]],
-        'shared_baseline_condition_sparse'
-    )
+    expect_false('method' %in% names(defaults))
     expect_identical(
         eval(defaults$candidate_screen)[[1L]],
-        'pooled_within_condition'
+        'motif_domain'
     )
     expect_equal(eval(defaults$condition_mix), 0.5)
 })
@@ -174,7 +171,7 @@ test_that('subgraphs can have different nodes and pairwise sign switches', {
     )
     fit <- structure(
         list(
-            schema_version = 'pando_condition_grn_fit_v3',
+            schema_version = 'pando_condition_grn_fit_v4',
             condition_levels = c('A', 'B'),
             edge_table = edge,
             beta_condition_std = beta,

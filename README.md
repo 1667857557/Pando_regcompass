@@ -47,6 +47,7 @@ condition_object <- infer_condition_grn(
   grn_object,
   cell_type_col = "cell_type",
   condition_col = "condition",
+  cell_type = c("T_cell", "B_cell"),
   genes = metabolic_genes,
   candidate_screen = "pooled_within_condition",
   condition_mix = 0.5,
@@ -56,12 +57,14 @@ condition_object <- infer_condition_grn(
 )
 ```
 
-Every condition of one cell type uses:
+Each selected broad cell type is fitted independently. Within one cell type,
+the condition model uses:
 
 - the same motif/domain TF–peak–target candidate dictionary;
 - the same pooled `RNA_TF × ATAC_peak` center and scale;
 - the same pooled target scale;
 - condition-specific sparse support;
+- condition-stratified cell-level OOF for lambda selection and reliability;
 - a support-constrained common-metric refit.
 
 Different conditions may therefore have different active TF, peak, target and
@@ -77,7 +80,7 @@ Params(condition_object)$condition_network_index
 
 drug_network <- GetNetwork(
   condition_object,
-  network = "condition_grn__Tumor_cell__condition__Drug"
+  network = "condition_grn__T_cell__condition__Drug"
 )
 coef(drug_network)
 gof(drug_network)
@@ -85,8 +88,8 @@ NetworkParams(drug_network)
 ```
 
 Condition coefficient tables retain the original columns
-`tf`, `target`, `region`, `term`, `estimate` and `corr`. The shared network is
-named `condition_grn__<cell_type>__shared`. In a condition network, an
+`tf`, `target`, `region`, `term`, `estimate` and `corr`. A shared network is
+named, for example, `condition_grn__T_cell__shared`. In a condition network, an
 unavailable edge has `estimate = NA`; an estimable inactive edge has
 `estimate = 0`.
 
@@ -96,7 +99,7 @@ unavailable edge has `estimate = NA`; an estimable inactive edge has
 fit <- condition_grn_fit(
   condition_object,
   network_name = "condition_grn",
-  cell_type = "Tumor_cell"
+  cell_type = "T_cell"
 )
 
 fit$beta_condition_std
@@ -130,8 +133,8 @@ projection <- project_condition_grn_cells(
 
 Pando reconstructs each interaction on the paired single cells using the stored
 pooled transform, then returns signed cell-by-target regulatory scores.
-RegCompass should aggregate these scores within
-cell type × condition × sample/donor after projection. It must not recompute
+RegCompass should aggregate these scores within condition × broad cell type
+after projection. It must not recompute
 TF×ATAC from metacell averages, renormalize by condition, refit coefficients or
 replace unavailable values with zero.
 

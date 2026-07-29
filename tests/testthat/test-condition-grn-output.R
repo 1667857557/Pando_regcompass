@@ -3,12 +3,10 @@ test_that('condition-aware API is exported', {
     expect_true(is.function(condition_grn_fit))
 })
 
-test_that('condition-sparse inference is the public default', {
+test_that('public inference exposes only the canonical functional contract', {
     defaults <- formals(Pando:::infer_condition_grn.GRNData)
-    expect_identical(
-        eval(defaults$method)[[1L]],
-        'shared_baseline_condition_sparse'
-    )
+    expect_false('method' %in% names(defaults))
+    expect_null(eval(defaults$cell_type))
     expect_identical(defaults$condition_mix, 0.5)
     expect_null(eval(defaults$reference_condition))
     expect_identical(eval(defaults$condition_weight), c('equal', 'cell_count'))
@@ -52,7 +50,10 @@ test_that('generated networks remain standard Pando Network objects', {
         nvariables = 1L,
         stringsAsFactors = FALSE
     )
-    params <- list(method = 'glmnet', fit_engine = 'condition_sparse_common_scale_refit')
+    params <- list(
+        method = 'glmnet',
+        fit_engine = 'condition_sparse_within_cell_type_oof_refit'
+    )
     network <- Pando:::.condition_build_network('GENE', coefs, fit, params)
 
     expect_s4_class(network, 'Network')
@@ -97,12 +98,37 @@ test_that('fit contracts retain reference contrasts and pooled transforms', {
                     TRUE, nrow = 1, ncol = 2,
                     dimnames = list(edge_id, c('Control', 'Drug'))
                 ),
+                structural_candidate_mask = matrix(
+                    TRUE, nrow = 1, ncol = 2,
+                    dimnames = list(edge_id, c('Control', 'Drug'))
+                ),
+                screening_mask = matrix(
+                    TRUE, nrow = 1, ncol = 2,
+                    dimnames = list(edge_id, c('Control', 'Drug'))
+                ),
                 predictor_center = stats::setNames(2, edge_id),
                 predictor_scale = stats::setNames(3, edge_id),
                 response_center = 4,
                 response_scale = 5,
                 intercept = c(Control = 0, Drug = 0),
                 condition_rsq = c(Control = 0.4, Drug = 0.5),
+                condition_rsq_train = c(Control = 0.4, Drug = 0.5),
+                condition_rsq_oof = c(Control = 0.2, Drug = 0.3),
+                condition_rmse_oof = c(Control = 1, Drug = 1.2),
+                target_rsq_oof_pooled = 0.25,
+                cv_method =
+                    'within_cell_type_condition_stratified_cell_oof',
+                oof_model =
+                    'condition_sparse_selection_plus_common_metric_refit',
+                predictive_oof_available = TRUE,
+                oof_validation_level =
+                    'within_cell_type_condition_stratified_cells',
+                oof_fold = list(
+                    Control = c(c1 = 1L, c2 = 2L),
+                    Drug = c(c3 = 1L, c4 = 2L)
+                ),
+                cv_fold_transform = list(),
+                cv_effective_nfolds = 2L,
                 selected_lambda = 0.1,
                 lambda_path = c(1, 0.1),
                 cv_mean = c(2, 1),
@@ -122,17 +148,17 @@ test_that('fit contracts retain reference contrasts and pooled transforms', {
     fit <- Pando:::.condition_combine_fit_contracts(
         successful = list(make_contract('GENE1', 'edge1', beta)),
         network_name = 'condition_grn',
-        cell_type = 'Tumor',
+        cell_type = 'T',
         cell_type_col = 'cell_type',
         condition_col = 'condition',
         reference_condition = 'Control',
         candidate_screen = 'pooled_within_condition',
         scale = TRUE,
-        fit_engine = 'condition_sparse_common_scale_refit'
+        fit_engine = 'condition_sparse_within_cell_type_oof_refit'
     )
 
     expect_s3_class(fit, 'ConditionGRNFit')
-    expect_identical(fit$schema_version, 'pando_condition_grn_fit_v3')
+    expect_identical(fit$schema_version, 'pando_condition_grn_fit_v4')
     expect_equal(fit$contrast[, 'Control'], 0)
     expect_equal(fit$contrast[, 'Drug'], 0.5)
     expect_equal(fit$predictor_transform$center, 2)

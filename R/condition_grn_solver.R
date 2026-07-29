@@ -25,6 +25,49 @@
     1 - sum((y - prediction)^2) / denominator
 }
 
+.condition_pooled_task_rsq <- function(y_list, prediction_list) {
+    if (!is.list(y_list) || !is.list(prediction_list) ||
+        length(y_list) != length(prediction_list) || !length(y_list)) {
+        stop('y_list and prediction_list must contain matching tasks.')
+    }
+    residual_ss <- 0
+    within_task_ss <- 0
+    for (task in seq_along(y_list)) {
+        y <- as.numeric(y_list[[task]])
+        prediction <- as.numeric(prediction_list[[task]])
+        if (length(y) != length(prediction) ||
+            any(!is.finite(y)) || any(!is.finite(prediction))) {
+            stop('Pooled task R-squared requires aligned finite values.')
+        }
+        residual_ss <- residual_ss + sum((y - prediction)^2)
+        within_task_ss <- within_task_ss + sum((y - mean(y))^2)
+    }
+    if (!is.finite(within_task_ss) ||
+        within_task_ss <= .Machine$double.eps) {
+        return(NA_real_)
+    }
+    1 - residual_ss / within_task_ss
+}
+
+.condition_task_validation_loss <- function(
+    task_mse, n_validation, condition_weight = c('equal', 'cell_count')
+) {
+    condition_weight <- match.arg(condition_weight)
+    task_mse <- as.numeric(task_mse)
+    n_validation <- as.numeric(n_validation)
+    if (!length(task_mse) || length(task_mse) != length(n_validation) ||
+        any(!is.finite(task_mse)) || any(task_mse < 0) ||
+        any(!is.finite(n_validation)) || any(n_validation <= 0)) {
+        stop(
+            'Validation losses require finite task MSE and positive task sizes.'
+        )
+    }
+    if (condition_weight == 'equal') {
+        return(mean(task_mse))
+    }
+    stats::weighted.mean(task_mse, n_validation)
+}
+
 .condition_loss_weights <- function(X_list, condition_weight = c('equal', 'cell_count')) {
     condition_weight <- match.arg(condition_weight)
     n_condition <- vapply(X_list, nrow, integer(1))
@@ -473,21 +516,30 @@
     list(lambda = lambda, fits = fits)
 }
 
-.condition_make_folds <- function(y_list, nfolds = 5L, seed = 12345L) {
-    minimum_n <- min(vapply(y_list, length, integer(1)))
+.condition_make_within_cell_type_folds <- function(
+    y_list, nfolds = 5L, seed = 12345L
+) {
     if (nfolds < 2L) {
         stop('nfolds must be at least 2.')
     }
+    minimum_n <- min(vapply(y_list, length, integer(1)))
     if (minimum_n < nfolds) {
-        stop('Every condition must contain at least nfolds observations.')
+        stop(
+            'Every condition in the current cell type must contain at least ',
+            'nfolds cells.'
+        )
     }
     set.seed(seed)
-    lapply(y_list, function(y) {
+    folds <- lapply(y_list, function(y) {
         sample(rep(seq_len(nfolds), length.out = length(y)))
     })
+    list(
+        folds = folds,
+        effective_nfolds = as.integer(nfolds)
+    )
 }
 
-.condition_cv_multitask_path <- function(
+.condition_crossfit_within_cell_type <- function(
     X_list,
     y_list,
     lambda,
@@ -496,6 +548,8 @@
     condition_weight = c('equal', 'cell_count'),
     coefficient_mask = NULL,
     nfolds = 5L,
+    standardize = FALSE,
+    active_tol = 1e-8,
     lambda_selection = c('lambda.1se', 'lambda.min'),
     seed = 12345L,
     max_iter = 5000L,
@@ -505,21 +559,89 @@
     condition_weight <- match.arg(condition_weight)
     lambda_selection <- match.arg(lambda_selection)
     lambda <- sort(unique(as.numeric(lambda)), decreasing = TRUE)
-    folds <- .condition_make_folds(y_list, nfolds, seed)
+    fold_info <- .condition_make_within_cell_type_folds(
+        y_list = y_list,
+        nfolds = nfolds,
+        seed = seed
+    )
+    folds <- fold_info$folds
+    nfolds <- fold_info$effective_nfolds
     fold_loss <- matrix(NA_real_, nrow = nfolds, ncol = length(lambda))
+    oof_path <- lapply(y_list, function(y) {
+        matrix(NA_real_, nrow = length(y), ncol = length(lambda))
+    })
+    fold_transform <- vector('list', nfolds)
 
     for (fold in seq_len(nfolds)) {
         X_train <- vector('list', length(X_list))
         y_train <- vector('list', length(y_list))
         X_test <- vector('list', length(X_list))
         y_test <- vector('list', length(y_list))
+        test_index_list <- vector('list', length(X_list))
         for (task in seq_along(X_list)) {
             test_index <- folds[[task]] == fold
+            test_index_list[[task]] <- test_index
             X_train[[task]] <- X_list[[task]][!test_index, , drop = FALSE]
             y_train[[task]] <- y_list[[task]][!test_index]
             X_test[[task]] <- X_list[[task]][test_index, , drop = FALSE]
             y_test[[task]] <- y_list[[task]][test_index]
         }
+        if (isTRUE(standardize)) {
+            pooled_X_train <- do.call(rbind, X_train)
+            predictor_center <- as.numeric(Matrix::colMeans(pooled_X_train))
+            predictor_scale <- sqrt(
+                .condition_column_variance(pooled_X_train)
+            )
+            predictor_scale[
+                !is.finite(predictor_scale) |
+                    predictor_scale <= .Machine$double.eps
+            ] <- 1
+            pooled_y_train <- unlist(y_train, use.names = FALSE)
+            response_center <- mean(pooled_y_train)
+            response_scale <- stats::sd(pooled_y_train)
+            if (!is.finite(response_scale) ||
+                response_scale <= .Machine$double.eps) {
+                stop(
+                    'A training fold has zero target variance; reduce nfolds ',
+                    'or increase cells within this cell type.'
+                )
+            }
+            X_train <- lapply(X_train, function(x) {
+                value <- sweep(
+                    as.matrix(x), 2L, predictor_center, '-'
+                )
+                Matrix::Matrix(
+                    sweep(value, 2L, predictor_scale, '/'), sparse = FALSE
+                )
+            })
+            X_test <- lapply(X_test, function(x) {
+                value <- sweep(
+                    as.matrix(x), 2L, predictor_center, '-'
+                )
+                Matrix::Matrix(
+                    sweep(value, 2L, predictor_scale, '/'), sparse = FALSE
+                )
+            })
+            y_train <- lapply(y_train, function(y) {
+                (y - response_center) / response_scale
+            })
+            y_test_model <- lapply(y_test, function(y) {
+                (y - response_center) / response_scale
+            })
+        } else {
+            predictor_center <- rep(0, ncol(X_list[[1L]]))
+            predictor_scale <- rep(1, ncol(X_list[[1L]]))
+            response_center <- 0
+            response_scale <- 1
+            y_test_model <- y_test
+        }
+        fold_transform[[fold]] <- list(
+            predictor_center = predictor_center,
+            predictor_scale = predictor_scale,
+            response_center = response_center,
+            response_scale = response_scale,
+            training_only = TRUE
+        )
 
         path <- .condition_fit_multitask_path(
             X_list = X_train,
@@ -535,15 +657,37 @@
         )
 
         for (lambda_index in seq_along(lambda)) {
-            fit <- path$fits[[lambda_index]]
+            selection_fit <- path$fits[[lambda_index]]
+            refit <- .condition_refit_shared_baseline(
+                X_list = X_train,
+                y_list = y_train,
+                beta_selection = selection_fit$beta,
+                estimability_mask = coefficient_mask,
+                ridge = max(
+                    selection_fit$lambda * (1 - alpha), 1e-6
+                ),
+                active_tol = active_tol,
+                condition_weight = condition_weight
+            )
             task_mse <- numeric(length(X_list))
             for (task in seq_along(X_list)) {
-                prediction <- fit$intercept[[task]] + as.numeric(
-                    X_test[[task]] %*% fit$beta[, task]
+                prediction <- refit$intercept[[task]] + as.numeric(
+                    X_test[[task]] %*% refit$beta[, task]
                 )
-                task_mse[[task]] <- mean((y_test[[task]] - prediction)^2)
+                task_mse[[task]] <- mean(
+                    (y_test_model[[task]] - prediction)^2
+                )
+                oof_path[[task]][
+                    test_index_list[[task]], lambda_index
+                ] <-
+                    prediction * response_scale + response_center
             }
-            fold_loss[fold, lambda_index] <- mean(task_mse)
+            fold_loss[fold, lambda_index] <-
+                .condition_task_validation_loss(
+                    task_mse = task_mse,
+                    n_validation = vapply(y_test, length, integer(1)),
+                    condition_weight = condition_weight
+                )
         }
     }
 
@@ -566,6 +710,13 @@
         selected_index = selected_index,
         selected_lambda = lambda[[selected_index]],
         lambda_min = lambda[[minimum_index]],
-        lambda_1se = lambda[[which(cv_mean <= cv_mean[[minimum_index]] + cv_se[[minimum_index]])[[1L]]]]
+        lambda_1se = lambda[[which(cv_mean <= cv_mean[[minimum_index]] + cv_se[[minimum_index]])[[1L]]]],
+        oof_prediction = lapply(
+            oof_path, function(x) as.numeric(x[, selected_index])
+        ),
+        oof_fold = folds,
+        effective_nfolds = fold_info$effective_nfolds,
+        fold_transform = fold_transform,
+        oof_model = 'condition_sparse_selection_plus_common_metric_refit'
     )
 }

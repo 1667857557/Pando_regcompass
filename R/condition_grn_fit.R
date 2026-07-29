@@ -7,7 +7,7 @@
     ))
 }
 
-.condition_fit_cell_type <- function(
+.condition_fit_targets <- function(
     features,
     gene_data,
     peak_data,
@@ -230,7 +230,10 @@
     edges <- prepared_design$edges
     X <- prepared_design$X
     y <- prepared_design$y
+    X_raw <- prepared_design$X_raw
+    y_raw <- prepared_design$y_raw
     edge_mask <- edge_mask[edges$edge_id, , drop = FALSE]
+    screening_mask <- edge_mask
     if (ncol(X) == 0L) {
         .condition_target_skip(
             'No non-constant interaction predictors remained.'
@@ -246,8 +249,10 @@
     }
     keep_edge <- rowSums(edge_mask) > 0L
     X <- X[, keep_edge, drop = FALSE]
+    X_raw <- X_raw[, keep_edge, drop = FALSE]
     edges <- edges[keep_edge, , drop = FALSE]
     edge_mask <- edge_mask[keep_edge, , drop = FALSE]
+    screening_mask <- screening_mask[keep_edge, , drop = FALSE]
     prepared_design$predictor_center <-
         prepared_design$predictor_center[keep_edge]
     prepared_design$predictor_scale <-
@@ -271,8 +276,18 @@
         X[condition == level, , drop = FALSE]
     })
     y_list <- lapply(condition_levels, function(level) y[condition == level])
+    X_raw_list <- lapply(condition_levels, function(level) {
+        X_raw[condition == level, , drop = FALSE]
+    })
+    y_raw_list <- lapply(condition_levels, function(level) {
+        y_raw[condition == level]
+    })
+    cell_id_list <- lapply(condition_levels, function(level) {
+        rownames(gene_data)[condition == level]
+    })
     names(X_list) <- names(y_list) <- condition_levels
-
+    names(X_raw_list) <- names(y_raw_list) <- condition_levels
+    names(cell_id_list) <- condition_levels
     lambda_path <- if (is.null(lambda)) {
         .condition_make_lambda_path(
             X_list = X_list,
@@ -288,32 +303,42 @@
         sort(unique(as.numeric(lambda)), decreasing = TRUE)
     }
 
-    if (length(lambda_path) == 1L) {
-        cv <- list(
-            lambda = lambda_path,
-            cv_mean = NA_real_,
-            cv_se = NA_real_,
-            selected_index = 1L,
-            selected_lambda = lambda_path[[1L]],
-            lambda_min = lambda_path[[1L]],
-            lambda_1se = lambda_path[[1L]]
+    cv <- .condition_crossfit_within_cell_type(
+        X_list = X_raw_list,
+        y_list = y_raw_list,
+        lambda = lambda_path,
+        alpha = alpha,
+        condition_mix = condition_mix,
+        condition_weight = condition_weight,
+        coefficient_mask = edge_mask,
+        nfolds = nfolds,
+        standardize = scale,
+        active_tol = active_tol,
+        lambda_selection = lambda_selection,
+        seed = seed,
+        max_iter = max_iter,
+        tol_objective = tol_objective,
+        tol_coef = tol_coef
+    )
+    cv$cv_method <- 'within_cell_type_condition_stratified_cell_oof'
+    if (!is.null(cv$oof_fold)) {
+        cv$oof_fold <- lapply(seq_along(cv$oof_fold), function(task) {
+            stats::setNames(
+                as.integer(cv$oof_fold[[task]]), cell_id_list[[task]]
+            )
+        })
+        names(cv$oof_fold) <- condition_levels
+    }
+    if (!is.null(cv$oof_prediction)) {
+        cv$oof_prediction <- lapply(
+            seq_along(cv$oof_prediction), function(task) {
+                stats::setNames(
+                    as.numeric(cv$oof_prediction[[task]]),
+                    cell_id_list[[task]]
+                )
+            }
         )
-    } else {
-        cv <- .condition_cv_multitask_path(
-            X_list = X_list,
-            y_list = y_list,
-            lambda = lambda_path,
-            alpha = alpha,
-            condition_mix = condition_mix,
-            condition_weight = condition_weight,
-            coefficient_mask = edge_mask,
-            nfolds = nfolds,
-            lambda_selection = lambda_selection,
-            seed = seed,
-            max_iter = max_iter,
-            tol_objective = tol_objective,
-            tol_coef = tol_coef
-        )
+        names(cv$oof_prediction) <- condition_levels
     }
 
     full_path <- .condition_fit_multitask_path(
@@ -432,7 +457,7 @@
     )
     reference_beta <- refit$beta_condition[, reference_condition]
     contrast <- sweep(refit$beta_condition, 1L, reference_beta, '-')
-    fit_engine <- 'condition_sparse_common_scale_refit'
+    fit_engine <- 'condition_sparse_within_cell_type_oof_refit'
     fit_contract <- list(
         target = target,
         edge_table = edges[, c(
@@ -449,6 +474,10 @@
         estimability_mask = refit$estimability_mask,
         support_mask = refit$support_mask,
         active_mask = refit$active_mask,
+        structural_candidate_mask = matrix(
+            TRUE, nrow(edge_mask), ncol(edge_mask), dimnames = dimnames(edge_mask)
+        ),
+        screening_mask = screening_mask,
         predictor_center = stats::setNames(
             prepared_design$predictor_center, edges$edge_id
         ),
@@ -461,6 +490,50 @@
         condition_rsq = vapply(
             condition_gof, function(x) x$rsq[[1L]], numeric(1)
         ),
+        condition_rsq_train = vapply(
+            condition_gof, function(x) x$rsq[[1L]], numeric(1)
+        ),
+        condition_rsq_oof = if (is.null(cv$oof_prediction)) {
+            stats::setNames(rep(NA_real_, length(condition_levels)), condition_levels)
+        } else {
+            stats::setNames(vapply(seq_along(condition_levels), function(task) {
+                .condition_rsq(
+                    y_raw_list[[task]], cv$oof_prediction[[task]]
+                )
+            }, numeric(1)), condition_levels)
+        },
+        condition_rmse_oof = if (is.null(cv$oof_prediction)) {
+            stats::setNames(rep(NA_real_, length(condition_levels)), condition_levels)
+        } else {
+            stats::setNames(vapply(seq_along(condition_levels), function(task) {
+                sqrt(mean(
+                    (y_raw_list[[task]] - cv$oof_prediction[[task]])^2
+                ))
+            }, numeric(1)), condition_levels)
+        },
+        target_rsq_oof_pooled = if (is.null(cv$oof_prediction)) {
+            NA_real_
+        } else {
+            .condition_pooled_task_rsq(
+                y_raw_list, cv$oof_prediction
+            )
+        },
+        oof_fold = if (is.null(cv$oof_fold)) NULL else cv$oof_fold,
+        cv_fold_transform = if (is.null(cv$fold_transform)) {
+            NULL
+        } else {
+            cv$fold_transform
+        },
+        cv_effective_nfolds = if (is.null(cv$effective_nfolds)) {
+            NA_integer_
+        } else {
+            cv$effective_nfolds
+        },
+        cv_method = cv$cv_method,
+        oof_model = cv$oof_model,
+        predictive_oof_available = TRUE,
+        oof_validation_level =
+            'within_cell_type_condition_stratified_cells',
         selected_lambda = selected$lambda,
         lambda_path = lambda_path,
         cv_mean = cv$cv_mean,
@@ -508,6 +581,8 @@
     keep <- is.finite(edge_variance) & edge_variance > .Machine$double.eps
     X <- X[, keep, drop = FALSE]
     edges <- edges[keep, , drop = FALSE]
+    X_raw <- X
+    y_raw <- y
     response_center <- 0
     response_scale <- 1
     predictor_center <- rep(0, ncol(X))
@@ -542,6 +617,8 @@
     list(
         X = X,
         y = y,
+        X_raw = X_raw,
+        y_raw = y_raw,
         edges = edges,
         predictor_center = predictor_center,
         predictor_scale = predictor_scale,

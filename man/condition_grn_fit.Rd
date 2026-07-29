@@ -16,13 +16,13 @@ condition_grn_fit(object, network_name = NULL, cell_type = NULL)
 \arguments{
 \item{object}{A \code{GRNData} returned by \code{infer_condition_grn()}.}
 \item{network_name}{Optional network prefix.}
-\item{cell_type}{Optional cell-type label.}
+\item{cell_type}{Optional fitted cell-type label.}
 }
 \value{
 One \code{ConditionGRNFit}, or a named list when multiple fits match.
 }
 \description{
-Returns the lossless \code{pando_condition_grn_fit_v3} contract while the
+Returns the lossless \code{pando_condition_grn_fit_v4} contract while the
 condition and shared results remain available as standard Pando networks.
 }
 \details{

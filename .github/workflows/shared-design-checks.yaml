@@ -28,7 +28,7 @@ jobs:
           )
           invisible(lapply(files, parse))
 
-      - name: Verify the v3 condition sub-GRN contract
+      - name: Verify the v4 within-cell-type condition sub-GRN contract
         shell: Rscript {0}
         run: |
           source("R/condition_grn_solver.R", local = globalenv())
@@ -52,7 +52,10 @@ jobs:
           )
           fit <- structure(
             list(
-              schema_version = "pando_condition_grn_fit_v3",
+              schema_version = "pando_condition_grn_fit_v4",
+              cell_type = "T_cell",
+              fit_engine = "condition_sparse_within_cell_type_oof_refit",
+              coefficient_scale = "pooled_cell_type_standardized_refit",
               condition_levels = c("Control", "Drug"),
               edge_table = edge,
               beta_condition_std = beta,
@@ -61,6 +64,12 @@ jobs:
                 TRUE, 3L, 2L, dimnames = dimnames(beta)
               ),
               active_mask = abs(beta) > 1e-8,
+              predictive_oof_available = c(G1 = TRUE, G2 = TRUE, G3 = TRUE),
+              oof_validation_level = c(
+                G1 = "within_cell_type_condition_stratified_cells",
+                G2 = "within_cell_type_condition_stratified_cells",
+                G3 = "within_cell_type_condition_stratified_cells"
+              ),
               active_tol = 1e-8
             ),
             class = c("ConditionGRNFit", "list")
@@ -122,4 +131,4 @@ jobs:
           stopifnot(!any(file.exists(removed)))
 
           description <- read.dcf("DESCRIPTION")
-          stopifnot(identical(unname(description[1, "Version"]), "1.3.0"))
+          stopifnot(identical(unname(description[1, "Version"]), "1.4.0"))

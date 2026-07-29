@@ -1,9 +1,38 @@
-# Cell-type orchestration for condition-aware Pando.
+# Independent broad-cell-type orchestration for condition-aware Pando.
 
-.condition_run_all_cell_types <- function(
+.condition_resolve_cell_types <- function(
+    metadata, cell_type_col, cell_type = NULL
+) {
+    available_cell_types <- .condition_levels(metadata[[cell_type_col]])
+    cell_types <- if (is.null(cell_type)) available_cell_types else
+        trimws(as.character(cell_type))
+    if (!length(cell_types) || anyNA(cell_types) || any(!nzchar(cell_types))) {
+        stop('cell_type must be NULL or contain non-empty labels.')
+    }
+    if (anyDuplicated(cell_types)) {
+        stop('cell_type labels must not be duplicated.')
+    }
+    missing_cell_types <- setdiff(cell_types, available_cell_types)
+    if (length(missing_cell_types)) {
+        stop(
+            'Requested cell_type value(s) were not found: ',
+            paste(missing_cell_types, collapse = ', '), '.'
+        )
+    }
+    safe_cell_types <- vapply(
+        cell_types, .condition_safe_id, character(1)
+    )
+    if (anyDuplicated(safe_cell_types)) {
+        stop('cell_type labels are not unique after name sanitization.')
+    }
+    cell_types
+}
+
+.condition_fit_cell_type_models <- function(
     object,
     prepared,
     cell_type_col,
+    cell_type,
     condition_col,
     network_name,
     peak_to_gene_method,
@@ -24,7 +53,7 @@
     nfolds,
     lambda_selection,
     min_cells_per_condition,
-    on_small_condition,
+    small_condition_action,
     active_tol,
     parallel,
     BPPARAM,
@@ -35,18 +64,18 @@
     tol_coef,
     verbose
 ) {
-    cell_types <- .condition_levels(prepared$metadata[[cell_type_col]])
-    safe_cell_types <- vapply(cell_types, .condition_safe_id, character(1))
-    if (anyDuplicated(safe_cell_types)) {
-        stop('cell_type labels are not unique after network-name sanitization.')
-    }
+    cell_types <- .condition_resolve_cell_types(
+        prepared$metadata, cell_type_col, cell_type
+    )
+    safe_cell_types <- vapply(
+        cell_types, .condition_safe_id, character(1)
+    )
 
     generated_index <- list()
     generated_diagnostics <- list()
-    first_universal <- NULL
-
+    first_shared_id <- NULL
     for (cell_type_index in seq_along(cell_types)) {
-        result <- .condition_run_cell_type(
+        result <- .condition_fit_one_cell_type(
             object = object,
             prepared = prepared,
             cell_type = cell_types[[cell_type_index]],
@@ -72,7 +101,7 @@
             nfolds = nfolds,
             lambda_selection = lambda_selection,
             min_cells_per_condition = min_cells_per_condition,
-            on_small_condition = on_small_condition,
+            small_condition_action = small_condition_action,
             active_tol = active_tol,
             parallel = parallel,
             BPPARAM = BPPARAM,
@@ -88,45 +117,61 @@
             generated_index[[length(generated_index) + 1L]] <- result$index
         }
         if (!is.null(result$diagnostics)) {
-            generated_diagnostics[[length(generated_diagnostics) + 1L]] <- result$diagnostics
+            generated_diagnostics[[length(generated_diagnostics) + 1L]] <-
+                result$diagnostics
         }
-        if (is.null(first_universal) && !is.null(result$universal_id)) {
-            first_universal <- result$universal_id
+        if (is.null(first_shared_id) && !is.null(result$shared_id)) {
+            first_shared_id <- result$shared_id
         }
     }
 
-    if (length(generated_index) > 0L) {
+    if (length(generated_index)) {
         new_index <- do.call(rbind, generated_index)
         old_index <- object@grn@params$condition_network_index
-        if (!is.null(old_index) && nrow(old_index) > 0L) {
-            old_index <- old_index[!old_index$network_id %in% new_index$network_id, , drop = FALSE]
+        if (!is.null(old_index) && nrow(old_index)) {
+            new_key <- paste(
+                new_index$network_name, new_index$cell_type, sep = '\001'
+            )
+            old_key <- paste(
+                old_index$network_name, old_index$cell_type, sep = '\001'
+            )
+            old_index <- old_index[
+                !old_key %in% new_key, , drop = FALSE
+            ]
             new_index <- rbind(old_index, new_index)
         }
         rownames(new_index) <- NULL
         object@grn@params$condition_network_index <- new_index
     }
-
-    if (length(generated_diagnostics) > 0L) {
+    if (length(generated_diagnostics)) {
         diagnostics <- do.call(rbind, generated_diagnostics)
         old_diagnostics <- object@grn@params$condition_fit_diagnostics
-        if (!is.null(old_diagnostics) && nrow(old_diagnostics) > 0L &&
-            all(c('network_name', 'cell_type') %in% colnames(old_diagnostics))) {
-            replaced_key <- paste(diagnostics$network_name, diagnostics$cell_type, sep = '\r')
-            old_key <- paste(old_diagnostics$network_name, old_diagnostics$cell_type, sep = '\r')
-            old_diagnostics <- old_diagnostics[!old_key %in% replaced_key, , drop = FALSE]
+        if (!is.null(old_diagnostics) && nrow(old_diagnostics)) {
+            new_key <- paste(
+                diagnostics$network_name,
+                diagnostics$cell_type,
+                sep = '\001'
+            )
+            old_key <- paste(
+                old_diagnostics$network_name,
+                old_diagnostics$cell_type,
+                sep = '\001'
+            )
+            old_diagnostics <- old_diagnostics[
+                !old_key %in% new_key, , drop = FALSE
+            ]
             diagnostics <- rbind(old_diagnostics, diagnostics)
         }
         rownames(diagnostics) <- NULL
         object@grn@params$condition_fit_diagnostics <- diagnostics
     }
-
-    if (!is.null(first_universal)) {
-        object@grn@active_network <- first_universal
+    if (!is.null(first_shared_id)) {
+        object@grn@active_network <- first_shared_id
     }
     object
 }
 
-.condition_run_cell_type <- function(
+.condition_fit_one_cell_type <- function(
     object,
     prepared,
     cell_type,
@@ -152,7 +197,7 @@
     nfolds,
     lambda_selection,
     min_cells_per_condition,
-    on_small_condition,
+    small_condition_action,
     active_tol,
     parallel,
     BPPARAM,
@@ -163,55 +208,69 @@
     tol_coef,
     verbose
 ) {
-    cell_rows <- which(as.character(prepared$metadata[[cell_type_col]]) == cell_type)
-    metadata_cell_type <- prepared$metadata[cell_rows, , drop = FALSE]
-    condition_levels <- .condition_levels(metadata_cell_type[[condition_col]])
+    cell_rows <- which(
+        as.character(prepared$metadata[[cell_type_col]]) == cell_type
+    )
+    metadata <- prepared$metadata[cell_rows, , drop = FALSE]
+    condition_levels <- .condition_levels(metadata[[condition_col]])
     condition_counts <- table(factor(
-        as.character(metadata_cell_type[[condition_col]]), levels = condition_levels
+        as.character(metadata[[condition_col]]), levels = condition_levels
     ))
-    small_conditions <- names(condition_counts)[condition_counts < min_cells_per_condition]
-
-    if (length(small_conditions) > 0L) {
+    small_conditions <- names(
+        condition_counts[condition_counts < min_cells_per_condition]
+    )
+    if (length(small_conditions)) {
         message_text <- paste0(
-            'Cell type ', cell_type, ' has condition(s) below min_cells_per_condition: ',
+            'Cell type ', cell_type,
+            ' has condition(s) below min_cells_per_condition: ',
             paste(small_conditions, collapse = ', '), '.'
         )
-        if (on_small_condition == 'error') {
+        if (small_condition_action == 'error') {
             stop(message_text)
         }
-        if (on_small_condition == 'skip_cell_type') {
-            log_message('Skipping ', message_text, verbose = verbose)
+        if (small_condition_action == 'skip_cell_type') {
             return(list(
                 object = object,
                 index = NULL,
-                diagnostics = .condition_skip_diagnostic(network_name, cell_type, message_text),
-                universal_id = NULL
+                diagnostics = .condition_cell_type_skip_diagnostic(
+                    network_name, cell_type, message_text
+                ),
+                shared_id = NULL
             ))
         }
         keep_conditions <- setdiff(condition_levels, small_conditions)
-        keep_rows <- as.character(metadata_cell_type[[condition_col]]) %in% keep_conditions
-        cell_rows <- cell_rows[keep_rows]
-        metadata_cell_type <- prepared$metadata[cell_rows, , drop = FALSE]
+        keep <- as.character(metadata[[condition_col]]) %in%
+            keep_conditions
+        cell_rows <- cell_rows[keep]
+        metadata <- metadata[keep, , drop = FALSE]
         condition_levels <- keep_conditions
     }
-
     if (length(condition_levels) < 2L) {
-        message_text <- paste0('Cell type ', cell_type, ' has fewer than two eligible conditions.')
-        if (on_small_condition == 'error') {
+        message_text <- paste0(
+            'Cell type ', cell_type,
+            ' has fewer than two eligible conditions.'
+        )
+        if (small_condition_action == 'error') {
             stop(message_text)
         }
-        log_message('Skipping ', message_text, verbose = verbose)
         return(list(
             object = object,
             index = NULL,
-            diagnostics = .condition_skip_diagnostic(network_name, cell_type, message_text),
-            universal_id = NULL
+            diagnostics = .condition_cell_type_skip_diagnostic(
+                network_name, cell_type, message_text
+            ),
+            shared_id = NULL
         ))
     }
 
-    safe_conditions <- vapply(condition_levels, .condition_safe_id, character(1))
+    safe_conditions <- vapply(
+        condition_levels, .condition_safe_id, character(1)
+    )
     if (anyDuplicated(safe_conditions)) {
-        stop('Condition labels are not unique after network-name sanitization in cell type ', cell_type, '.')
+        stop(
+            'Condition labels are not unique after name sanitization in ',
+            'cell type ', cell_type, '.'
+        )
     }
     reference_condition_cell <- if (is.null(reference_condition)) {
         condition_levels[[1L]]
@@ -220,32 +279,45 @@
     }
     if (!reference_condition_cell %in% condition_levels) {
         stop(
-            'Reference condition ', reference_condition_cell,
-            ' was not found in cell type ', cell_type, '.'
+            'reference_condition was not found in cell type ',
+            cell_type, '.'
         )
     }
-    universal_id <- paste(network_name, safe_cell_type, 'shared', sep = '__')
-    condition_ids <- paste(network_name, safe_cell_type, 'condition', safe_conditions, sep = '__')
-    intended_ids <- c(universal_id, condition_ids)
-    conflicts <- intersect(intended_ids, names(object@grn@networks))
-    if (length(conflicts) > 0L && !overwrite) {
+
+    shared_id <- paste(
+        network_name, safe_cell_type, 'shared', sep = '__'
+    )
+    condition_ids <- paste(
+        network_name,
+        safe_cell_type,
+        'condition',
+        safe_conditions,
+        sep = '__'
+    )
+    conflicts <- intersect(
+        c(shared_id, condition_ids), names(object@grn@networks)
+    )
+    if (length(conflicts) && !overwrite) {
         stop(
-            'The following networks already exist: ', paste(conflicts, collapse = ', '),
+            'The following networks already exist: ',
+            paste(conflicts, collapse = ', '),
             '. Set overwrite = TRUE to replace them.'
         )
     }
 
     log_message(
-        'Fitting condition-aware GRN for cell type ', cell_type,
-        ' across ', length(condition_levels), ' conditions', verbose = verbose
+        'Fitting cell type ', cell_type, ' using only its own cells across ',
+        length(condition_levels), ' conditions',
+        verbose = verbose
     )
-    fit_cell_type <- .condition_fit_cell_type(
+    condition_factor <- factor(
+        as.character(metadata[[condition_col]]), levels = condition_levels
+    )
+    target_results <- .condition_fit_targets(
         features = prepared$features,
         gene_data = prepared$gene_data[cell_rows, , drop = FALSE],
         peak_data = prepared$peak_data[cell_rows, , drop = FALSE],
-        condition = factor(
-            as.character(metadata_cell_type[[condition_col]]), levels = condition_levels
-        ),
+        condition = condition_factor,
         peaks2gene = prepared$peaks2gene,
         peaks2motif = prepared$peaks2motif,
         motif2tf = prepared$motif2tf,
@@ -271,8 +343,7 @@
         BPPARAM = BPPARAM,
         verbose = verbose
     )
-
-    diagnostics <- fit_cell_type$diagnostics
+    diagnostics <- target_results$diagnostics
     diagnostics$cell_type <- cell_type
     diagnostics$network_name <- network_name
     diagnostics <- diagnostics[, c(
@@ -280,15 +351,20 @@
         'iterations', 'objective', 'coef_change', 'selected_lambda',
         'cv_mean', 'cv_se', 'error_message'
     ), drop = FALSE]
-    successful <- fit_cell_type$fits
-    if (length(successful) == 0L) {
-        log_message('No target genes were successfully fit for ', cell_type, '.', verbose = verbose)
-        return(list(object = object, index = NULL, diagnostics = diagnostics, universal_id = NULL))
+    successful <- target_results$fits
+    if (!length(successful)) {
+        return(list(
+            object = object,
+            index = NULL,
+            diagnostics = diagnostics,
+            shared_id = NULL
+        ))
     }
 
-    successful_features <- names(successful)
-    fit_engine <- 'condition_sparse_common_scale_refit'
-    fit_contract_key <- paste(network_name, safe_cell_type, sep = '__')
+    fit_engine <- 'condition_sparse_within_cell_type_oof_refit'
+    fit_contract_key <- paste(
+        network_name, safe_cell_type, sep = '__'
+    )
     fit_contract <- .condition_combine_fit_contracts(
         successful = successful,
         network_name = network_name,
@@ -300,10 +376,17 @@
         scale = TRUE,
         fit_engine = fit_engine
     )
-    fit_contract$cell_ids <- rownames(metadata_cell_type)
+    fit_contract$cell_ids <- rownames(metadata)
     fit_contract$cell_condition <- stats::setNames(
-        as.character(metadata_cell_type[[condition_col]]),
-        rownames(metadata_cell_type)
+        as.character(metadata[[condition_col]]), rownames(metadata)
+    )
+    fit_contract$predictive_oof_complete <-
+        all(fit_contract$predictive_oof_available)
+    fit_contract$cell_provenance <- data.frame(
+        cell_id = rownames(metadata),
+        condition = as.character(metadata[[condition_col]]),
+        cell_type = cell_type,
+        stringsAsFactors = FALSE
     )
     object_params <- Params(object)
     fit_contract$assay_contract <- list(
@@ -313,13 +396,14 @@
         peak_layer = 'data'
     )
     fit_contract$projection_contract$cell_scope <-
-        'exact paired cell_ids used for fitting'
+        'exact paired cells of one broad cell type used for fitting'
     fit_contracts <- object@grn@params$condition_grn_fits
-    if (is.null(fit_contracts)) fit_contracts <- list()
+    if (is.null(fit_contracts)) {
+        fit_contracts <- list()
+    }
     fit_contracts[[fit_contract_key]] <- fit_contract
     object@grn@params$condition_grn_fits <- fit_contracts
-    universal_coefs <- do.call(rbind, lapply(successful, function(x) x$universal_coefs))
-    universal_gof <- do.call(rbind, lapply(successful, function(x) x$universal_gof))
+
     common_params <- list(
         cell_type = cell_type,
         cell_type_col = cell_type_col,
@@ -335,6 +419,7 @@
         lambda_selection = lambda_selection,
         nlambda = nlambda,
         nfolds = nfolds,
+        oof_scheme = 'within_cell_type_condition_stratified_cells',
         scale = TRUE,
         active_tol = active_tol,
         seed = seed,
@@ -346,22 +431,31 @@
         tf_cor = tf_cor,
         peak_cor = peak_cor
     )
-
-    universal_params <- do.call(
-        .condition_network_params,
-        c(list(network_level = 'shared', condition = NA_character_), common_params)
+    successful_features <- names(successful)
+    shared_coefs <- do.call(
+        rbind, lapply(successful, function(x) x$universal_coefs)
     )
-    object@grn@networks[[universal_id]] <- .condition_build_network(
-        successful_features, universal_coefs, universal_gof, universal_params
+    shared_gof <- do.call(
+        rbind, lapply(successful, function(x) x$universal_gof)
+    )
+    shared_params <- do.call(
+        .condition_network_params,
+        c(
+            list(network_level = 'shared', condition = NA_character_),
+            common_params
+        )
+    )
+    object@grn@networks[[shared_id]] <- .condition_build_network(
+        successful_features, shared_coefs, shared_gof, shared_params
     )
     index_rows <- list(.condition_index_row(
-        network_id = universal_id,
+        network_id = shared_id,
         network_name = network_name,
         cell_type = cell_type,
         network_level = 'shared',
         condition = NA_character_,
-        n_cells = nrow(metadata_cell_type),
-        coefs = universal_coefs,
+        n_cells = nrow(metadata),
+        coefs = shared_coefs,
         n_targets = length(successful_features),
         active_tol = active_tol,
         fit_engine = fit_engine,
@@ -380,10 +474,19 @@
         ))
         condition_params <- do.call(
             .condition_network_params,
-            c(list(network_level = 'condition', condition = condition_name), common_params)
+            c(
+                list(
+                    network_level = 'condition',
+                    condition = condition_name
+                ),
+                common_params
+            )
         )
         object@grn@networks[[condition_id]] <- .condition_build_network(
-            successful_features, condition_coefs, condition_gof, condition_params
+            successful_features,
+            condition_coefs,
+            condition_gof,
+            condition_params
         )
         index_rows[[length(index_rows) + 1L]] <- .condition_index_row(
             network_id = condition_id,
@@ -391,7 +494,7 @@
             cell_type = cell_type,
             network_level = 'condition',
             condition = condition_name,
-            n_cells = sum(as.character(metadata_cell_type[[condition_col]]) == condition_name),
+            n_cells = sum(condition_factor == condition_name),
             coefs = condition_coefs,
             n_targets = length(successful_features),
             active_tol = active_tol,
@@ -400,16 +503,17 @@
             fit_contract_key = fit_contract_key
         )
     }
-
     list(
         object = object,
         index = do.call(rbind, index_rows),
         diagnostics = diagnostics,
-        universal_id = universal_id
+        shared_id = shared_id
     )
 }
 
-.condition_skip_diagnostic <- function(network_name, cell_type, message_text) {
+.condition_cell_type_skip_diagnostic <- function(
+    network_name, cell_type, message_text
+) {
     data.frame(
         network_name = network_name,
         cell_type = cell_type,
