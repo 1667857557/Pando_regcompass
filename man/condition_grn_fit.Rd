@@ -22,7 +22,7 @@ condition_grn_fit(object, network_name = NULL, cell_type = NULL)
 One \code{ConditionGRNFit}, or a named list when multiple fits match.
 }
 \description{
-Returns the lossless \code{pando_condition_grn_fit_v3} contract while the
+Returns the lossless \code{pando_condition_grn_fit_v4} contract while the
 condition and shared results remain available as standard Pando networks.
 }
 \details{

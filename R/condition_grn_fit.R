@@ -28,6 +28,7 @@
     lambda,
     lambda_min_ratio,
     nfolds,
+    cv_block,
     lambda_selection,
     seed,
     max_iter,
@@ -61,6 +62,7 @@
                 lambda = lambda,
                 lambda_min_ratio = lambda_min_ratio,
                 nfolds = nfolds,
+                cv_block = cv_block,
                 lambda_selection = lambda_selection,
                 seed = .condition_seed_for(gene, seed),
                 max_iter = max_iter,
@@ -119,6 +121,7 @@
     lambda,
     lambda_min_ratio,
     nfolds,
+    cv_block,
     lambda_selection,
     seed,
     max_iter,
@@ -230,7 +233,10 @@
     edges <- prepared_design$edges
     X <- prepared_design$X
     y <- prepared_design$y
+    X_raw <- prepared_design$X_raw
+    y_raw <- prepared_design$y_raw
     edge_mask <- edge_mask[edges$edge_id, , drop = FALSE]
+    screening_mask <- edge_mask
     if (ncol(X) == 0L) {
         .condition_target_skip(
             'No non-constant interaction predictors remained.'
@@ -246,8 +252,10 @@
     }
     keep_edge <- rowSums(edge_mask) > 0L
     X <- X[, keep_edge, drop = FALSE]
+    X_raw <- X_raw[, keep_edge, drop = FALSE]
     edges <- edges[keep_edge, , drop = FALSE]
     edge_mask <- edge_mask[keep_edge, , drop = FALSE]
+    screening_mask <- screening_mask[keep_edge, , drop = FALSE]
     prepared_design$predictor_center <-
         prepared_design$predictor_center[keep_edge]
     prepared_design$predictor_scale <-
@@ -271,7 +279,36 @@
         X[condition == level, , drop = FALSE]
     })
     y_list <- lapply(condition_levels, function(level) y[condition == level])
+    X_raw_list <- lapply(condition_levels, function(level) {
+        X_raw[condition == level, , drop = FALSE]
+    })
+    y_raw_list <- lapply(condition_levels, function(level) {
+        y_raw[condition == level]
+    })
+    cell_id_list <- lapply(condition_levels, function(level) {
+        rownames(gene_data)[condition == level]
+    })
     names(X_list) <- names(y_list) <- condition_levels
+    names(X_raw_list) <- names(y_raw_list) <- condition_levels
+    names(cell_id_list) <- condition_levels
+    block_list <- if (is.null(cv_block)) {
+        NULL
+    } else {
+        if (length(cv_block) != length(condition) || anyNA(cv_block)) {
+            stop('cv_block must align to condition without missing values.')
+        }
+        lapply(condition_levels, function(level) {
+            as.character(cv_block[condition == level])
+        })
+    }
+    if (!is.null(block_list)) names(block_list) <- condition_levels
+    sample_block_status <- .condition_sample_block_status(block_list)
+    sample_blocked_oof_available <- sample_block_status$available
+    cv_block_list_used <- if (sample_blocked_oof_available) {
+        block_list
+    } else {
+        NULL
+    }
 
     lambda_path <- if (is.null(lambda)) {
         .condition_make_lambda_path(
@@ -288,7 +325,7 @@
         sort(unique(as.numeric(lambda)), decreasing = TRUE)
     }
 
-    if (length(lambda_path) == 1L) {
+    if (length(lambda_path) == 1L && is.null(cv_block_list_used)) {
         cv <- list(
             lambda = lambda_path,
             cv_mean = NA_real_,
@@ -300,20 +337,58 @@
         )
     } else {
         cv <- .condition_cv_multitask_path(
-            X_list = X_list,
-            y_list = y_list,
+            X_list = X_raw_list,
+            y_list = y_raw_list,
             lambda = lambda_path,
             alpha = alpha,
             condition_mix = condition_mix,
             condition_weight = condition_weight,
             coefficient_mask = edge_mask,
             nfolds = nfolds,
+            block_list = cv_block_list_used,
+            standardize = scale,
+            active_tol = active_tol,
             lambda_selection = lambda_selection,
             seed = seed,
             max_iter = max_iter,
             tol_objective = tol_objective,
             tol_coef = tol_coef
         )
+    }
+    if (!is.null(block_list) && !sample_blocked_oof_available) {
+        cv$selection_oof_prediction <- cv$oof_prediction
+        cv$selection_oof_fold <- cv$oof_fold
+        cv$oof_prediction <- NULL
+        cv$oof_fold <- NULL
+        cv$block_to_fold <- NULL
+        cv$fold_transform <- NULL
+        cv$effective_nfolds <- NA_integer_
+    }
+    cv$cv_method <- if (sample_blocked_oof_available) {
+        'biological_sample_blocked'
+    } else if (!is.null(block_list)) {
+        'cell_level_lambda_selection_no_sample_blocked_oof'
+    } else {
+        'cell_level'
+    }
+    if (!is.null(cv$oof_fold)) {
+        cv$oof_fold <- lapply(seq_along(cv$oof_fold), function(task) {
+            stats::setNames(
+                as.integer(cv$oof_fold[[task]]), cell_id_list[[task]]
+            )
+        })
+        names(cv$oof_fold) <- condition_levels
+    }
+    if (!is.null(cv$oof_prediction)) {
+        cv$oof_prediction <- lapply(
+            seq_along(cv$oof_prediction), function(task) {
+                stats::setNames(
+                    as.numeric(cv$oof_prediction[[task]]),
+                    cell_id_list[[task]]
+                )
+            }
+        )
+        names(cv$oof_prediction) <- condition_levels
     }
 
     full_path <- .condition_fit_multitask_path(
@@ -449,6 +524,10 @@
         estimability_mask = refit$estimability_mask,
         support_mask = refit$support_mask,
         active_mask = refit$active_mask,
+        structural_candidate_mask = matrix(
+            TRUE, nrow(edge_mask), ncol(edge_mask), dimnames = dimnames(edge_mask)
+        ),
+        screening_mask = screening_mask,
         predictor_center = stats::setNames(
             prepared_design$predictor_center, edges$edge_id
         ),
@@ -461,6 +540,58 @@
         condition_rsq = vapply(
             condition_gof, function(x) x$rsq[[1L]], numeric(1)
         ),
+        condition_rsq_train = vapply(
+            condition_gof, function(x) x$rsq[[1L]], numeric(1)
+        ),
+        condition_rsq_oof = if (is.null(cv$oof_prediction)) {
+            stats::setNames(rep(NA_real_, length(condition_levels)), condition_levels)
+        } else {
+            stats::setNames(vapply(seq_along(condition_levels), function(task) {
+                .condition_rsq(
+                    y_raw_list[[task]], cv$oof_prediction[[task]]
+                )
+            }, numeric(1)), condition_levels)
+        },
+        condition_rmse_oof = if (is.null(cv$oof_prediction)) {
+            stats::setNames(rep(NA_real_, length(condition_levels)), condition_levels)
+        } else {
+            stats::setNames(vapply(seq_along(condition_levels), function(task) {
+                sqrt(mean(
+                    (y_raw_list[[task]] - cv$oof_prediction[[task]])^2
+                ))
+            }, numeric(1)), condition_levels)
+        },
+        target_rsq_oof_pooled = if (is.null(cv$oof_prediction)) {
+            NA_real_
+        } else {
+            .condition_pooled_task_rsq(
+                y_raw_list, cv$oof_prediction
+            )
+        },
+        oof_fold = if (is.null(cv$oof_fold)) NULL else cv$oof_fold,
+        cv_block_to_fold = if (is.null(cv$block_to_fold)) {
+            NULL
+        } else {
+            cv$block_to_fold
+        },
+        cv_fold_transform = if (is.null(cv$fold_transform)) {
+            NULL
+        } else {
+            cv$fold_transform
+        },
+        cv_effective_nfolds = if (is.null(cv$effective_nfolds)) {
+            NA_integer_
+        } else {
+            cv$effective_nfolds
+        },
+        cv_method = cv$cv_method,
+        oof_model = if (is.null(cv$oof_model)) {
+            'fixed_lambda_without_cross_validation'
+        } else {
+            cv$oof_model
+        },
+        sample_blocked_oof_available = sample_blocked_oof_available,
+        sample_block_status = sample_block_status,
         selected_lambda = selected$lambda,
         lambda_path = lambda_path,
         cv_mean = cv$cv_mean,
@@ -508,6 +639,8 @@
     keep <- is.finite(edge_variance) & edge_variance > .Machine$double.eps
     X <- X[, keep, drop = FALSE]
     edges <- edges[keep, , drop = FALSE]
+    X_raw <- X
+    y_raw <- y
     response_center <- 0
     response_scale <- 1
     predictor_center <- rep(0, ncol(X))
@@ -542,6 +675,8 @@
     list(
         X = X,
         y = y,
+        X_raw = X_raw,
+        y_raw = y_raw,
         edges = edges,
         predictor_center = predictor_center,
         predictor_scale = predictor_scale,

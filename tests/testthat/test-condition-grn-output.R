@@ -97,12 +97,37 @@ test_that('fit contracts retain reference contrasts and pooled transforms', {
                     TRUE, nrow = 1, ncol = 2,
                     dimnames = list(edge_id, c('Control', 'Drug'))
                 ),
+                structural_candidate_mask = matrix(
+                    TRUE, nrow = 1, ncol = 2,
+                    dimnames = list(edge_id, c('Control', 'Drug'))
+                ),
+                screening_mask = matrix(
+                    TRUE, nrow = 1, ncol = 2,
+                    dimnames = list(edge_id, c('Control', 'Drug'))
+                ),
                 predictor_center = stats::setNames(2, edge_id),
                 predictor_scale = stats::setNames(3, edge_id),
                 response_center = 4,
                 response_scale = 5,
                 intercept = c(Control = 0, Drug = 0),
                 condition_rsq = c(Control = 0.4, Drug = 0.5),
+                condition_rsq_train = c(Control = 0.4, Drug = 0.5),
+                condition_rsq_oof = c(Control = 0.2, Drug = 0.3),
+                condition_rmse_oof = c(Control = 1, Drug = 1.2),
+                target_rsq_oof_pooled = 0.25,
+                cv_method = 'biological_sample_blocked',
+                oof_model =
+                    'condition_sparse_selection_plus_common_metric_refit',
+                sample_blocked_oof_available = TRUE,
+                oof_fold = list(
+                    Control = c(c1 = 1L, c2 = 2L),
+                    Drug = c(c3 = 1L, c4 = 2L)
+                ),
+                cv_block_to_fold = data.frame(
+                    block = c('s1', 's2'), fold = c(1L, 2L)
+                ),
+                cv_fold_transform = list(),
+                cv_effective_nfolds = 2L,
                 selected_lambda = 0.1,
                 lambda_path = c(1, 0.1),
                 cv_mean = c(2, 1),
@@ -132,7 +157,7 @@ test_that('fit contracts retain reference contrasts and pooled transforms', {
     )
 
     expect_s3_class(fit, 'ConditionGRNFit')
-    expect_identical(fit$schema_version, 'pando_condition_grn_fit_v3')
+    expect_identical(fit$schema_version, 'pando_condition_grn_fit_v4')
     expect_equal(fit$contrast[, 'Control'], 0)
     expect_equal(fit$contrast[, 'Drug'], 0.5)
     expect_equal(fit$predictor_transform$center, 2)

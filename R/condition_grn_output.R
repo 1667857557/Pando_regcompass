@@ -42,6 +42,7 @@
     lambda_selection,
     nlambda,
     nfolds,
+    cv_block_col,
     scale,
     active_tol,
     seed,
@@ -78,6 +79,7 @@
         lambda_selection = lambda_selection,
         nlambda = nlambda,
         nfolds = nfolds,
+        cv_block_col = cv_block_col,
         scale = scale,
         active_tol = active_tol,
         seed = seed
@@ -144,6 +146,8 @@
     beta_condition <- bind_matrix('beta_condition')
     delta_condition <- bind_matrix('delta_condition')
     contrast <- bind_matrix('contrast')
+    structural_candidate_mask <- bind_matrix('structural_candidate_mask')
+    screening_mask <- bind_matrix('screening_mask')
     estimability_mask <- bind_matrix('estimability_mask')
     support_mask <- bind_matrix('support_mask')
     active_mask <- bind_matrix('active_mask')
@@ -172,8 +176,35 @@
         condition_mix = vapply(contracts, `[[`, numeric(1), 'condition_mix'),
         stringsAsFactors = FALSE
     )
-    target_rsq <- do.call(rbind, lapply(contracts, `[[`, 'condition_rsq'))
-    rownames(target_rsq) <- response_transform$target
+    condition_rsq_train <- do.call(
+        rbind, lapply(contracts, `[[`, 'condition_rsq_train')
+    )
+    condition_rsq_oof <- do.call(
+        rbind, lapply(contracts, `[[`, 'condition_rsq_oof')
+    )
+    condition_rmse_oof <- do.call(
+        rbind, lapply(contracts, `[[`, 'condition_rmse_oof')
+    )
+    rownames(condition_rsq_train) <- rownames(condition_rsq_oof) <-
+        rownames(condition_rmse_oof) <- response_transform$target
+    target_rsq_oof_pooled <- stats::setNames(
+        vapply(contracts, `[[`, numeric(1), 'target_rsq_oof_pooled'),
+        response_transform$target
+    )
+    cv_method <- stats::setNames(
+        vapply(contracts, `[[`, character(1), 'cv_method'),
+        response_transform$target
+    )
+    oof_model <- stats::setNames(
+        vapply(contracts, `[[`, character(1), 'oof_model'),
+        response_transform$target
+    )
+    sample_blocked_oof_available <- stats::setNames(
+        vapply(
+            contracts, `[[`, logical(1), 'sample_blocked_oof_available'
+        ),
+        response_transform$target
+    )
     intercept <- do.call(rbind, lapply(contracts, `[[`, 'intercept'))
     rownames(intercept) <- response_transform$target
     response_scale_by_edge <- response_transform$scale[
@@ -183,16 +214,12 @@
     beta_condition_raw <- beta_condition * raw_factor
     delta_condition_raw <- delta_condition * raw_factor
     beta_shared_raw <- beta_shared * raw_factor
-    topology_mask <- matrix(
-        TRUE, nrow(edge_table), ncol(beta_condition),
-        dimnames = dimnames(beta_condition)
-    )
     comparison_mask <- .condition_reference_comparison_mask(
         estimability_mask, reference_condition
     )
     structure(
         list(
-            schema_version = 'pando_condition_grn_fit_v3',
+            schema_version = 'pando_condition_grn_fit_v4',
             network_name = network_name,
             cell_type = cell_type,
             cell_type_col = cell_type_col,
@@ -215,7 +242,9 @@
             beta_shared_raw = beta_shared_raw,
             delta_condition_raw = delta_condition_raw,
             contrast = contrast,
-            topology_mask = topology_mask,
+            topology_mask = structural_candidate_mask,
+            structural_candidate_mask = structural_candidate_mask,
+            screening_mask = screening_mask,
             eligibility_mask = estimability_mask,
             estimability_mask = estimability_mask,
             support_mask = support_mask,
@@ -232,7 +261,34 @@
             response_transform = response_transform,
             intercept = intercept,
             target_fit = target_fit,
-            target_rsq = target_rsq,
+            target_rsq = condition_rsq_train,
+            condition_rsq_train = condition_rsq_train,
+            condition_rsq_oof = condition_rsq_oof,
+            condition_rmse_oof = condition_rmse_oof,
+            target_rsq_oof_pooled = target_rsq_oof_pooled,
+            target_rsq_oof_pooled_definition =
+                '1 - pooled OOF SSE / pooled within-condition SST',
+            cv_method = cv_method,
+            oof_model = oof_model,
+            sample_blocked_oof_available = sample_blocked_oof_available,
+            oof_fold = stats::setNames(
+                lapply(contracts, `[[`, 'oof_fold'),
+                response_transform$target
+            ),
+            cv_block_to_fold = stats::setNames(
+                lapply(contracts, `[[`, 'cv_block_to_fold'),
+                response_transform$target
+            ),
+            cv_fold_transform = stats::setNames(
+                lapply(contracts, `[[`, 'cv_fold_transform'),
+                response_transform$target
+            ),
+            cv_effective_nfolds = stats::setNames(
+                vapply(contracts, function(x) {
+                    as.integer(x$cv_effective_nfolds)
+                }, integer(1)),
+                response_transform$target
+            ),
             lambda_path = stats::setNames(
                 lapply(contracts, `[[`, 'lambda_path'),
                 response_transform$target
@@ -274,8 +330,13 @@
                 function_name = 'project_condition_grn_cells',
                 score = 'sum(z_edge * beta_condition) by target and observed condition',
                 signed = TRUE,
-                nonestimable = 'propagate_NA',
-                metacell_aggregation = 'column mean of single-cell scores',
+                support_policy = c(
+                    'strict', 'condition_estimable',
+                    'global_common', 'pairwise_common'
+                ),
+                nonestimable = 'NA is unavailable; zero is estimable inactive',
+                metacell_aggregation =
+                    'mean of cell-first TF-times-ATAC projections',
                 refit_after_aggregation = FALSE
             )
         ),
@@ -344,17 +405,17 @@ condition_grn_fit.GRNData <- function(
     if (length(fits) == 1L) fits[[1L]] else fits
 }
 
-.condition_require_v3 <- function(fit) {
+.condition_require_v4 <- function(fit) {
     if (!inherits(fit, 'ConditionGRNFit') ||
-        !identical(fit$schema_version, 'pando_condition_grn_fit_v3')) {
-        stop('fit must be a pando_condition_grn_fit_v3 ConditionGRNFit object.')
+        !identical(fit$schema_version, 'pando_condition_grn_fit_v4')) {
+        stop('fit must be a pando_condition_grn_fit_v4 ConditionGRNFit object.')
     }
     invisible(TRUE)
 }
 
 #' Compare two condition-specific sub-GRNs
 #'
-#' @param fit A `pando_condition_grn_fit_v3` object.
+#' @param fit A `pando_condition_grn_fit_v4` object.
 #' @param condition_1 Baseline condition label.
 #' @param condition_2 Comparison condition label.
 #' @param scale Coefficient scale, standardized or raw assay units.
@@ -370,7 +431,7 @@ condition_grn_contrast <- function(
     scale = c('std', 'raw'),
     active_tol = fit$active_tol
 ) {
-    .condition_require_v3(fit)
+    .condition_require_v4(fit)
     scale <- match.arg(scale)
     conditions <- c(as.character(condition_1), as.character(condition_2))
     if (length(unique(conditions)) != 2L ||
@@ -418,7 +479,7 @@ condition_grn_contrast <- function(
 
 #' Extract one active condition sub-GRN
 #'
-#' @param fit A `pando_condition_grn_fit_v3` object.
+#' @param fit A `pando_condition_grn_fit_v4` object.
 #' @param condition Fitted condition label.
 #' @param scale Coefficient scale, standardized or raw assay units.
 #' @param active_tol Minimum absolute standardized effect retained as active,
@@ -432,7 +493,7 @@ condition_grn_subgraph <- function(
     scale = c('std', 'raw'),
     active_tol = fit$active_tol
 ) {
-    .condition_require_v3(fit)
+    .condition_require_v4(fit)
     scale <- match.arg(scale)
     condition <- as.character(condition)
     if (length(condition) != 1L || !condition %in% fit$condition_levels) {

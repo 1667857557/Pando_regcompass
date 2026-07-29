@@ -12,7 +12,7 @@ condition_grn_subgraph(
 )
 }
 \arguments{
-\item{fit}{A \code{pando_condition_grn_fit_v3} object.}
+\item{fit}{A \code{pando_condition_grn_fit_v4} object.}
 \item{condition}{One fitted condition label.}
 \item{scale}{Standardized or raw coefficient scale.}
 \item{active_tol}{Minimum absolute standardized effect retained as active,

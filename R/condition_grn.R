@@ -18,9 +18,9 @@
 #' @param upstream,downstream,extend,only_tss Regulatory-domain parameters.
 #' @param peak_to_gene_domains Optional custom gene regulatory domains.
 #' @param tf_cor,peak_cor Correlation screening thresholds.
-#' @param candidate_screen Candidate screening strategy. The default removes
-#' condition means before pooled screening. `motif_domain` disables correlation
-#' screening but retains the shared motif/domain candidate graph.
+#' @param candidate_screen Candidate screening strategy. The default
+#' `motif_domain` retains the response-independent shared motif/domain candidate
+#' graph. `pooled_within_condition` is a response-dependent sensitivity screen.
 #' @param method Condition sub-GRN engine. Retired condition method labels are
 #' accepted as call-compatibility aliases and route to the same condition-sparse
 #' common-scale engine.
@@ -33,6 +33,8 @@
 #' @param lambda Optional fixed lambda value or decreasing lambda path.
 #' @param lambda_min_ratio Smallest lambda relative to lambda maximum.
 #' @param nfolds Number of condition-stratified cell folds.
+#' @param cv_block_col Optional biological-sample or donor metadata column.
+#' Cells sharing a block are assigned to the same validation fold.
 #' @param lambda_selection Selection of lambda.1se or lambda.min.
 #' @param min_cells_per_condition Minimum single cells per condition.
 #' @param on_small_condition Action when a cell type contains a small condition.
@@ -71,7 +73,7 @@ infer_condition_grn.GRNData <- function(
     peak_to_gene_domains = NULL,
     tf_cor = 0.1,
     peak_cor = 0,
-    candidate_screen = c('pooled_within_condition', 'motif_domain'),
+    candidate_screen = c('motif_domain', 'pooled_within_condition'),
     method = c(
         'shared_baseline_condition_sparse',
         'shared_design_independent',
@@ -85,6 +87,7 @@ infer_condition_grn.GRNData <- function(
     lambda = NULL,
     lambda_min_ratio = NULL,
     nfolds = 5L,
+    cv_block_col = NULL,
     lambda_selection = c('lambda.1se', 'lambda.min'),
     min_cells_per_condition = 50L,
     on_small_condition = c('skip_cell_type', 'drop_condition', 'error'),
@@ -127,7 +130,8 @@ infer_condition_grn.GRNData <- function(
 
     .condition_validate_public_args(
         object, cell_type_col, condition_col, method, scale, alpha, condition_mix,
-        reference_condition, nlambda, lambda, nfolds, min_cells_per_condition,
+        reference_condition, nlambda, lambda, nfolds, cv_block_col,
+        min_cells_per_condition,
         active_tol, max_iter, tol_objective, tol_coef
     )
     prepared <- .condition_prepare_global_data(
@@ -153,6 +157,7 @@ infer_condition_grn.GRNData <- function(
         reference_condition = reference_condition,
         condition_weight = condition_weight, nlambda = nlambda, lambda = lambda,
         lambda_min_ratio = lambda_min_ratio, nfolds = nfolds,
+        cv_block_col = cv_block_col,
         lambda_selection = lambda_selection,
         min_cells_per_condition = min_cells_per_condition,
         on_small_condition = on_small_condition,
@@ -174,6 +179,7 @@ infer_condition_grn.GRNData <- function(
     nlambda,
     lambda,
     nfolds,
+    cv_block_col,
     min_cells_per_condition,
     active_tol,
     max_iter,
@@ -193,6 +199,17 @@ infer_condition_grn.GRNData <- function(
     }
     if (identical(cell_type_col, condition_col)) {
         stop('cell_type_col and condition_col must be different columns.')
+    }
+    if (!is.null(cv_block_col)) {
+        if (!is.character(cv_block_col) || length(cv_block_col) != 1L ||
+            is.na(cv_block_col) || !nzchar(trimws(cv_block_col)) ||
+            !cv_block_col %in% colnames(metadata)) {
+            stop('cv_block_col must be NULL or one existing metadata column.')
+        }
+        block <- trimws(as.character(metadata[[cv_block_col]]))
+        if (anyNA(block) || any(!nzchar(block))) {
+            stop('cv_block_col cannot contain missing or empty block labels.')
+        }
     }
     if (!method %in% c(
         'shared_baseline_condition_sparse',

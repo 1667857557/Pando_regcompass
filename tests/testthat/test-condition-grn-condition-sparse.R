@@ -174,7 +174,7 @@ test_that('subgraphs can have different nodes and pairwise sign switches', {
     )
     fit <- structure(
         list(
-            schema_version = 'pando_condition_grn_fit_v3',
+            schema_version = 'pando_condition_grn_fit_v4',
             condition_levels = c('A', 'B'),
             edge_table = edge,
             beta_condition_std = beta,

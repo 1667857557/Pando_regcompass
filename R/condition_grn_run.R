@@ -22,6 +22,7 @@
     lambda,
     lambda_min_ratio,
     nfolds,
+    cv_block_col,
     lambda_selection,
     min_cells_per_condition,
     on_small_condition,
@@ -70,6 +71,7 @@
             lambda = lambda,
             lambda_min_ratio = lambda_min_ratio,
             nfolds = nfolds,
+            cv_block_col = cv_block_col,
             lambda_selection = lambda_selection,
             min_cells_per_condition = min_cells_per_condition,
             on_small_condition = on_small_condition,
@@ -150,6 +152,7 @@
     lambda,
     lambda_min_ratio,
     nfolds,
+    cv_block_col,
     lambda_selection,
     min_cells_per_condition,
     on_small_condition,
@@ -239,6 +242,45 @@
         'Fitting condition-aware GRN for cell type ', cell_type,
         ' across ', length(condition_levels), ' conditions', verbose = verbose
     )
+    cv_block_status <- if (is.null(cv_block_col)) {
+        NULL
+    } else {
+        block_list <- split(
+            trimws(as.character(metadata_cell_type[[cv_block_col]])),
+            factor(
+                as.character(metadata_cell_type[[condition_col]]),
+                levels = condition_levels
+            )
+        )
+        status <- .condition_sample_block_status(block_list)
+        data.frame(
+            condition = names(status$n_blocks),
+            n_cells = as.integer(table(factor(
+                as.character(metadata_cell_type[[condition_col]]),
+                levels = condition_levels
+            ))),
+            n_biological_samples = as.integer(status$n_blocks),
+            sample_blocked_oof_available = status$n_blocks >= 2L,
+            stringsAsFactors = FALSE
+        )
+    }
+    if (!is.null(cv_block_status) &&
+        any(!cv_block_status$sample_blocked_oof_available)) {
+        warning(
+            'Cell type ', cell_type, ' has fewer than two biological samples ',
+            'in condition(s): ',
+            paste(
+                cv_block_status$condition[
+                    !cv_block_status$sample_blocked_oof_available
+                ],
+                collapse = ', '
+            ),
+            '. Cell-level folds will select lambda, but sample-blocked OOF ',
+            'performance is unavailable and must not be interpreted as ',
+            'replicate-level validation.',
+            call. = FALSE
+        )
+    }
     fit_cell_type <- .condition_fit_cell_type(
         features = prepared$features,
         gene_data = prepared$gene_data[cell_rows, , drop = FALSE],
@@ -262,6 +304,14 @@
         lambda = lambda,
         lambda_min_ratio = lambda_min_ratio,
         nfolds = nfolds,
+        cv_block = if (is.null(cv_block_col)) {
+            NULL
+        } else {
+            stats::setNames(
+                trimws(as.character(metadata_cell_type[[cv_block_col]])),
+                rownames(metadata_cell_type)
+            )
+        },
         lambda_selection = lambda_selection,
         seed = .condition_seed_for(cell_type, seed),
         max_iter = max_iter,
@@ -305,6 +355,30 @@
         as.character(metadata_cell_type[[condition_col]]),
         rownames(metadata_cell_type)
     )
+    fit_contract$cv_block_col <- cv_block_col
+    fit_contract$cv_block_status <- cv_block_status
+    fit_contract$sample_blocked_oof_complete_for_cell_type <-
+        !is.null(cv_block_status) &&
+        all(cv_block_status$sample_blocked_oof_available)
+    fit_contract$cell_block <- if (is.null(cv_block_col)) {
+        NULL
+    } else {
+        stats::setNames(
+            trimws(as.character(metadata_cell_type[[cv_block_col]])),
+            rownames(metadata_cell_type)
+        )
+    }
+    fit_contract$cell_provenance <- data.frame(
+        cell_id = rownames(metadata_cell_type),
+        cell_type = cell_type,
+        condition = as.character(metadata_cell_type[[condition_col]]),
+        cv_block = if (is.null(cv_block_col)) {
+            NA_character_
+        } else {
+            trimws(as.character(metadata_cell_type[[cv_block_col]]))
+        },
+        stringsAsFactors = FALSE
+    )
     object_params <- Params(object)
     fit_contract$assay_contract <- list(
         rna_assay = object_params$rna_assay,
@@ -335,6 +409,7 @@
         lambda_selection = lambda_selection,
         nlambda = nlambda,
         nfolds = nfolds,
+        cv_block_col = cv_block_col,
         scale = TRUE,
         active_tol = active_tol,
         seed = seed,

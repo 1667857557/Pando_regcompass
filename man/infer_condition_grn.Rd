@@ -21,7 +21,7 @@ infer_condition_grn(object, ...)
   peak_to_gene_domains = NULL,
   tf_cor = 0.1,
   peak_cor = 0,
-  candidate_screen = c("pooled_within_condition", "motif_domain"),
+  candidate_screen = c("motif_domain", "pooled_within_condition"),
   method = c("shared_baseline_condition_sparse", "shared_design_independent",
     "multitask_glmnet"),
   alpha = 0.5,
@@ -32,6 +32,7 @@ infer_condition_grn(object, ...)
   lambda = NULL,
   lambda_min_ratio = NULL,
   nfolds = 5L,
+  cv_block_col = NULL,
   lambda_selection = c("lambda.1se", "lambda.min"),
   min_cells_per_condition = 50L,
   on_small_condition = c("skip_cell_type", "drop_condition", "error"),
@@ -58,9 +59,10 @@ infer_condition_grn(object, ...)
 \item{upstream, downstream, extend, only_tss}{Regulatory-domain parameters.}
 \item{peak_to_gene_domains}{Optional custom regulatory domains.}
 \item{tf_cor, peak_cor}{Candidate screening thresholds.}
-\item{candidate_screen}{Use \code{pooled_within_condition} for a shared
-weighted-RMS within-condition screen, or \code{motif_domain} to retain every
-motif/domain candidate.}
+\item{candidate_screen}{Use the response-independent default
+\code{motif_domain} to retain every motif/domain candidate, or
+\code{pooled_within_condition} for a response-dependent weighted-RMS
+within-condition sensitivity screen.}
 \item{method}{The condition-sparse engine. Retired method names are accepted as
 call-compatibility aliases and invoke the same engine.}
 \item{alpha}{Elastic-net mixing during support selection.}
@@ -71,7 +73,11 @@ condition-specific element support. Must be greater than zero.}
 \item{nlambda}{Number of generated lambda values.}
 \item{lambda}{Optional fixed lambda or lambda path.}
 \item{lambda_min_ratio}{Smallest lambda relative to the maximum.}
-\item{nfolds}{Condition-stratified cell folds.}
+\item{nfolds}{Maximum number of cross-validation folds.}
+\item{cv_block_col}{Optional biological sample/donor metadata column. With at
+least two samples in every condition, whole samples are assigned to folds.
+If any condition has only one sample, cell-level folds select lambda but
+sample-blocked OOF performance is recorded as unavailable.}
 \item{lambda_selection}{Use \code{lambda.1se} or \code{lambda.min}.}
 \item{min_cells_per_condition}{Minimum single cells per condition.}
 \item{on_small_condition}{Skip, drop or stop for small conditions.}
@@ -89,7 +95,7 @@ arguments.}
 \value{
 A \code{GRNData} object containing standard Pando \code{Network} objects named
 \code{<network_name>__<cell_type>__shared} and
-\code{<network_name>__<cell_type>__condition__<condition>}. The lossless v3
+\code{<network_name>__<cell_type>__condition__<condition>}. The lossless v4
 contract is available through \code{condition_grn_fit()}.
 }
 \description{
@@ -103,7 +109,8 @@ condition-specific correlations. Consequently, pure condition mean shifts are
 removed but opposite signs do not cancel during screening.
 
 Unavailable coefficients are \code{NA}; estimable inactive coefficients are
-exact zero. Pando does not create metacells in this workflow.
+exact zero. Pando does not create metacells in this workflow. Cells or
+metacells are never treated as biological replicates for OOF validation.
 }
 \examples{
 \dontrun{
@@ -113,6 +120,7 @@ object <- infer_condition_grn(
   condition_col = "condition",
   genes = metabolic_genes,
   condition_mix = 0.5,
+  cv_block_col = "sample_id",
   reference_condition = "Control"
 )
 fit <- condition_grn_fit(object, cell_type = "Tumor_cell")
