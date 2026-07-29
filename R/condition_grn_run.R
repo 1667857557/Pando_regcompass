@@ -46,11 +46,13 @@
     alpha,
     condition_mix,
     reference_condition,
+    comparison_conditions,
     condition_weight,
     nlambda,
     lambda,
     lambda_min_ratio,
-    nfolds,
+    outer_nfolds,
+    inner_nfolds,
     lambda_selection,
     min_cells_per_condition,
     small_condition_action,
@@ -94,11 +96,13 @@
             alpha = alpha,
             condition_mix = condition_mix,
             reference_condition = reference_condition,
+            comparison_conditions = comparison_conditions,
             condition_weight = condition_weight,
             nlambda = nlambda,
             lambda = lambda,
             lambda_min_ratio = lambda_min_ratio,
-            nfolds = nfolds,
+            outer_nfolds = outer_nfolds,
+            inner_nfolds = inner_nfolds,
             lambda_selection = lambda_selection,
             min_cells_per_condition = min_cells_per_condition,
             small_condition_action = small_condition_action,
@@ -190,11 +194,13 @@
     alpha,
     condition_mix,
     reference_condition,
+    comparison_conditions,
     condition_weight,
     nlambda,
     lambda,
     lambda_min_ratio,
-    nfolds,
+    outer_nfolds,
+    inner_nfolds,
     lambda_selection,
     min_cells_per_condition,
     small_condition_action,
@@ -283,6 +289,18 @@
             cell_type, '.'
         )
     }
+    comparison_conditions_cell <- if (is.null(comparison_conditions)) {
+        condition_levels
+    } else {
+        as.character(comparison_conditions)
+    }
+    if (length(comparison_conditions_cell) < 2L ||
+        !all(comparison_conditions_cell %in% condition_levels)) {
+        stop(
+            'comparison_conditions were not all found in cell type ',
+            cell_type, '.'
+        )
+    }
 
     shared_id <- paste(
         network_name, safe_cell_type, 'shared', sep = '__'
@@ -329,11 +347,13 @@
         condition_mix = condition_mix,
         active_tol = active_tol,
         reference_condition = reference_condition_cell,
+        comparison_conditions = comparison_conditions_cell,
         condition_weight = condition_weight,
         nlambda = nlambda,
         lambda = lambda,
         lambda_min_ratio = lambda_min_ratio,
-        nfolds = nfolds,
+        outer_nfolds = outer_nfolds,
+        inner_nfolds = inner_nfolds,
         lambda_selection = lambda_selection,
         seed = .condition_seed_for(cell_type, seed),
         max_iter = max_iter,
@@ -372,6 +392,7 @@
         cell_type_col = cell_type_col,
         condition_col = condition_col,
         reference_condition = reference_condition_cell,
+        comparison_conditions = comparison_conditions_cell,
         candidate_screen = candidate_screen,
         scale = TRUE,
         fit_engine = fit_engine
@@ -415,11 +436,13 @@
         alpha = alpha,
         condition_mix = condition_mix,
         reference_condition = reference_condition_cell,
+        comparison_conditions = comparison_conditions_cell,
         fit_contract_key = fit_contract_key,
         lambda_selection = lambda_selection,
         nlambda = nlambda,
-        nfolds = nfolds,
-        oof_scheme = 'within_cell_type_condition_stratified_cells',
+        outer_nfolds = outer_nfolds,
+        inner_nfolds = inner_nfolds,
+        oof_scheme = 'nested_outer_condition_stratified_cell_oof',
         scale = TRUE,
         active_tol = active_tol,
         seed = seed,

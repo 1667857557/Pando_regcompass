@@ -49,10 +49,13 @@ condition_object <- infer_condition_grn(
   condition_col = "condition",
   cell_type = c("T_cell", "B_cell"),
   genes = metabolic_genes,
-  candidate_screen = "pooled_within_condition",
+  candidate_screen = "motif_domain",
+  comparison_conditions = c("Control", "Drug"),
   condition_mix = 0.5,
   condition_weight = "equal",
   reference_condition = "Control",
+  outer_nfolds = 5L,
+  inner_nfolds = 5L,
   scale = TRUE
 )
 ```
@@ -61,10 +64,12 @@ Each selected broad cell type is fitted independently. Within one cell type,
 the condition model uses:
 
 - the same motif/domain TF–peak–target candidate dictionary;
-- the same pooled `RNA_TF × ATAC_peak` center and scale;
-- the same pooled target scale;
+- an outer-training transform whose center is the mean of condition means;
+- an outer-training scale equal to the square root of the mean
+  condition-specific population variances;
 - condition-specific sparse support;
-- condition-stratified cell-level OOF for lambda selection and reliability;
+- nested condition-stratified cell OOF for preprocessing, lambda selection and
+  reliability;
 - a support-constrained common-metric refit.
 
 Different conditions may therefore have different active TF, peak, target and
@@ -127,12 +132,18 @@ projection <- project_condition_grn_cells(
   component = "condition",
   scale = "std",
   targets = metabolic_genes,
-  nonestimable = "propagate"
+  nonestimable = "propagate",
+  support_policy = "pairwise_common",
+  comparison_conditions = c("Control", "Drug"),
+  origin = "oof"
 )
 ```
 
 Pando reconstructs each interaction on the paired single cells using the stored
-pooled transform, then returns signed cell-by-target regulatory scores.
+outer-fold training transform and coefficient, then returns signed held-out
+cell-by-target regulatory scores. Every fitted cell is assigned exactly one
+outer-fold prediction. `origin = "full_fit"` is interpretation-only and is
+explicitly ineligible for penalty construction.
 RegCompass should aggregate these scores within condition × broad cell type
 after projection. It must not recompute
 TF×ATAC from metacell averages, renormalize by condition, refit coefficients or

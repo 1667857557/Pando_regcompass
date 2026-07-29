@@ -14,15 +14,17 @@ project_condition_grn_cells(
   output = c("gene_score", "edge_contribution"),
   targets = NULL,
   nonestimable = c("propagate", "error"),
-  support_policy = c("strict", "condition_estimable", "global_common",
-    "pairwise_common"),
+  support_policy = c("pairwise_common", "global_common",
+    "condition_estimable", "strict"),
   comparison_conditions = NULL,
+  origin = c("oof", "full_fit"),
+  diagnostic_only = FALSE,
   active_tol = if (is.null(fit)) 1e-08 else fit$active_tol
 )
 }
 \arguments{
 \item{object}{The \code{GRNData} containing the paired RNA and ATAC cells.}
-\item{fit}{Optional v4 fit; otherwise retrieved from \code{object}.}
+\item{fit}{Optional v5 fit; otherwise retrieved from \code{object}.}
 \item{network_name, cell_type}{Optional fit filters used when \code{fit} is
 omitted.}
 \item{component}{Absolute condition, shared or deviation component.}
@@ -30,10 +32,13 @@ omitted.}
 \item{output}{Gene scores or gene scores plus edge contributions.}
 \item{targets}{Optional target subset.}
 \item{nonestimable}{Propagate unavailable effects to \code{NA}, or stop.}
-\item{support_policy}{Use strict, condition-estimable, global-common, or
-pairwise-common estimability support.}
+\item{support_policy}{Use pairwise-common or global-common support for primary
+comparisons. Condition-estimable and strict support are diagnostic only.}
 \item{comparison_conditions}{Two conditions defining pairwise-common support
 when the fit contains more than two conditions.}
+\item{origin}{Use outer-heldout cell projections for analysis, or full-fit
+coefficients for interpretation only.}
+\item{diagnostic_only}{Must be true for condition-estimable or strict support.}
 \item{active_tol}{Minimum absolute standardized effect recorded as active in
 edge metadata, independent of the returned score scale.}
 }
@@ -42,8 +47,7 @@ A \code{ConditionGRNProjection} with signed cell-by-target scores, directions,
 edge effects, target-condition estimability and a metacell aggregation contract.
 }
 \description{
-Reconstructs each TF-by-ATAC interaction from paired single cells using the
-fixed pooled transform and refitted condition coefficient. RegCompass should
-aggregate these scores after projection instead of recomputing Pando on
-metacells.
+The default returns the stored outer-heldout cell projection. Full-fit
+coefficients are available only as an explicitly labelled interpretation path.
+RegCompass aggregates the held-out cell scores using exact membership.
 }

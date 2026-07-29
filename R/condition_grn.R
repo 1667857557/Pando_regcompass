@@ -25,18 +25,24 @@
 #' @param condition_mix Group-versus-condition sparsity mixing parameter.
 #' @param reference_condition Condition used for explicit coefficient contrasts.
 #' Defaults to the first condition level.
-#' @param condition_weight Equal-condition or cell-count loss weighting.
+#' @param comparison_conditions Conditions defining the primary common-support
+#' comparison. Defaults to both conditions for a two-condition fit and to all
+#' fitted conditions for a multi-condition omnibus fit.
+#' @param condition_weight Must be `equal`; condition cell counts never define
+#' the model or transformation unit.
 #' @param nlambda Number of lambda values when lambda is not supplied.
 #' @param lambda Optional fixed lambda value or decreasing lambda path.
 #' @param lambda_min_ratio Smallest lambda relative to lambda maximum.
-#' @param nfolds Number of condition-stratified cell folds within each cell
-#' type.
+#' @param outer_nfolds Number of outer condition-stratified cell folds used to
+#' generate held-out regulatory projections.
+#' @param inner_nfolds Number of inner folds used only inside each outer
+#' training set to select lambda.
 #' @param lambda_selection Selection of lambda.1se or lambda.min.
 #' @param min_cells_per_condition Minimum single cells per condition.
 #' @param small_condition_action Skip the cell type, drop the small condition,
 #' or stop.
-#' @param scale Must be `TRUE`; all conditions use one pooled predictor and
-#' response scale.
+#' @param scale Must be `TRUE`; all conditions use one equal-condition center
+#' and within-condition variance scale.
 #' @param active_tol Numerical threshold used for network summaries.
 #' @param parallel Use the existing Pando foreach mapping backend.
 #' @param BPPARAM Optional BiocParallel parameter object.
@@ -74,11 +80,13 @@ infer_condition_grn.GRNData <- function(
     alpha = 0.5,
     condition_mix = 0.5,
     reference_condition = NULL,
-    condition_weight = c('equal', 'cell_count'),
+    comparison_conditions = NULL,
+    condition_weight = 'equal',
     nlambda = 50L,
     lambda = NULL,
     lambda_min_ratio = NULL,
-    nfolds = 5L,
+    outer_nfolds = 5L,
+    inner_nfolds = 5L,
     lambda_selection = c('lambda.1se', 'lambda.min'),
     min_cells_per_condition = 50L,
     small_condition_action = c('skip_cell_type', 'drop_condition', 'error'),
@@ -107,13 +115,22 @@ infer_condition_grn.GRNData <- function(
     }
     peak_to_gene_method <- match.arg(peak_to_gene_method)
     candidate_screen <- match.arg(candidate_screen)
-    condition_weight <- match.arg(condition_weight)
+    if (!identical(condition_weight, 'equal')) {
+        stop('condition_weight must be "equal" for condition comparability.')
+    }
+    if (!isTRUE(scale)) {
+        stop(
+            'scale must be TRUE so condition comparisons use the ',
+            'equal-condition within-variance coordinate system.'
+        )
+    }
     lambda_selection <- match.arg(lambda_selection)
     small_condition_action <- match.arg(small_condition_action)
 
     .condition_validate_public_args(
         object, cell_type_col, condition_col, scale, alpha, condition_mix,
-        reference_condition, nlambda, lambda, nfolds, min_cells_per_condition,
+        reference_condition, comparison_conditions, nlambda, lambda,
+        outer_nfolds, inner_nfolds, min_cells_per_condition,
         active_tol, max_iter, tol_objective, tol_coef, tf_cor, peak_cor,
         lambda_min_ratio, parallel, overwrite, seed, verbose
     )
@@ -139,8 +156,10 @@ infer_condition_grn.GRNData <- function(
         tf_cor = tf_cor, peak_cor = peak_cor, candidate_screen = candidate_screen,
         alpha = alpha, condition_mix = condition_mix,
         reference_condition = reference_condition,
+        comparison_conditions = comparison_conditions,
         condition_weight = condition_weight, nlambda = nlambda, lambda = lambda,
-        lambda_min_ratio = lambda_min_ratio, nfolds = nfolds,
+        lambda_min_ratio = lambda_min_ratio, outer_nfolds = outer_nfolds,
+        inner_nfolds = inner_nfolds,
         lambda_selection = lambda_selection,
         min_cells_per_condition = min_cells_per_condition,
         small_condition_action = small_condition_action,
@@ -158,9 +177,11 @@ infer_condition_grn.GRNData <- function(
     alpha,
     condition_mix,
     reference_condition,
+    comparison_conditions,
     nlambda,
     lambda,
-    nfolds,
+    outer_nfolds,
+    inner_nfolds,
     min_cells_per_condition,
     active_tol,
     max_iter,
@@ -203,6 +224,19 @@ infer_condition_grn.GRNData <- function(
             'condition label without surrounding whitespace.'
         )
     }
+    if (!is.null(comparison_conditions)) {
+        comparison_conditions <- as.character(comparison_conditions)
+        if (length(comparison_conditions) < 2L ||
+            anyNA(comparison_conditions) ||
+            any(!nzchar(trimws(comparison_conditions))) ||
+            any(comparison_conditions != trimws(comparison_conditions)) ||
+            anyDuplicated(comparison_conditions)) {
+            stop(
+                'comparison_conditions must contain at least two unique ',
+                'non-empty exact condition labels.'
+            )
+        }
+    }
     if (!is.numeric(nlambda) || length(nlambda) != 1L ||
         !is.finite(nlambda) ||
         abs(nlambda - round(nlambda)) > sqrt(.Machine$double.eps) ||
@@ -217,12 +251,15 @@ infer_condition_grn.GRNData <- function(
     if (is.null(lambda) && nlambda < 2L) {
         stop('nlambda must be at least 2 when a lambda path is generated.')
     }
-    if (!is.numeric(nfolds) || length(nfolds) != 1L ||
-        !is.finite(nfolds) ||
-        abs(nfolds - round(nfolds)) > sqrt(.Machine$double.eps) ||
-        nfolds > .Machine$integer.max ||
-        nfolds < 2L) {
-        stop('nfolds must be at least 2 for within-cell-type OOF.')
+    folds <- c(
+        outer_nfolds = outer_nfolds,
+        inner_nfolds = inner_nfolds
+    )
+    if (!is.numeric(folds) || any(!is.finite(folds)) ||
+        any(abs(folds - round(folds)) > sqrt(.Machine$double.eps)) ||
+        any(folds > .Machine$integer.max) ||
+        any(folds < 2L)) {
+        stop('outer_nfolds and inner_nfolds must be integers of at least 2.')
     }
     if (!is.numeric(min_cells_per_condition) ||
         length(min_cells_per_condition) != 1L ||
@@ -230,10 +267,10 @@ infer_condition_grn.GRNData <- function(
         abs(min_cells_per_condition - round(min_cells_per_condition)) >
             sqrt(.Machine$double.eps) ||
         min_cells_per_condition > .Machine$integer.max ||
-        min_cells_per_condition < nfolds) {
+        min_cells_per_condition < outer_nfolds) {
         stop(
             'min_cells_per_condition must be an integer no smaller than ',
-            'nfolds.'
+            'outer_nfolds.'
         )
     }
     correlation_thresholds <- c(tf_cor = tf_cor, peak_cor = peak_cor)

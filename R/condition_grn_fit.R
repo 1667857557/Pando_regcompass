@@ -23,11 +23,13 @@
     condition_mix,
     active_tol,
     reference_condition,
+    comparison_conditions,
     condition_weight,
     nlambda,
     lambda,
     lambda_min_ratio,
-    nfolds,
+    outer_nfolds,
+    inner_nfolds,
     lambda_selection,
     seed,
     max_iter,
@@ -56,11 +58,13 @@
                 condition_mix = condition_mix,
                 active_tol = active_tol,
                 reference_condition = reference_condition,
+                comparison_conditions = comparison_conditions,
                 condition_weight = condition_weight,
                 nlambda = nlambda,
                 lambda = lambda,
                 lambda_min_ratio = lambda_min_ratio,
-                nfolds = nfolds,
+                outer_nfolds = outer_nfolds,
+                inner_nfolds = inner_nfolds,
                 lambda_selection = lambda_selection,
                 seed = .condition_seed_for(gene, seed),
                 max_iter = max_iter,
@@ -114,11 +118,13 @@
     condition_mix,
     active_tol,
     reference_condition,
+    comparison_conditions,
     condition_weight,
     nlambda,
     lambda,
     lambda_min_ratio,
-    nfolds,
+    outer_nfolds,
+    inner_nfolds,
     lambda_selection,
     seed,
     max_iter,
@@ -225,6 +231,7 @@
         gene_data = gene_data,
         peak_data = peak_data,
         edges = edges,
+        condition = condition,
         scale = scale
     )
     edges <- prepared_design$edges
@@ -241,7 +248,7 @@
     }
 
     for (level in condition_levels) {
-        variance <- .condition_column_variance(
+        variance <- .condition_population_variance(
             X[condition == level, , drop = FALSE]
         )
         edge_mask[, level] <- edge_mask[, level] &
@@ -270,6 +277,17 @@
         stop(
             'reference_condition was not found for target ', target, ': ',
             reference_condition, '.'
+        )
+    }
+    comparison_conditions <- if (is.null(comparison_conditions)) {
+        condition_levels
+    } else {
+        unique(as.character(comparison_conditions))
+    }
+    if (length(comparison_conditions) < 2L ||
+        !all(comparison_conditions %in% condition_levels)) {
+        stop(
+            'comparison_conditions were not found for target ', target, '.'
         )
     }
     X_list <- lapply(condition_levels, function(level) {
@@ -303,24 +321,28 @@
         sort(unique(as.numeric(lambda)), decreasing = TRUE)
     }
 
-    cv <- .condition_crossfit_within_cell_type(
+    cv <- .condition_nested_crossfit_within_cell_type(
         X_list = X_raw_list,
         y_list = y_raw_list,
         lambda = lambda_path,
+        lambda_auto = is.null(lambda),
+        nlambda = nlambda,
+        lambda_min_ratio = lambda_min_ratio,
         alpha = alpha,
         condition_mix = condition_mix,
         condition_weight = condition_weight,
         coefficient_mask = edge_mask,
-        nfolds = nfolds,
-        standardize = scale,
+        outer_nfolds = outer_nfolds,
+        inner_nfolds = inner_nfolds,
         active_tol = active_tol,
         lambda_selection = lambda_selection,
+        comparison_conditions = comparison_conditions,
         seed = seed,
         max_iter = max_iter,
         tol_objective = tol_objective,
         tol_coef = tol_coef
     )
-    cv$cv_method <- 'within_cell_type_condition_stratified_cell_oof'
+    cv$cv_method <- 'nested_outer_condition_stratified_cell_oof'
     if (!is.null(cv$oof_fold)) {
         cv$oof_fold <- lapply(seq_along(cv$oof_fold), function(task) {
             stats::setNames(
@@ -340,6 +362,39 @@
         )
         names(cv$oof_prediction) <- condition_levels
     }
+    oof_projection_fields <- c(
+        'projection_condition_full_oof',
+        'projection_common_oof',
+        'projection_global_common_oof',
+        'oof_assignment_count'
+    )
+    for (field in oof_projection_fields) {
+        cv[[field]] <- lapply(
+            seq_along(cv[[field]]), function(task) {
+                stats::setNames(
+                    cv[[field]][[task]], cell_id_list[[task]]
+                )
+            }
+        )
+        names(cv[[field]]) <- condition_levels
+    }
+
+    full_cv <- .condition_select_lambda_nested(
+        X_list = X_raw_list,
+        y_list = y_raw_list,
+        lambda = lambda_path,
+        alpha = alpha,
+        condition_mix = condition_mix,
+        condition_weight = condition_weight,
+        coefficient_mask = edge_mask,
+        nfolds = inner_nfolds,
+        active_tol = active_tol,
+        lambda_selection = lambda_selection,
+        seed = .condition_seed_for('full-inner', seed),
+        max_iter = max_iter,
+        tol_objective = tol_objective,
+        tol_coef = tol_coef
+    )
 
     full_path <- .condition_fit_multitask_path(
         X_list = X_list,
@@ -353,7 +408,7 @@
         tol_objective = tol_objective,
         tol_coef = tol_coef
     )
-    selected_index <- match(cv$selected_lambda, full_path$lambda)
+    selected_index <- match(full_cv$selected_lambda, full_path$lambda)
     selected <- full_path$fits[[selected_index]]
     beta_selection <- selected$beta
     colnames(beta_selection) <- condition_levels
@@ -369,6 +424,24 @@
     )
     beta <- refit$beta
     rownames(beta) <- edges$edge_id
+    refit_stability <- .condition_refit_stability_diagnostics(
+        X_list = X_list,
+        y_list = y_list,
+        beta_selection = beta_selection,
+        estimability_mask = edge_mask,
+        ridge = refit$ridge,
+        comparison_conditions = comparison_conditions,
+        selection_lambda = selected$lambda,
+        alpha = alpha,
+        condition_mix = condition_mix,
+        active_tol = active_tol,
+        condition_weight = condition_weight,
+        bootstrap_replicates = 20L,
+        seed = .condition_seed_for('refit-stability', seed),
+        max_iter = max_iter,
+        tol_objective = tol_objective,
+        tol_coef = tol_coef
+    )
 
     pooled_tf_corr <- .condition_named_cor(
         gene_data[, unique(edges$tf), drop = FALSE], response_raw
@@ -432,15 +505,15 @@
         universal_gof$rsq <- NA_real_
     }
 
-    selected_cv_mean <- if (all(is.na(cv$cv_mean))) {
+    selected_cv_mean <- if (all(is.na(full_cv$cv_mean))) {
         NA_real_
     } else {
-        cv$cv_mean[[cv$selected_index]]
+        full_cv$cv_mean[[full_cv$selected_index]]
     }
-    selected_cv_se <- if (all(is.na(cv$cv_se))) {
+    selected_cv_se <- if (all(is.na(full_cv$cv_se))) {
         NA_real_
     } else {
-        cv$cv_se[[cv$selected_index]]
+        full_cv$cv_se[[full_cv$selected_index]]
     }
     diagnostics <- data.frame(
         target = target,
@@ -486,6 +559,14 @@
         ),
         response_center = prepared_design$response_center,
         response_scale = prepared_design$response_scale,
+        transform_policy = prepared_design$transform$transform_policy,
+        condition_transform_weights =
+            prepared_design$transform$condition_weights,
+        predictor_center_hash =
+            prepared_design$transform$predictor_center_hash,
+        predictor_scale_hash =
+            prepared_design$transform$predictor_scale_hash,
+        training_fold_only = TRUE,
         intercept = refit$intercept,
         condition_rsq = vapply(
             condition_gof, function(x) x$rsq[[1L]], numeric(1)
@@ -524,20 +605,45 @@
         } else {
             cv$fold_transform
         },
-        cv_effective_nfolds = if (is.null(cv$effective_nfolds)) {
-            NA_integer_
-        } else {
-            cv$effective_nfolds
-        },
+        outer_nfolds = cv$outer_nfolds,
+        inner_nfolds = cv$inner_nfolds,
+        cv_effective_nfolds = cv$outer_nfolds,
         cv_method = cv$cv_method,
         oof_model = cv$oof_model,
-        predictive_oof_available = TRUE,
+        projection_condition_full_oof =
+            unlist(
+                unname(cv$projection_condition_full_oof),
+                use.names = TRUE
+            ),
+        projection_common_oof =
+            unlist(unname(cv$projection_common_oof), use.names = TRUE),
+        projection_global_common_oof =
+            unlist(
+                unname(cv$projection_global_common_oof),
+                use.names = TRUE
+            ),
+        projection_origin = cv$projection_origin,
+        projection_used_for_penalty =
+            cv$projection_used_for_penalty &&
+            identical(candidate_screen, 'motif_domain'),
+        full_fit_projection_used_for_penalty =
+            cv$full_fit_projection_used_for_penalty,
+        fold_transform_policy = cv$fold_transform_policy,
+        oof_cell_coverage = mean(unlist(cv$oof_cell_coverage)),
+        oof_projection_available_fraction =
+            mean(unlist(cv$oof_projection_available_fraction)),
+        oof_assignment_count =
+            unlist(unname(cv$oof_assignment_count), use.names = TRUE),
+        outer_selected_lambda = cv$fold_selected_lambda,
+        comparison_conditions = comparison_conditions,
+        predictive_oof_available =
+            identical(candidate_screen, 'motif_domain'),
         oof_validation_level =
-            'within_cell_type_condition_stratified_cells',
+            'outer_condition_stratified_heldout_cells',
         selected_lambda = selected$lambda,
         lambda_path = lambda_path,
-        cv_mean = cv$cv_mean,
-        cv_se = cv$cv_se,
+        cv_mean = full_cv$cv_mean,
+        cv_se = full_cv$cv_se,
         alpha = alpha,
         condition_mix = condition_mix,
         condition_weight = condition_weight,
@@ -553,8 +659,10 @@
             coef_change = refit$coef_change,
             support_source = 'condition_sparse_selection',
             inactive_semantics = 'estimable_zero',
-            unavailable_semantics = 'NA'
-        )
+            unavailable_semantics = 'NA',
+            stability_status = refit_stability$status
+        ),
+        refit_stability = refit_stability
     )
 
     list(
@@ -567,7 +675,9 @@
     )
 }
 
-.condition_build_design <- function(response_raw, gene_data, peak_data, edges, scale) {
+.condition_build_design <- function(
+    response_raw, gene_data, peak_data, edges, condition, scale
+) {
     y <- as.numeric(response_raw[, 1L])
     tf_names <- unique(edges$tf)
     peak_names <- unique(edges$region)
@@ -577,7 +687,7 @@
     tf_edge <- tf_matrix[, match(edges$tf, colnames(tf_matrix)), drop = FALSE]
     peak_edge <- peak_matrix[, match(edges$region, colnames(peak_matrix)), drop = FALSE]
     X <- tf_edge * peak_edge
-    edge_variance <- .condition_column_variance(X)
+    edge_variance <- .condition_population_variance(X)
     keep <- is.finite(edge_variance) & edge_variance > .Machine$double.eps
     X <- X[, keep, drop = FALSE]
     edges <- edges[keep, , drop = FALSE]
@@ -587,19 +697,31 @@
     response_scale <- 1
     predictor_center <- rep(0, ncol(X))
     predictor_scale <- rep(1, ncol(X))
+    transform <- NULL
     if (scale) {
-        response_center <- mean(y)
-        response_scale <- stats::sd(y)
-        if (!is.finite(response_scale) ||
-            response_scale <= .Machine$double.eps) {
-            .condition_target_skip('Target response has zero variance.')
-        }
-        y <- (y - response_center) / response_scale
-        predictor_center <- as.numeric(Matrix::colMeans(X))
-        predictor_scale <- sqrt(.condition_column_variance(X))
-        X <- sweep(as.matrix(X), 2L, predictor_center, '-')
-        X <- sweep(X, 2L, predictor_scale, '/')
-        X <- Matrix::Matrix(X, sparse = FALSE)
+        levels_condition <- levels(condition)
+        X_list <- lapply(levels_condition, function(level) {
+            X_raw[condition == level, , drop = FALSE]
+        })
+        y_list <- lapply(levels_condition, function(level) {
+            y_raw[condition == level]
+        })
+        names(X_list) <- names(y_list) <- levels_condition
+        transform <- tryCatch(
+            .condition_build_balanced_transform(X_list, y_list),
+            error = function(error) {
+                .condition_target_skip(conditionMessage(error))
+            }
+        )
+        response_center <- transform$response_center
+        response_scale <- transform$response_scale
+        predictor_center <- transform$predictor_center
+        predictor_scale <- transform$predictor_scale
+        scaled <- .condition_apply_balanced_transform(
+            list(all = X_raw), list(all = y_raw), transform
+        )
+        X <- scaled$X[[1L]]
+        y <- scaled$y[[1L]]
     } else {
         response_variance <- stats::var(y)
         if (!is.finite(response_variance) ||
@@ -623,7 +745,8 @@
         predictor_center = predictor_center,
         predictor_scale = predictor_scale,
         response_center = response_center,
-        response_scale = response_scale
+        response_scale = response_scale,
+        transform = transform
     )
 }
 
@@ -702,21 +825,20 @@
     }
     condition <- droplevels(condition)
     squared <- numeric(ncol(x))
-    total_weight <- 0
+    n_contributing <- 0L
     for (level in levels(condition)) {
         keep <- condition == level
-        weight <- max(sum(keep) - 1L, 0L)
-        if (weight == 0L) {
+        if (sum(keep) <= 1L) {
             next
         }
         correlation <- .condition_named_cor(
             x[keep, , drop = FALSE], y[keep, , drop = FALSE]
         )
-        squared <- squared + weight * correlation^2
-        total_weight <- total_weight + weight
+        squared <- squared + correlation^2
+        n_contributing <- n_contributing + 1L
     }
-    score <- if (total_weight > 0) {
-        sqrt(squared / total_weight)
+    score <- if (n_contributing > 0L) {
+        sqrt(squared / n_contributing)
     } else {
         rep(0, ncol(x))
     }

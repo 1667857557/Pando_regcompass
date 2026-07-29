@@ -1,5 +1,5 @@
 Package: Pando
-Version: 1.4.0
+Version: 1.5.0
 Type: Package
 Title: Inferring regulomes from multi-modal single-cell genomics data
 Authors@R: person(given = "Jonas Simon",
@@ -11,9 +11,9 @@ Maintainer: Jonas Simon Fleck <jonas.fleck@bsse.ethz.ch>
 Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     regulatory relationships between TF-binding site pairs and target genes.
     Condition-aware models use one exact TF-peak-target candidate supergraph and
-    pooled single-cell effect scale. The default engine performs sparse-group
-    shared-support selection, permits condition-specific active edges and sign
-    reversals, and then applies a support-constrained hierarchical-ridge refit.
+    equal-condition within-condition variance scale. The default engine uses
+    nested condition-stratified cell cross-fitting, sparse-group shared-support
+    selection, and a support-constrained hierarchical-ridge refit.
     Standard Pando networks remain the compatibility surface. Complete shared,
     condition, deviation, contrast, estimability, activity, transformation,
     direction, and single-cell projection layers are exposed through a
