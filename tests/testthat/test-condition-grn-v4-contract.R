@@ -17,19 +17,21 @@ test_that('OOF folds are condition-stratified within one cell type', {
     for (task in seq_along(X)) {
         expect_equal(sort(unique(fit$oof_fold[[task]])), 1:2)
     }
-    for (fold in seq_len(fit$effective_nfolds)) {
-        training <- unlist(lapply(seq_along(X), function(task) {
-            as.numeric(X[[task]][fit$oof_fold[[task]] != fold, 1L])
-        }))
+    for (fold in seq_len(fit$outer_nfolds)) {
+        training_mean <- vapply(seq_along(X), function(task) {
+            mean(as.numeric(
+                X[[task]][fit$oof_fold[[task]] != fold, 1L]
+            ))
+        }, numeric(1))
         expect_equal(
             fit$fold_transform[[fold]]$predictor_center,
-            mean(training)
+            mean(training_mean)
         )
-        expect_true(fit$fold_transform[[fold]]$training_only)
+        expect_true(fit$fold_transform[[fold]]$training_fold_only)
     }
     expect_identical(
         fit$oof_model,
-        'condition_sparse_selection_plus_common_metric_refit'
+        'nested_selection_shared_baseline_refit_heldout_projection'
     )
 })
 

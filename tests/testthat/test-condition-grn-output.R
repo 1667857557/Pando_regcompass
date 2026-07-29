@@ -9,7 +9,7 @@ test_that('public inference exposes only the canonical functional contract', {
     expect_null(eval(defaults$cell_type))
     expect_identical(defaults$condition_mix, 0.5)
     expect_null(eval(defaults$reference_condition))
-    expect_identical(eval(defaults$condition_weight), c('equal', 'cell_count'))
+    expect_identical(eval(defaults$condition_weight), 'equal')
     expect_true(eval(defaults$scale))
 })
 
@@ -110,6 +110,11 @@ test_that('fit contracts retain reference contrasts and pooled transforms', {
                 predictor_scale = stats::setNames(3, edge_id),
                 response_center = 4,
                 response_scale = 5,
+                transform_policy =
+                    'equal_condition_center_equal_condition_within_variance_v1',
+                predictor_center_hash = 'center-hash',
+                predictor_scale_hash = 'scale-hash',
+                training_fold_only = TRUE,
                 intercept = c(Control = 0, Drug = 0),
                 condition_rsq = c(Control = 0.4, Drug = 0.5),
                 condition_rsq_train = c(Control = 0.4, Drug = 0.5),
@@ -117,18 +122,40 @@ test_that('fit contracts retain reference contrasts and pooled transforms', {
                 condition_rmse_oof = c(Control = 1, Drug = 1.2),
                 target_rsq_oof_pooled = 0.25,
                 cv_method =
-                    'within_cell_type_condition_stratified_cell_oof',
+                    'nested_outer_condition_stratified_cell_oof',
                 oof_model =
-                    'condition_sparse_selection_plus_common_metric_refit',
+                    'nested_selection_shared_baseline_refit_heldout_projection',
                 predictive_oof_available = TRUE,
                 oof_validation_level =
-                    'within_cell_type_condition_stratified_cells',
+                    'outer_condition_stratified_heldout_cells',
+                projection_common_oof = c(
+                    c1 = 0.1, c2 = 0.2, c3 = 0.3, c4 = 0.4
+                ),
+                projection_condition_full_oof = c(
+                    c1 = 0.1, c2 = 0.2, c3 = 0.3, c4 = 0.4
+                ),
+                projection_global_common_oof = c(
+                    c1 = 0.1, c2 = 0.2, c3 = 0.3, c4 = 0.4
+                ),
+                projection_origin =
+                    'outer_condition_stratified_cell_oof',
+                projection_used_for_penalty = TRUE,
+                full_fit_projection_used_for_penalty = FALSE,
+                fold_transform_policy =
+                    'equal_condition_center_equal_condition_within_variance_v1',
+                oof_cell_coverage = 1,
+                oof_projection_available_fraction = 1,
+                oof_assignment_count = c(
+                    c1 = 1L, c2 = 1L, c3 = 1L, c4 = 1L
+                ),
                 oof_fold = list(
                     Control = c(c1 = 1L, c2 = 2L),
                     Drug = c(c3 = 1L, c4 = 2L)
                 ),
                 cv_fold_transform = list(),
                 cv_effective_nfolds = 2L,
+                outer_nfolds = 2L,
+                inner_nfolds = 2L,
                 selected_lambda = 0.1,
                 lambda_path = c(1, 0.1),
                 cv_mean = c(2, 1),
@@ -137,7 +164,8 @@ test_that('fit contracts retain reference contrasts and pooled transforms', {
                 condition_mix = 0.5,
                 condition_weight = 'equal',
                 active_tol = 1e-8,
-                refit = list(method = 'test')
+                refit = list(method = 'test'),
+                refit_stability = list(edge = data.frame(), status = 'test')
             )
         )
     }
@@ -152,13 +180,14 @@ test_that('fit contracts retain reference contrasts and pooled transforms', {
         cell_type_col = 'cell_type',
         condition_col = 'condition',
         reference_condition = 'Control',
-        candidate_screen = 'pooled_within_condition',
+        comparison_conditions = c('Control', 'Drug'),
+        candidate_screen = 'motif_domain',
         scale = TRUE,
         fit_engine = 'condition_sparse_within_cell_type_oof_refit'
     )
 
     expect_s3_class(fit, 'ConditionGRNFit')
-    expect_identical(fit$schema_version, 'pando_condition_grn_fit_v4')
+    expect_identical(fit$schema_version, 'pando_condition_grn_fit_v5')
     expect_equal(fit$contrast[, 'Control'], 0)
     expect_equal(fit$contrast[, 'Drug'], 0.5)
     expect_equal(fit$predictor_transform$center, 2)

@@ -177,3 +177,180 @@
         converged = converged
     )
 }
+
+.condition_refit_stability_diagnostics <- function(
+    X_list,
+    y_list,
+    beta_selection,
+    estimability_mask,
+    ridge,
+    comparison_conditions,
+    selection_lambda,
+    alpha,
+    condition_mix,
+    active_tol = 1e-8,
+    condition_weight = 'equal',
+    bootstrap_replicates = 20L,
+    seed = 12345L,
+    max_iter = 5000L,
+    tol_objective = 1e-7,
+    tol_coef = 1e-6
+) {
+    conditions <- names(X_list)
+    comparison_conditions <- unique(as.character(comparison_conditions))
+    if (length(comparison_conditions) != 2L ||
+        !all(comparison_conditions %in% conditions)) {
+        return(list(
+            edge = data.frame(),
+            status = 'requires_exactly_two_comparison_conditions'
+        ))
+    }
+    pair_index <- match(comparison_conditions, conditions)
+    ridge_grid <- ridge * c(0.1, 1, 10)
+    ridge_fits <- lapply(ridge_grid, function(value) {
+        .condition_refit_shared_baseline(
+            X_list = X_list,
+            y_list = y_list,
+            beta_selection = beta_selection,
+            estimability_mask = estimability_mask,
+            ridge = value,
+            active_tol = active_tol,
+            condition_weight = condition_weight
+        )
+    })
+    unshrunk <- .condition_refit_shared_baseline(
+        X_list = X_list,
+        y_list = y_list,
+        beta_selection = beta_selection,
+        estimability_mask = estimability_mask,
+        ridge = max(ridge * 1e-6, sqrt(.Machine$double.eps)),
+        active_tol = active_tol,
+        condition_weight = condition_weight
+    )
+    contrast_matrix <- vapply(ridge_fits, function(fit) {
+        fit$beta_condition[, pair_index[[2L]]] -
+            fit$beta_condition[, pair_index[[1L]]]
+    }, numeric(nrow(beta_selection)))
+    if (is.null(dim(contrast_matrix))) {
+        contrast_matrix <- matrix(
+            contrast_matrix, nrow = nrow(beta_selection)
+        )
+    }
+    main_contrast <- contrast_matrix[, 2L]
+    unshrunk_contrast <-
+        unshrunk$beta_condition[, pair_index[[2L]]] -
+        unshrunk$beta_condition[, pair_index[[1L]]]
+    contrast_retention <- rep(NA_real_, length(main_contrast))
+    retained <- is.finite(unshrunk_contrast) &
+        abs(unshrunk_contrast) > active_tol
+    contrast_retention[retained] <-
+        main_contrast[retained] / unshrunk_contrast[retained]
+    sign_stable <- apply(contrast_matrix, 1L, function(value) {
+        value <- sign(value[is.finite(value) & abs(value) > active_tol])
+        length(value) > 0L && length(unique(value)) == 1L
+    })
+    sensitivity_range <- apply(
+        contrast_matrix, 1L, function(value) {
+            value <- value[is.finite(value)]
+            if (length(value)) diff(range(value)) else NA_real_
+        }
+    )
+    variance_by_condition <- vapply(
+        X_list, .condition_population_variance,
+        numeric(nrow(beta_selection))
+    )
+    variance_ratio <- apply(
+        variance_by_condition, 1L, function(value) {
+            value <- value[is.finite(value) & value > .Machine$double.eps]
+            if (length(value) >= 2L) max(value) / min(value) else NA_real_
+        }
+    )
+    bootstrap_replicates <- as.integer(bootstrap_replicates)
+    selected_count <- matrix(
+        0, nrow(beta_selection), ncol(beta_selection),
+        dimnames = dimnames(beta_selection)
+    )
+    successful <- 0L
+    set.seed(seed)
+    for (iteration in seq_len(bootstrap_replicates)) {
+        index <- lapply(X_list, function(x) {
+            sample.int(nrow(x), nrow(x), replace = TRUE)
+        })
+        boot_X <- lapply(seq_along(X_list), function(task) {
+            X_list[[task]][index[[task]], , drop = FALSE]
+        })
+        boot_y <- lapply(seq_along(y_list), function(task) {
+            y_list[[task]][index[[task]]]
+        })
+        names(boot_X) <- names(X_list)
+        names(boot_y) <- names(y_list)
+        boot <- tryCatch({
+            boot_selection <- .condition_fit_multitask_path(
+                X_list = boot_X,
+                y_list = boot_y,
+                lambda = selection_lambda,
+                alpha = alpha,
+                condition_mix = condition_mix,
+                condition_weight = condition_weight,
+                coefficient_mask = estimability_mask,
+                max_iter = max_iter,
+                tol_objective = tol_objective,
+                tol_coef = tol_coef
+            )$fits[[1L]]
+            .condition_refit_shared_baseline(
+                X_list = boot_X,
+                y_list = boot_y,
+                beta_selection = boot_selection$beta,
+                estimability_mask = estimability_mask,
+                ridge = ridge,
+                active_tol = active_tol,
+                condition_weight = condition_weight
+            )
+        },
+            error = function(error) NULL
+        )
+        if (is.null(boot)) next
+        selected_count <- selected_count +
+            (is.finite(boot$beta_condition) &
+             abs(boot$beta_condition) > active_tol)
+        successful <- successful + 1L
+    }
+    bootstrap_frequency <- if (successful) {
+        selected_count / successful
+    } else {
+        selected_count * NA_real_
+    }
+    pair_frequency <- apply(
+        bootstrap_frequency[, pair_index, drop = FALSE],
+        1L, min, na.rm = TRUE
+    )
+    pair_frequency[!is.finite(pair_frequency)] <- NA_real_
+    list(
+        edge = data.frame(
+            edge_id = rownames(beta_selection),
+            condition_a = comparison_conditions[[1L]],
+            condition_b = comparison_conditions[[2L]],
+            contrast_retention = contrast_retention,
+            contrast_sign_stable = sign_stable,
+            predictor_variance_ratio = variance_ratio,
+            ridge_sensitivity_range = sensitivity_range,
+            bootstrap_selection_frequency = pair_frequency,
+            stringsAsFactors = FALSE
+        ),
+        ridge_grid = ridge_grid,
+        bootstrap_replicates_requested = bootstrap_replicates,
+        bootstrap_replicates_successful = successful,
+        bootstrap_definition =
+            paste(
+                'within-condition cell bootstrap with sparse support',
+                'reselection at the selected full-data lambda'
+            ),
+        unshrunk_definition =
+            'same selected support with near-zero shared-baseline ridge',
+        status = if (successful == bootstrap_replicates) {
+            'complete'
+        } else {
+            'partial_bootstrap'
+        }
+    )
+}

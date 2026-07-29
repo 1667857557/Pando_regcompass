@@ -29,12 +29,14 @@ condition_object <- infer_condition_grn(
   condition_col = "condition",
   genes = metabolic_genes,
   network_name = "condition_grn",
-  candidate_screen = "pooled_within_condition",
+  candidate_screen = "motif_domain",
   alpha = 0.5,
   condition_mix = 0.5,
   condition_weight = "equal",
   reference_condition = "Control",
-  nfolds = 5,
+  comparison_conditions = c("Control", "Drug"),
+  outer_nfolds = 5,
+  inner_nfolds = 5,
   lambda_selection = "lambda.1se",
   scale = TRUE,
   seed = 12345
@@ -47,11 +49,12 @@ Pando forms each candidate interaction on paired single cells:
 x_{i,e}=\mathrm{RNA}_{i,TF(e)}\mathrm{ATAC}_{i,peak(e)}.
 \]
 
-Every condition uses the same motif/domain edge dictionary and the same pooled
-edge and target transforms. `pooled_within_condition` scores each candidate by
-the weighted root-mean-square of its within-condition correlations. This
-removes pure between-condition mean shifts without cancelling a positive effect
-in one condition against a negative effect in another.
+Every condition uses the same motif/domain edge dictionary. Within each outer
+fold, centers are the mean of condition means and scales are the square root of
+the mean condition-specific population variances. These parameters and lambda
+selection are learned only from outer-training cells. The response-dependent
+`pooled_within_condition` screen is retained only as a sensitivity mode and its
+projection is not eligible for RegCompass penalties.
 
 Sparse multi-task selection may choose different active edges in each
 condition. The common-scale refit keeps an inactive but estimable edge at exact
@@ -84,7 +87,7 @@ tf  target  region  term  estimate  corr
 contrast. An unavailable edge has `estimate = NA`; an estimable inactive edge
 has `estimate = 0`.
 
-## Lossless v3 contract
+## Lossless v5 contract
 
 ```{r contract}
 fit <- condition_grn_fit(
@@ -137,7 +140,10 @@ projection <- project_condition_grn_cells(
   scale = "std",
   output = "gene_score",
   targets = metabolic_genes,
-  nonestimable = "propagate"
+  nonestimable = "propagate",
+  support_policy = "pairwise_common",
+  comparison_conditions = c("Control", "Drug"),
+  origin = "oof"
 )
 
 projection$gene_score
@@ -149,19 +155,22 @@ projection$aggregation_contract
 For a cell in condition \(c\), Pando computes
 
 \[
-R_{i,g,c}=\sum_{e\rightarrow g}z_{i,e}\beta_{e,c}
+R^{OOF}_{i,g,c}=\sum_{e\rightarrow g}z^{(-k)}_{i,e}\beta^{(-k)}_{e,c}
 \]
 
-with the exact transforms stored during fitting. The score is signed. If any
+where cell \(i\) belongs to held-out outer fold \(k\). The score is signed. If any
 candidate edge needed by a target is unavailable in that condition, the target
 score is `NA`; it is never silently converted to zero.
 The projection also verifies the exact fitted cell IDs, RNA/ATAC assays and
 condition labels before calculating scores.
 
 RegCompass should construct metacells only after this projection and aggregate
-each target column by the arithmetic mean within
-cell type × condition × sample/donor. It must not multiply aggregated TF and
-peak values, recompute TF-IDF or pooled transforms, refit Pando coefficients, or
+each target column by the arithmetic mean within condition × broad cell type.
+It must not multiply aggregated TF and peak values, recompute TF-IDF or
+equal-condition transforms, refit Pando coefficients, or
 replace `NA` with zero. Because every condition projection has identical target
 columns and scale, metacells from different conditions remain directly
 comparable for the same GEM reaction.
+
+`origin = "full_fit"` is available for interpreting the final sub-GRN. It is
+explicitly marked ineligible for penalty construction.

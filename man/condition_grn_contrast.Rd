@@ -13,7 +13,7 @@ condition_grn_contrast(
 )
 }
 \arguments{
-\item{fit}{A \code{pando_condition_grn_fit_v4} object.}
+\item{fit}{A \code{pando_condition_grn_fit_v5} object.}
 \item{condition_1}{Baseline condition label.}
 \item{condition_2}{Comparison condition label.}
 \item{scale}{Standardized or raw coefficient scale.}

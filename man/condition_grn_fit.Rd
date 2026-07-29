@@ -22,14 +22,15 @@ condition_grn_fit(object, network_name = NULL, cell_type = NULL)
 One \code{ConditionGRNFit}, or a named list when multiple fits match.
 }
 \description{
-Returns the lossless \code{pando_condition_grn_fit_v4} contract while the
+Returns the lossless \code{pando_condition_grn_fit_v5} contract while the
 condition and shared results remain available as standard Pando networks.
 }
 \details{
 The contract contains the shared candidate dictionary; selection, absolute
 condition, shared and deviation coefficient layers; standardized and raw
 scales; topology, estimability and activity masks; absolute and deviation
-directions; pooled transforms; the fitted cell and assay identifiers; target
+directions; equal-condition transforms; outer-heldout projections; fitted cell
+and assay identifiers; target
 diagnostics; pairwise comparison semantics; and the single-cell projection
 contract.
 

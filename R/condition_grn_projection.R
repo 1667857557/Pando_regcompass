@@ -76,14 +76,14 @@
 #'
 #' @param object The `GRNData` object containing the paired RNA and ATAC cells
 #' used for inference.
-#' @param fit Optional `pando_condition_grn_fit_v4` object. When omitted it is
+#' @param fit Optional `pando_condition_grn_fit_v5` object. When omitted it is
 #' retrieved from `object`.
 #' @param network_name,cell_type Optional fit filters used when `fit` is
 #' omitted.
 #' @param component Project absolute condition effects, the shared effect, or
 #' condition deviations.
-#' @param scale Return scores in pooled standardized target units or raw target
-#' units.
+#' @param scale Return scores in equal-condition standardized target units or
+#' raw target units.
 #' @param output Return target gene scores or also retain cell-by-edge
 #' contributions.
 #' @param targets Optional target gene subset.
@@ -92,6 +92,10 @@
 #' @param support_policy Edge support used for projection. Pairwise comparisons
 #' use the intersection of estimable edges in two conditions; omnibus
 #' comparisons use the global intersection.
+#' @param origin Use outer held-out projections for downstream analysis or
+#' full-fit coefficients for network interpretation only.
+#' @param diagnostic_only Must be `TRUE` to request condition-specific or
+#' strict support, which is not a primary cross-condition comparison.
 #' @param comparison_conditions Two fitted conditions required by
 #' `pairwise_common` when more than two conditions were fitted.
 #' @param active_tol Minimum absolute standardized effect recorded as active in
@@ -111,9 +115,11 @@ project_condition_grn_cells <- function(
     targets = NULL,
     nonestimable = c('propagate', 'error'),
     support_policy = c(
-        'strict', 'condition_estimable', 'global_common', 'pairwise_common'
+        'pairwise_common', 'global_common', 'condition_estimable', 'strict'
     ),
     comparison_conditions = NULL,
+    origin = c('oof', 'full_fit'),
+    diagnostic_only = FALSE,
     active_tol = if (is.null(fit)) 1e-8 else fit$active_tol
 ) {
     component <- match.arg(component)
@@ -121,12 +127,20 @@ project_condition_grn_cells <- function(
     output <- match.arg(output)
     nonestimable <- match.arg(nonestimable)
     support_policy <- match.arg(support_policy)
+    origin <- match.arg(origin)
+    if (support_policy %in% c('condition_estimable', 'strict') &&
+        !isTRUE(diagnostic_only)) {
+        stop(
+            'condition_estimable and strict are diagnostic-only support ',
+            'policies; set diagnostic_only = TRUE explicitly.'
+        )
+    }
     if (is.null(fit)) {
         fit <- condition_grn_fit(
             object, network_name = network_name, cell_type = cell_type
         )
     }
-    .condition_require_v4(fit)
+    .condition_require_v5(fit)
     if (!inherits(object, 'GRNData')) {
         stop('object must be a GRNData object.')
     }
@@ -141,6 +155,95 @@ project_condition_grn_cells <- function(
         }
     } else {
         targets <- unique(fit$edge_table$target)
+    }
+    if (identical(origin, 'oof')) {
+        if (!identical(component, 'condition')) {
+            stop('OOF penalty projections are defined only for component = "condition".')
+        }
+        if (!identical(fit$projection_origin,
+                       'outer_condition_stratified_cell_oof') ||
+            !isTRUE(fit$projection_used_for_penalty) ||
+            !identical(fit$full_fit_projection_used_for_penalty, FALSE)) {
+            stop('The fit does not contain an eligible outer-heldout projection.')
+        }
+        if (support_policy == 'pairwise_common' &&
+            is.null(comparison_conditions)) {
+            comparison_conditions <- fit$comparison_conditions
+        }
+        full_projection <- project_condition_grn_cells(
+            object = object,
+            fit = fit,
+            component = component,
+            scale = scale,
+            output = 'gene_score',
+            targets = targets,
+            nonestimable = nonestimable,
+            support_policy = support_policy,
+            comparison_conditions = comparison_conditions,
+            origin = 'full_fit',
+            diagnostic_only = diagnostic_only,
+            active_tol = active_tol
+        )
+        source <- if (support_policy == 'global_common') {
+            fit$projection_global_common_oof
+        } else if (support_policy == 'pairwise_common') {
+            requested <- unique(as.character(comparison_conditions))
+            fitted <- unique(as.character(fit$comparison_conditions))
+            if (!setequal(requested, fitted)) {
+                stop(
+                    'The requested pair differs from the pair used during ',
+                    'outer cross-fitting; refit with those comparison_conditions.'
+                )
+            }
+            fit$projection_common_oof
+        } else {
+            fit$projection_condition_full_oof
+        }
+        cells <- rownames(full_projection$gene_score)
+        if (is.null(source) ||
+            !all(cells %in% rownames(source)) ||
+            !all(targets %in% colnames(source))) {
+            stop('Stored OOF projection is incomplete for the requested cells or targets.')
+        }
+        score <- source[cells, targets, drop = FALSE]
+        if (scale == 'raw') {
+            response_scale <- fit$response_transform$scale[
+                match(targets, fit$response_transform$target)
+            ]
+            score <- sweep(score, 2L, response_scale, '*')
+        }
+        full_projection$schema_version <-
+            'pando_condition_grn_projection_v3'
+        full_projection$gene_score <- score
+        full_projection$gene_direction <- sign(score)
+        full_projection$edge_contribution <- NULL
+        full_projection$projection_origin <-
+            'outer_condition_stratified_cell_oof'
+        primary_common_support <- support_policy %in% c(
+            'pairwise_common', 'global_common'
+        )
+        full_projection$projection_used_for_penalty <-
+            primary_common_support && !isTRUE(diagnostic_only)
+        full_projection$full_fit_projection_used_for_penalty <- FALSE
+        full_projection$gene_score_available <- is.finite(score)
+        full_projection$score_comparability_class <-
+            if (primary_common_support) {
+                'primary_common_support_comparable'
+            } else {
+                'exploratory_condition_full_not_strictly_comparable'
+            }
+        full_projection$projection_role <- if (
+            isTRUE(full_projection$projection_used_for_penalty)
+        ) {
+            'primary_penalty'
+        } else {
+            'exploratory_only'
+        }
+        full_projection$aggregation_contract$projection_origin <-
+            'outer_condition_stratified_cell_oof'
+        full_projection$aggregation_contract$projection_role <-
+            full_projection$projection_role
+        return(full_projection)
     }
 
     metadata <- object@data@meta.data
@@ -395,6 +498,9 @@ project_condition_grn_cells <- function(
             scale = scale,
             support_policy = support_policy,
             comparison_conditions = comparison_conditions,
+            projection_origin = 'full_data_fit_interpretation_only',
+            projection_used_for_penalty = FALSE,
+            full_fit_projection_used_for_penalty = FALSE,
             cell_metadata = cell_metadata,
             gene_score = gene_score,
             gene_direction = sign(gene_score),
@@ -488,6 +594,13 @@ aggregate_condition_grn_projection <- function(
         list(
             schema_version = 'pando_condition_grn_group_projection_v1',
             source_projection = projection,
+            projection_origin = projection$projection_origin,
+            projection_used_for_penalty =
+                isTRUE(projection$projection_used_for_penalty),
+            full_fit_projection_used_for_penalty =
+                isTRUE(projection$full_fit_projection_used_for_penalty),
+            score_comparability_class =
+                projection$score_comparability_class,
             group_col = group_col,
             group_metadata = group_metadata,
             gene_score = score,

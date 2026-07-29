@@ -38,10 +38,12 @@
     alpha,
     condition_mix,
     reference_condition,
+    comparison_conditions,
     fit_contract_key,
     lambda_selection,
     nlambda,
-    nfolds,
+    outer_nfolds,
+    inner_nfolds,
     oof_scheme,
     scale,
     active_tol,
@@ -70,6 +72,7 @@
         condition_col = condition_col,
         condition_levels = condition_levels,
         reference_condition = reference_condition,
+        comparison_conditions = comparison_conditions,
         fit_contract_key = fit_contract_key,
         candidate_screen = candidate_screen,
         peak_to_gene_method = peak_to_gene_method,
@@ -78,7 +81,8 @@
         condition_mix = condition_mix,
         lambda_selection = lambda_selection,
         nlambda = nlambda,
-        nfolds = nfolds,
+        outer_nfolds = outer_nfolds,
+        inner_nfolds = inner_nfolds,
         oof_scheme = oof_scheme,
         scale = scale,
         active_tol = active_tol,
@@ -126,6 +130,7 @@
     cell_type_col,
     condition_col,
     reference_condition,
+    comparison_conditions,
     candidate_screen,
     scale,
     fit_engine
@@ -221,18 +226,71 @@
     comparison_mask <- .condition_reference_comparison_mask(
         estimability_mask, reference_condition
     )
+    oof_cells <- names(contracts[[1L]]$projection_common_oof)
+    if (is.null(oof_cells) || anyDuplicated(oof_cells)) {
+        stop('OOF projection cells must be unique and named.')
+    }
+    bind_oof_projection <- function(field) {
+        out <- matrix(
+            NA_real_,
+            nrow = length(oof_cells),
+            ncol = length(contracts),
+            dimnames = list(oof_cells, response_transform$target)
+        )
+        for (i in seq_along(contracts)) {
+            value <- contracts[[i]][[field]]
+            if (is.null(names(value)) ||
+                !setequal(names(value), oof_cells)) {
+                stop('OOF projection cells differ across target contracts.')
+            }
+            out[, i] <- as.numeric(value[oof_cells])
+        }
+        out
+    }
+    projection_common_oof <- bind_oof_projection(
+        'projection_common_oof'
+    )
+    projection_condition_full_oof <- bind_oof_projection(
+        'projection_condition_full_oof'
+    )
+    projection_global_common_oof <- bind_oof_projection(
+        'projection_global_common_oof'
+    )
+    oof_assignment_count <- bind_oof_projection('oof_assignment_count')
+    if (any(oof_assignment_count != 1L)) {
+        stop('Every target and cell must have exactly one outer-fold assignment.')
+    }
+    target_transform_contract <- data.frame(
+        target = response_transform$target,
+        transform_policy = vapply(
+            contracts, `[[`, character(1), 'transform_policy'
+        ),
+        predictor_center_hash = vapply(
+            contracts, `[[`, character(1), 'predictor_center_hash'
+        ),
+        predictor_scale_hash = vapply(
+            contracts, `[[`, character(1), 'predictor_scale_hash'
+        ),
+        training_fold_only = vapply(
+            contracts, `[[`, logical(1), 'training_fold_only'
+        ),
+        stringsAsFactors = FALSE
+    )
     structure(
         list(
-            schema_version = 'pando_condition_grn_fit_v4',
+            schema_version = 'pando_condition_grn_fit_v5',
+            contract_version = 'condition_oof_comparability_v1',
             network_name = network_name,
             cell_type = cell_type,
             cell_type_col = cell_type_col,
             condition_col = condition_col,
             condition_levels = colnames(beta),
             reference_condition = reference_condition,
+            comparison_conditions = comparison_conditions,
             fit_engine = fit_engine,
             candidate_screen = candidate_screen,
-            coefficient_scale = 'pooled_cell_type_standardized_refit',
+            coefficient_scale =
+                'equal_condition_within_variance_standardized_refit',
             edge_table = edge_table,
             beta = beta,
             beta_selection = beta_selection,
@@ -263,6 +321,7 @@
                 stringsAsFactors = FALSE
             ),
             response_transform = response_transform,
+            target_transform_contract = target_transform_contract,
             intercept = intercept,
             target_fit = target_fit,
             target_rsq = condition_rsq_train,
@@ -276,6 +335,36 @@
             oof_model = oof_model,
             predictive_oof_available = predictive_oof_available,
             oof_validation_level = oof_validation_level,
+            projection_common_oof = projection_common_oof,
+            projection_condition_full_oof =
+                projection_condition_full_oof,
+            projection_global_common_oof =
+                projection_global_common_oof,
+            projection_origin =
+                'outer_condition_stratified_cell_oof',
+            projection_used_for_penalty = all(vapply(
+                contracts,
+                `[[`,
+                logical(1),
+                'projection_used_for_penalty'
+            )),
+            full_fit_projection_used_for_penalty = FALSE,
+            oof_cell_coverage = stats::setNames(
+                vapply(contracts, `[[`, numeric(1), 'oof_cell_coverage'),
+                response_transform$target
+            ),
+            oof_projection_available_fraction = stats::setNames(
+                vapply(
+                    contracts,
+                    `[[`,
+                    numeric(1),
+                    'oof_projection_available_fraction'
+                ),
+                response_transform$target
+            ),
+            oof_assignment_count = oof_assignment_count,
+            fold_transform_policy =
+                'equal_condition_center_equal_condition_within_variance_v1',
             oof_fold = stats::setNames(
                 lapply(contracts, `[[`, 'oof_fold'),
                 response_transform$target
@@ -288,6 +377,14 @@
                 vapply(contracts, function(x) {
                     as.integer(x$cv_effective_nfolds)
                 }, integer(1)),
+                response_transform$target
+            ),
+            outer_nfolds = stats::setNames(
+                vapply(contracts, `[[`, integer(1), 'outer_nfolds'),
+                response_transform$target
+            ),
+            inner_nfolds = stats::setNames(
+                vapply(contracts, `[[`, integer(1), 'inner_nfolds'),
                 response_transform$target
             ),
             lambda_path = stats::setNames(
@@ -303,6 +400,19 @@
             refit = stats::setNames(
                 lapply(contracts, `[[`, 'refit'),
                 response_transform$target
+            ),
+            refit_stability = stats::setNames(
+                lapply(contracts, `[[`, 'refit_stability'),
+                response_transform$target
+            ),
+            refit_stability_edge = do.call(
+                rbind,
+                lapply(contracts, function(x) {
+                    value <- x$refit_stability$edge
+                    if (!nrow(value)) return(value)
+                    value$target <- x$target
+                    value
+                })
             ),
             condition_weight = contracts[[1L]]$condition_weight,
             active_tol = contracts[[1L]]$active_tol,
@@ -323,18 +433,32 @@
             normalization_contract = list(
                 input = 'paired_single_cells',
                 predictor = 'RNA_TF * ATAC_peak',
-                predictor_transform = 'one pooled center and scale per edge',
-                response_transform = 'one pooled center and scale per target',
+                predictor_transform =
+                    'equal-condition center and within-condition variance',
+                response_transform =
+                    'equal-condition center and within-condition variance',
+                condition_weights = 'exactly 1/K',
+                variance_denominator = 'population_for_duplication_invariance',
                 condition_specific_renormalization = FALSE
             ),
             projection_contract = list(
                 function_name = 'project_condition_grn_cells',
-                score = 'sum(z_edge * beta_condition) by target and observed condition',
+                score =
+                    'outer-heldout sum(z_edge * beta_condition) by target',
+                projection_origin =
+                    'outer_condition_stratified_cell_oof',
+                projection_used_for_penalty =
+                    all(predictive_oof_available),
+                full_fit_projection_used_for_penalty = FALSE,
                 signed = TRUE,
                 support_policy = c(
-                    'strict', 'condition_estimable',
-                    'global_common', 'pairwise_common'
+                    'pairwise_common', 'global_common',
+                    'condition_estimable_diagnostic',
+                    'strict_diagnostic'
                 ),
+                primary_support_policy =
+                    'pairwise_common or global_common only',
+                condition_full_role = 'exploratory_only',
                 nonestimable = 'NA is unavailable; zero is estimable inactive',
                 metacell_aggregation =
                     'mean of cell-first TF-times-ATAC projections',
@@ -377,7 +501,7 @@
 #' @return One ConditionGRNFit object when exactly one fit matches, otherwise
 #' a named list of matching ConditionGRNFit objects. Each fit contains the
 #' exact edge dictionary, condition coefficient matrix, reference contrasts,
-#' edge-by-condition estimability and activity masks, pooled transformations,
+#' edge-by-condition estimability and activity masks, equal-condition transformations,
 #' the fitted cell/assay contract, target-specific lambda selection,
 #' condition-level fit quality, and reproducibility metadata.
 #' @export
@@ -409,17 +533,17 @@ condition_grn_fit.GRNData <- function(
     if (length(fits) == 1L) fits[[1L]] else fits
 }
 
-.condition_require_v4 <- function(fit) {
+.condition_require_v5 <- function(fit) {
     if (!inherits(fit, 'ConditionGRNFit') ||
-        !identical(fit$schema_version, 'pando_condition_grn_fit_v4')) {
-        stop('fit must be a pando_condition_grn_fit_v4 ConditionGRNFit object.')
+        !identical(fit$schema_version, 'pando_condition_grn_fit_v5')) {
+        stop('fit must be a pando_condition_grn_fit_v5 ConditionGRNFit object.')
     }
     invisible(TRUE)
 }
 
 #' Compare two condition-specific sub-GRNs
 #'
-#' @param fit A `pando_condition_grn_fit_v4` object.
+#' @param fit A `pando_condition_grn_fit_v5` object.
 #' @param condition_1 Baseline condition label.
 #' @param condition_2 Comparison condition label.
 #' @param scale Coefficient scale, standardized or raw assay units.
@@ -435,7 +559,7 @@ condition_grn_contrast <- function(
     scale = c('std', 'raw'),
     active_tol = fit$active_tol
 ) {
-    .condition_require_v4(fit)
+    .condition_require_v5(fit)
     scale <- match.arg(scale)
     conditions <- c(as.character(condition_1), as.character(condition_2))
     if (length(unique(conditions)) != 2L ||
@@ -483,7 +607,7 @@ condition_grn_contrast <- function(
 
 #' Extract one active condition sub-GRN
 #'
-#' @param fit A `pando_condition_grn_fit_v4` object.
+#' @param fit A `pando_condition_grn_fit_v5` object.
 #' @param condition Fitted condition label.
 #' @param scale Coefficient scale, standardized or raw assay units.
 #' @param active_tol Minimum absolute standardized effect retained as active,
@@ -497,7 +621,7 @@ condition_grn_subgraph <- function(
     scale = c('std', 'raw'),
     active_tol = fit$active_tol
 ) {
-    .condition_require_v4(fit)
+    .condition_require_v5(fit)
     scale <- match.arg(scale)
     condition <- as.character(condition)
     if (length(condition) != 1L || !condition %in% fit$condition_levels) {

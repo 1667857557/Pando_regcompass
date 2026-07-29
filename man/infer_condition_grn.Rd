@@ -26,11 +26,13 @@ infer_condition_grn(object, ...)
   alpha = 0.5,
   condition_mix = 0.5,
   reference_condition = NULL,
-  condition_weight = c("equal", "cell_count"),
+  comparison_conditions = NULL,
+  condition_weight = "equal",
   nlambda = 50L,
   lambda = NULL,
   lambda_min_ratio = NULL,
-  nfolds = 5L,
+  outer_nfolds = 5L,
+  inner_nfolds = 5L,
   lambda_selection = c("lambda.1se", "lambda.min"),
   min_cells_per_condition = 50L,
   small_condition_action = c("skip_cell_type", "drop_condition", "error"),
@@ -67,18 +69,23 @@ within-condition sensitivity screen.}
 \item{condition_mix}{Mixing between shared row support and
 condition-specific element support. Must be greater than zero.}
 \item{reference_condition}{Condition used for the stored compatibility contrast.}
-\item{condition_weight}{Equal-condition or cell-count loss weighting.}
+\item{comparison_conditions}{Conditions defining the primary common-support
+comparison.}
+\item{condition_weight}{Must be \code{equal}; cells do not define condition weights.}
 \item{nlambda}{Number of generated lambda values.}
 \item{lambda}{Optional fixed lambda or lambda path.}
 \item{lambda_min_ratio}{Smallest lambda relative to the maximum.}
-\item{nfolds}{Number of condition-stratified cell folds constructed within
-each independently fitted cell type.}
+\item{outer_nfolds}{Outer condition-stratified folds used only for held-out
+cell projections.}
+\item{inner_nfolds}{Inner folds used for lambda selection inside each outer
+training set.}
 \item{lambda_selection}{Use \code{lambda.1se} or \code{lambda.min}.}
 \item{min_cells_per_condition}{Minimum single cells per condition. Must be no
-smaller than \code{nfolds}.}
+smaller than \code{outer_nfolds}.}
 \item{small_condition_action}{Skip the current cell type, drop its small
 condition, or stop.}
-\item{scale}{Must be \code{TRUE}; the pooled scale is required for comparability.}
+\item{scale}{Must be \code{TRUE}; the equal-condition within-variance scale is
+required for comparability.}
 \item{active_tol}{Threshold defining an active refitted edge.}
 \item{parallel}{Use the Pando mapping backend.}
 \item{BPPARAM}{Optional \code{BiocParallel} backend.}
@@ -91,14 +98,15 @@ condition, or stop.}
 \value{
 A \code{GRNData} object containing standard Pando \code{Network} objects named
 \code{<network_name>__<cell_type>__shared} and
-\code{<network_name>__<cell_type>__condition__<condition>}. The lossless v4
+\code{<network_name>__<cell_type>__condition__<condition>}. The lossless v5
 contract for each independently fitted cell type is available through
 \code{condition_grn_fit()}.
 }
 \description{
 Fits an independent condition-aware TF-peak-target model for each requested
-broad cell type. Training, condition-stratified cell OOF validation and final
-refitting for one model use only cells belonging to that cell type.
+broad cell type. Nested outer-heldout projection and inner model selection use
+training-fold-only equal-condition transformations. Full-data coefficients are
+retained for network interpretation and never enter downstream penalties.
 }
 \details{
 The within-condition screen uses a weighted root-mean-square of
