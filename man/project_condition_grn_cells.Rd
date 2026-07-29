@@ -23,7 +23,8 @@ project_condition_grn_cells(
 \arguments{
 \item{object}{The \code{GRNData} containing the paired RNA and ATAC cells.}
 \item{fit}{Optional v4 fit; otherwise retrieved from \code{object}.}
-\item{network_name, cell_type}{Optional fit filters.}
+\item{network_name, cell_type}{Optional fit filters used when \code{fit} is
+omitted.}
 \item{component}{Absolute condition, shared or deviation component.}
 \item{scale}{Pooled standardized target units or raw target units.}
 \item{output}{Gene scores or gene scores plus edge contributions.}

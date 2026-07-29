@@ -1,29 +1,21 @@
-test_that('biological blocks never cross validation folds', {
+test_that('OOF folds are condition-stratified within one cell type', {
     X <- list(
         A = Matrix::Matrix(matrix(c(0, 1, 10, 11), ncol = 1L)),
         B = Matrix::Matrix(matrix(c(2, 3, 12, 13), ncol = 1L))
     )
     y <- list(A = c(0, 1, 10, 11), B = c(2, 3, 12, 13))
-    blocks <- list(
-        A = c('donor_1', 'donor_1', 'donor_2', 'donor_2'),
-        B = c('donor_1', 'donor_1', 'donor_2', 'donor_2')
-    )
-    fit <- Pando:::.condition_cv_multitask_path(
+    fit <- Pando:::.condition_crossfit_within_cell_type(
         X_list = X,
         y_list = y,
         lambda = 0.1,
         coefficient_mask = matrix(TRUE, 1L, 2L),
         nfolds = 2L,
-        block_list = blocks,
         standardize = TRUE,
         seed = 11L
     )
 
-    for (task in seq_along(blocks)) {
-        observed <- split(fit$oof_fold[[task]], blocks[[task]])
-        expect_true(all(vapply(observed, function(x) {
-            length(unique(x)) == 1L
-        }, logical(1))))
+    for (task in seq_along(X)) {
+        expect_equal(sort(unique(fit$oof_fold[[task]])), 1:2)
     }
     for (fold in seq_len(fit$effective_nfolds)) {
         training <- unlist(lapply(seq_along(X), function(task) {
@@ -47,7 +39,7 @@ test_that('OOF assignment aligns independently for unequal condition sizes', {
         B = Matrix::Matrix(matrix(seq_len(6), ncol = 1L))
     )
     y <- list(A = seq_len(4), B = seq_len(6))
-    fit <- Pando:::.condition_cv_multitask_path(
+    fit <- Pando:::.condition_crossfit_within_cell_type(
         X_list = X,
         y_list = y,
         lambda = 0.1,
@@ -96,21 +88,84 @@ test_that('validation loss matches the requested condition weighting', {
     )
 })
 
-test_that('single-sample conditions disable replicate-level OOF only', {
-    status <- Pando:::.condition_sample_block_status(list(
-        Control = rep('sample_1', 20L),
-        Drug = rep(c('sample_2', 'sample_3'), each = 10L)
-    ))
-
-    expect_false(status$available)
-    expect_identical(
-        status$reason,
-        'one_or_more_conditions_have_fewer_than_two_biological_samples'
+test_that('OOF uses cells only and has no external blocking argument', {
+    fit_text <- paste(
+        deparse(body(Pando:::.condition_fit_target)), collapse = '\n'
     )
-    expect_equal(status$n_blocks, c(Control = 1L, Drug = 2L))
+    expect_match(
+        fit_text,
+        'within_cell_type_condition_stratified_cell_oof',
+        fixed = TRUE
+    )
+    expect_match(fit_text, 'predictive_oof_available', fixed = TRUE)
+    expect_false(any(
+        c('cell_type_block', 'cv_block') %in%
+            names(formals(Pando:::.condition_fit_target))
+    ))
 })
 
-test_that('cell-first aggregation permits mixed donors and retains covariance', {
+test_that('cell_type selects exact independent analysis scopes', {
+    metadata <- data.frame(
+        cell_type = c('T', 'T', 'B', 'Myeloid'),
+        condition = c('Control', 'Drug', 'Control', 'Drug'),
+        stringsAsFactors = FALSE
+    )
+
+    expect_identical(
+        Pando:::.condition_resolve_cell_types(
+            metadata, 'cell_type', cell_type = 'T'
+        ),
+        'T'
+    )
+    expect_identical(
+        Pando:::.condition_resolve_cell_types(
+            metadata, 'cell_type', cell_type = c('B', 'T')
+        ),
+        c('B', 'T')
+    )
+    expect_identical(
+        Pando:::.condition_resolve_cell_types(
+            metadata, 'cell_type', cell_type = NULL
+        ),
+        c('T', 'B', 'Myeloid')
+    )
+    expect_error(
+        Pando:::.condition_resolve_cell_types(
+            metadata, 'cell_type', cell_type = 'Unknown'
+        ),
+        'not found'
+    )
+})
+
+test_that('analysis metadata rejects ambiguous biological labels', {
+    valid <- data.frame(
+        cell_type = c('T', 'B'),
+        condition = c('Control', 'Drug'),
+        stringsAsFactors = FALSE
+    )
+    expect_silent(Pando:::.condition_validate_analysis_metadata(
+        valid, 'cell_type', 'condition'
+    ))
+
+    whitespace <- valid
+    whitespace$cell_type[[1L]] <- ' T'
+    expect_error(
+        Pando:::.condition_validate_analysis_metadata(
+            whitespace, 'cell_type', 'condition'
+        ),
+        'surrounding whitespace'
+    )
+    blank <- valid
+    blank$condition[[2L]] <- ''
+    expect_error(
+        Pando:::.condition_validate_analysis_metadata(
+            blank, 'cell_type', 'condition'
+        ),
+        'non-empty'
+    )
+})
+
+test_that('cell-first aggregation retains interaction covariance', {
     tf <- c(cell_1 = 0, cell_2 = 2)
     atac <- c(cell_1 = 0, cell_2 = 2)
     projection <- structure(
@@ -124,7 +179,6 @@ test_that('cell-first aggregation permits mixed donors and retains covariance', 
                 cell_id = names(tf),
                 cell_type = 'T',
                 condition = 'Control',
-                cv_block = c('donor_1', 'donor_2'),
                 row.names = names(tf)
             )
         ),
@@ -146,5 +200,5 @@ test_that('cell-first aggregation permits mixed donors and retains covariance', 
             aggregated$gene_score['SC_1', 'GENE'], mean(tf) * mean(atac)
         ))
     )
-    expect_equal(aggregated$group_metadata['SC_1', 'n_cv_blocks'], 2L)
+    expect_equal(aggregated$group_metadata['SC_1', 'n_cells'], 2L)
 })

@@ -11,6 +11,7 @@ infer_condition_grn(object, ...)
   object,
   cell_type_col,
   condition_col,
+  cell_type = NULL,
   genes = NULL,
   network_name = "condition_grn",
   peak_to_gene_method = c("Signac", "GREAT"),
@@ -22,8 +23,6 @@ infer_condition_grn(object, ...)
   tf_cor = 0.1,
   peak_cor = 0,
   candidate_screen = c("motif_domain", "pooled_within_condition"),
-  method = c("shared_baseline_condition_sparse", "shared_design_independent",
-    "multitask_glmnet"),
   alpha = 0.5,
   condition_mix = 0.5,
   reference_condition = NULL,
@@ -32,10 +31,9 @@ infer_condition_grn(object, ...)
   lambda = NULL,
   lambda_min_ratio = NULL,
   nfolds = 5L,
-  cv_block_col = NULL,
   lambda_selection = c("lambda.1se", "lambda.min"),
   min_cells_per_condition = 50L,
-  on_small_condition = c("skip_cell_type", "drop_condition", "error"),
+  small_condition_action = c("skip_cell_type", "drop_condition", "error"),
   scale = TRUE,
   active_tol = 1e-08,
   parallel = FALSE,
@@ -53,6 +51,8 @@ infer_condition_grn(object, ...)
 \item{object}{A \code{GRNData} object containing paired RNA and ATAC single cells.}
 \item{cell_type_col}{Metadata column containing cell-type labels.}
 \item{condition_col}{Metadata column containing condition labels.}
+\item{cell_type}{Optional cell-type label or labels to fit. When omitted, every
+observed cell type is fitted independently.}
 \item{genes}{Target genes. Defaults to RNA variable features.}
 \item{network_name}{Prefix used for generated network names.}
 \item{peak_to_gene_method}{Peak-to-gene method, either \code{Signac} or \code{GREAT}.}
@@ -63,8 +63,6 @@ infer_condition_grn(object, ...)
 \code{motif_domain} to retain every motif/domain candidate, or
 \code{pooled_within_condition} for a response-dependent weighted-RMS
 within-condition sensitivity screen.}
-\item{method}{The condition-sparse engine. Retired method names are accepted as
-call-compatibility aliases and invoke the same engine.}
 \item{alpha}{Elastic-net mixing during support selection.}
 \item{condition_mix}{Mixing between shared row support and
 condition-specific element support. Must be greater than zero.}
@@ -73,14 +71,13 @@ condition-specific element support. Must be greater than zero.}
 \item{nlambda}{Number of generated lambda values.}
 \item{lambda}{Optional fixed lambda or lambda path.}
 \item{lambda_min_ratio}{Smallest lambda relative to the maximum.}
-\item{nfolds}{Maximum number of cross-validation folds.}
-\item{cv_block_col}{Optional biological sample/donor metadata column. With at
-least two samples in every condition, whole samples are assigned to folds.
-If any condition has only one sample, cell-level folds select lambda but
-sample-blocked OOF performance is recorded as unavailable.}
+\item{nfolds}{Number of condition-stratified cell folds constructed within
+each independently fitted cell type.}
 \item{lambda_selection}{Use \code{lambda.1se} or \code{lambda.min}.}
-\item{min_cells_per_condition}{Minimum single cells per condition.}
-\item{on_small_condition}{Skip, drop or stop for small conditions.}
+\item{min_cells_per_condition}{Minimum single cells per condition. Must be no
+smaller than \code{nfolds}.}
+\item{small_condition_action}{Skip the current cell type, drop its small
+condition, or stop.}
 \item{scale}{Must be \code{TRUE}; the pooled scale is required for comparability.}
 \item{active_tol}{Threshold defining an active refitted edge.}
 \item{parallel}{Use the Pando mapping backend.}
@@ -89,19 +86,19 @@ sample-blocked OOF performance is recorded as unavailable.}
 \item{seed}{Random seed.}
 \item{max_iter, tol_objective, tol_coef}{Selection solver controls.}
 \item{verbose}{Display progress messages.}
-\item{...}{Must be empty; retired condition modules do not accept additional
-arguments.}
+\item{...}{Must be empty.}
 }
 \value{
 A \code{GRNData} object containing standard Pando \code{Network} objects named
 \code{<network_name>__<cell_type>__shared} and
 \code{<network_name>__<cell_type>__condition__<condition>}. The lossless v4
-contract is available through \code{condition_grn_fit()}.
+contract for each independently fitted cell type is available through
+\code{condition_grn_fit()}.
 }
 \description{
-Fits one shared TF-peak-target candidate dictionary on paired single cells,
-permits different condition-specific active nodes, edges, magnitudes and signs,
-and refits selected supports on one pooled effect scale.
+Fits an independent condition-aware TF-peak-target model for each requested
+broad cell type. Training, condition-stratified cell OOF validation and final
+refitting for one model use only cells belonging to that cell type.
 }
 \details{
 The within-condition screen uses a weighted root-mean-square of
@@ -109,8 +106,7 @@ condition-specific correlations. Consequently, pure condition mean shifts are
 removed but opposite signs do not cancel during screening.
 
 Unavailable coefficients are \code{NA}; estimable inactive coefficients are
-exact zero. Pando does not create metacells in this workflow. Cells or
-metacells are never treated as biological replicates for OOF validation.
+exact zero. Pando does not create metacells in this workflow.
 }
 \examples{
 \dontrun{
@@ -118,11 +114,11 @@ object <- infer_condition_grn(
   object,
   cell_type_col = "cell_type",
   condition_col = "condition",
+  cell_type = "T_cell",
   genes = metabolic_genes,
   condition_mix = 0.5,
-  cv_block_col = "sample_id",
   reference_condition = "Control"
 )
-fit <- condition_grn_fit(object, cell_type = "Tumor_cell")
+fit <- condition_grn_fit(object, cell_type = "T_cell")
 }
 }

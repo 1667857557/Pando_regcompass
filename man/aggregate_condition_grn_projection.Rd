@@ -19,5 +19,4 @@ identifier.}
 \value{A \code{ConditionGRNGroupProjection} whose scores are arithmetic means
 of completed single-cell projections.}
 \description{Aggregates after TF-by-ATAC projection, preserving within-cell
-interaction covariance. Groups must be condition and cell-type pure, but may
-contain multiple biological sample IDs.}
+interaction covariance. Groups must be condition and cell-type pure.}

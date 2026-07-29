@@ -42,7 +42,7 @@
     lambda_selection,
     nlambda,
     nfolds,
-    cv_block_col,
+    oof_scheme,
     scale,
     active_tol,
     seed,
@@ -79,7 +79,7 @@
         lambda_selection = lambda_selection,
         nlambda = nlambda,
         nfolds = nfolds,
-        cv_block_col = cv_block_col,
+        oof_scheme = oof_scheme,
         scale = scale,
         active_tol = active_tol,
         seed = seed
@@ -199,10 +199,14 @@
         vapply(contracts, `[[`, character(1), 'oof_model'),
         response_transform$target
     )
-    sample_blocked_oof_available <- stats::setNames(
+    predictive_oof_available <- stats::setNames(
         vapply(
-            contracts, `[[`, logical(1), 'sample_blocked_oof_available'
+            contracts, `[[`, logical(1), 'predictive_oof_available'
         ),
+        response_transform$target
+    )
+    oof_validation_level <- stats::setNames(
+        vapply(contracts, `[[`, character(1), 'oof_validation_level'),
         response_transform$target
     )
     intercept <- do.call(rbind, lapply(contracts, `[[`, 'intercept'))
@@ -270,13 +274,10 @@
                 '1 - pooled OOF SSE / pooled within-condition SST',
             cv_method = cv_method,
             oof_model = oof_model,
-            sample_blocked_oof_available = sample_blocked_oof_available,
+            predictive_oof_available = predictive_oof_available,
+            oof_validation_level = oof_validation_level,
             oof_fold = stats::setNames(
                 lapply(contracts, `[[`, 'oof_fold'),
-                response_transform$target
-            ),
-            cv_block_to_fold = stats::setNames(
-                lapply(contracts, `[[`, 'cv_block_to_fold'),
                 response_transform$target
             ),
             cv_fold_transform = stats::setNames(
@@ -372,7 +373,7 @@
 #'
 #' @param object A GRNData object returned by infer_condition_grn().
 #' @param network_name Optional network prefix.
-#' @param cell_type Optional cell-type label.
+#' @param cell_type Optional fitted cell-type label.
 #' @return One ConditionGRNFit object when exactly one fit matches, otherwise
 #' a named list of matching ConditionGRNFit objects. Each fit contains the
 #' exact edge dictionary, condition coefficient matrix, reference contrasts,
@@ -380,7 +381,9 @@
 #' the fitted cell/assay contract, target-specific lambda selection,
 #' condition-level fit quality, and reproducibility metadata.
 #' @export
-condition_grn_fit <- function(object, network_name = NULL, cell_type = NULL) {
+condition_grn_fit <- function(
+    object, network_name = NULL, cell_type = NULL
+) {
     UseMethod('condition_grn_fit')
 }
 
@@ -395,7 +398,8 @@ condition_grn_fit.GRNData <- function(
         stop('No ConditionGRNFit contracts were found in this GRNData object.')
     }
     keep <- vapply(fits, function(x) {
-        (is.null(network_name) || identical(x$network_name, network_name)) &&
+        (is.null(network_name) ||
+            identical(x$network_name, network_name)) &&
             (is.null(cell_type) || identical(x$cell_type, cell_type))
     }, logical(1))
     fits <- fits[keep]

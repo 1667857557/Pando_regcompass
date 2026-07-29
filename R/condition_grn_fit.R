@@ -7,7 +7,7 @@
     ))
 }
 
-.condition_fit_cell_type <- function(
+.condition_fit_targets <- function(
     features,
     gene_data,
     peak_data,
@@ -28,7 +28,6 @@
     lambda,
     lambda_min_ratio,
     nfolds,
-    cv_block,
     lambda_selection,
     seed,
     max_iter,
@@ -62,7 +61,6 @@
                 lambda = lambda,
                 lambda_min_ratio = lambda_min_ratio,
                 nfolds = nfolds,
-                cv_block = cv_block,
                 lambda_selection = lambda_selection,
                 seed = .condition_seed_for(gene, seed),
                 max_iter = max_iter,
@@ -121,7 +119,6 @@
     lambda,
     lambda_min_ratio,
     nfolds,
-    cv_block,
     lambda_selection,
     seed,
     max_iter,
@@ -291,25 +288,6 @@
     names(X_list) <- names(y_list) <- condition_levels
     names(X_raw_list) <- names(y_raw_list) <- condition_levels
     names(cell_id_list) <- condition_levels
-    block_list <- if (is.null(cv_block)) {
-        NULL
-    } else {
-        if (length(cv_block) != length(condition) || anyNA(cv_block)) {
-            stop('cv_block must align to condition without missing values.')
-        }
-        lapply(condition_levels, function(level) {
-            as.character(cv_block[condition == level])
-        })
-    }
-    if (!is.null(block_list)) names(block_list) <- condition_levels
-    sample_block_status <- .condition_sample_block_status(block_list)
-    sample_blocked_oof_available <- sample_block_status$available
-    cv_block_list_used <- if (sample_blocked_oof_available) {
-        block_list
-    } else {
-        NULL
-    }
-
     lambda_path <- if (is.null(lambda)) {
         .condition_make_lambda_path(
             X_list = X_list,
@@ -325,52 +303,24 @@
         sort(unique(as.numeric(lambda)), decreasing = TRUE)
     }
 
-    if (length(lambda_path) == 1L && is.null(cv_block_list_used)) {
-        cv <- list(
-            lambda = lambda_path,
-            cv_mean = NA_real_,
-            cv_se = NA_real_,
-            selected_index = 1L,
-            selected_lambda = lambda_path[[1L]],
-            lambda_min = lambda_path[[1L]],
-            lambda_1se = lambda_path[[1L]]
-        )
-    } else {
-        cv <- .condition_cv_multitask_path(
-            X_list = X_raw_list,
-            y_list = y_raw_list,
-            lambda = lambda_path,
-            alpha = alpha,
-            condition_mix = condition_mix,
-            condition_weight = condition_weight,
-            coefficient_mask = edge_mask,
-            nfolds = nfolds,
-            block_list = cv_block_list_used,
-            standardize = scale,
-            active_tol = active_tol,
-            lambda_selection = lambda_selection,
-            seed = seed,
-            max_iter = max_iter,
-            tol_objective = tol_objective,
-            tol_coef = tol_coef
-        )
-    }
-    if (!is.null(block_list) && !sample_blocked_oof_available) {
-        cv$selection_oof_prediction <- cv$oof_prediction
-        cv$selection_oof_fold <- cv$oof_fold
-        cv$oof_prediction <- NULL
-        cv$oof_fold <- NULL
-        cv$block_to_fold <- NULL
-        cv$fold_transform <- NULL
-        cv$effective_nfolds <- NA_integer_
-    }
-    cv$cv_method <- if (sample_blocked_oof_available) {
-        'biological_sample_blocked'
-    } else if (!is.null(block_list)) {
-        'cell_level_lambda_selection_no_sample_blocked_oof'
-    } else {
-        'cell_level'
-    }
+    cv <- .condition_crossfit_within_cell_type(
+        X_list = X_raw_list,
+        y_list = y_raw_list,
+        lambda = lambda_path,
+        alpha = alpha,
+        condition_mix = condition_mix,
+        condition_weight = condition_weight,
+        coefficient_mask = edge_mask,
+        nfolds = nfolds,
+        standardize = scale,
+        active_tol = active_tol,
+        lambda_selection = lambda_selection,
+        seed = seed,
+        max_iter = max_iter,
+        tol_objective = tol_objective,
+        tol_coef = tol_coef
+    )
+    cv$cv_method <- 'within_cell_type_condition_stratified_cell_oof'
     if (!is.null(cv$oof_fold)) {
         cv$oof_fold <- lapply(seq_along(cv$oof_fold), function(task) {
             stats::setNames(
@@ -507,7 +457,7 @@
     )
     reference_beta <- refit$beta_condition[, reference_condition]
     contrast <- sweep(refit$beta_condition, 1L, reference_beta, '-')
-    fit_engine <- 'condition_sparse_common_scale_refit'
+    fit_engine <- 'condition_sparse_within_cell_type_oof_refit'
     fit_contract <- list(
         target = target,
         edge_table = edges[, c(
@@ -569,11 +519,6 @@
             )
         },
         oof_fold = if (is.null(cv$oof_fold)) NULL else cv$oof_fold,
-        cv_block_to_fold = if (is.null(cv$block_to_fold)) {
-            NULL
-        } else {
-            cv$block_to_fold
-        },
         cv_fold_transform = if (is.null(cv$fold_transform)) {
             NULL
         } else {
@@ -585,13 +530,10 @@
             cv$effective_nfolds
         },
         cv_method = cv$cv_method,
-        oof_model = if (is.null(cv$oof_model)) {
-            'fixed_lambda_without_cross_validation'
-        } else {
-            cv$oof_model
-        },
-        sample_blocked_oof_available = sample_blocked_oof_available,
-        sample_block_status = sample_block_status,
+        oof_model = cv$oof_model,
+        predictive_oof_available = TRUE,
+        oof_validation_level =
+            'within_cell_type_condition_stratified_cells',
         selected_lambda = selected$lambda,
         lambda_path = lambda_path,
         cv_mean = cv$cv_mean,

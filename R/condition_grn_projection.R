@@ -78,7 +78,8 @@
 #' used for inference.
 #' @param fit Optional `pando_condition_grn_fit_v4` object. When omitted it is
 #' retrieved from `object`.
-#' @param network_name,cell_type Optional fit filters used when `fit` is omitted.
+#' @param network_name,cell_type Optional fit filters used when `fit` is
+#' omitted.
 #' @param component Project absolute condition effects, the shared effect, or
 #' condition deviations.
 #' @param scale Return scores in pooled standardized target units or raw target
@@ -171,7 +172,10 @@ project_condition_grn_cells <- function(
         stop('The object no longer contains every paired single cell used by the fit.')
     }
     condition <- as.character(metadata[cells, fit$condition_col])
-    if (any(as.character(metadata[cells, fit$cell_type_col]) != fit$cell_type) ||
+    if (any(
+            as.character(metadata[cells, fit$cell_type_col]) !=
+                fit$cell_type
+        ) ||
         !identical(condition, unname(fit$cell_condition[cells]))) {
         stop('The fitted cell-type or condition labels have changed in the object.')
     }
@@ -379,11 +383,6 @@ project_condition_grn_cells <- function(
         cell_id = cells,
         cell_type = fit$cell_type,
         condition = condition,
-        cv_block = if (is.null(fit$cell_block)) {
-            NA_character_
-        } else {
-            unname(fit$cell_block[cells])
-        },
         stringsAsFactors = FALSE,
         row.names = cells
     )
@@ -409,9 +408,6 @@ project_condition_grn_cells <- function(
             target_condition_status = do.call(rbind, target_status),
             aggregation_contract = list(
                 group_within = c(fit$cell_type_col, fit$condition_col),
-                sample_or_donor_may_mix = TRUE,
-                sample_or_donor_role =
-                    'blocked-CV provenance and composition diagnostics only',
                 operation = 'arithmetic_mean_by_target',
                 signed_scores = TRUE,
                 identical_target_columns = TRUE,
@@ -483,13 +479,6 @@ aggregate_condition_grn_projection <- function(
             group_id = group,
             cell_type = values[[1L]],
             condition = values[[2L]],
-            cv_blocks = paste(
-                sort(unique(stats::na.omit(as.character(observed$cv_block)))),
-                collapse = ';'
-            ),
-            n_cv_blocks = length(unique(stats::na.omit(
-                as.character(observed$cv_block)
-            ))),
             n_cells = sum(rows),
             stringsAsFactors = FALSE
         )
@@ -507,20 +496,5 @@ aggregate_condition_grn_projection <- function(
                 'single_cell_TF_times_ATAC_then_transform_then_project_then_mean'
         ),
         class = c('ConditionGRNGroupProjection', 'list')
-    )
-}
-
-#' Project a condition GRN to cells and aggregate it without interaction bias
-#' @inheritParams project_condition_grn_cells
-#' @param membership One-row-per-cell group membership.
-#' @param group_col Membership group identifier.
-#' @return A `ConditionGRNGroupProjection`.
-#' @export
-project_condition_grn_groups <- function(
-    object, membership, group_col = 'metacell_id', ...
-) {
-    projection <- project_condition_grn_cells(object = object, ...)
-    aggregate_condition_grn_projection(
-        projection = projection, membership = membership, group_col = group_col
     )
 }
