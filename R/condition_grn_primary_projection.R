@@ -13,7 +13,8 @@
 #' @param network_name,cell_type Optional fit filters when `fit` is omitted.
 #' @param scale Standardized or raw target units.
 #' @param output Return target scores or target scores plus edge contributions.
-#' @param targets Optional target subset.
+#' @param targets Optional target subset. Matching is case-insensitive when a fit
+#'   is supplied, while returned target names retain the fit's original case.
 #' @param nonestimable Use structural zeros or stop on unavailable effects.
 #' @param active_tol Activity threshold used in metadata.
 #' @return A `ConditionGRNProjection` whose condition-specific OOF scores are
@@ -33,6 +34,18 @@ project_condition_grn_primary_cells <- function(
     scale <- match.arg(scale)
     output <- match.arg(output)
     nonestimable <- match.arg(nonestimable)
+    if (!is.null(fit) && !is.null(targets)) {
+        fit_targets <- unique(as.character(fit$edge_table$target))
+        index <- match(tolower(as.character(targets)), tolower(fit_targets))
+        if (anyNA(index)) {
+            stop(
+                "Target(s) were not found in the fit: ",
+                paste(as.character(targets)[is.na(index)], collapse = ", "),
+                "."
+            )
+        }
+        targets <- fit_targets[index]
+    }
     projection <- project_condition_grn_cells(
         object = object,
         fit = fit,
