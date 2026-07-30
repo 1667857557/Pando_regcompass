@@ -10,7 +10,7 @@ test_that("condition API has no reference-condition argument or contrast export"
 
 test_that("stored condition contract retains absolute effects only", {
     fit <- structure(list(
-        schema_version = "pando_condition_grn_fit_v5",
+        schema_version = "pando_condition_grn_fit",
         contract_version = "legacy",
         beta_condition_std = matrix(
             c(1, -1), nrow = 1,
@@ -31,6 +31,8 @@ test_that("stored condition contract retains absolute effects only", {
     ), class = c("ConditionGRNFit", "list"))
 
     out <- Pando:::.condition_absolute_fit_contract(fit)
+    expect_identical(out$schema_version, "pando_condition_grn_fit")
+    expect_identical(out$schema_policy, "single_unversioned_schema")
     expect_identical(out$beta_condition_std, fit$beta_condition_std)
     expect_identical(out$contract_version, "condition_absolute_oof_v2")
     expect_identical(
