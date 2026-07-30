@@ -30,17 +30,26 @@ test_that("version-suffixed fit schemas are not usable", {
         )
         expect_error(
             Pando:::.condition_require_fit(fit),
-            "version-suffixed schemas are not supported",
-            fixed = TRUE
+            "version-suffixed schemas are not supported"
         )
     }
 })
 
-test_that("only the stable extractor is exported", {
+test_that("only the stable extractor and validator remain usable", {
     exports <- getNamespaceExports("Pando")
     expect_true("condition_grn_fit" %in% exports)
     expect_false(any(grepl(
         "^pando_condition_grn_fit_v[0-9]+$|^condition_grn_fit_v[0-9]+$",
         exports
     )))
+    expect_false(exists(
+        ".condition_require_v5",
+        envir = asNamespace("Pando"),
+        inherits = FALSE
+    ))
+    expect_true(exists(
+        ".condition_require_fit",
+        envir = asNamespace("Pando"),
+        inherits = FALSE
+    ))
 })
