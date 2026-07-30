@@ -1,5 +1,5 @@
 Package: Pando
-Version: 1.5.0
+Version: 1.5.1
 Type: Package
 Title: Inferring regulomes from multi-modal single-cell genomics data
 Authors@R: person(given = "Jonas Simon",
@@ -20,10 +20,11 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     selection, and a support-constrained hierarchical-ridge refit. Absolute
     condition coefficients, estimability, activity, transformations, direction,
     and single-cell projection layers are exposed through the single canonical
-    pando_condition_grn_fit contract. Non-estimable projection edges contribute
-    structural zeros before target aggregation. Canonical behavior is
-    implemented directly in the defining functions; runtime function rewriting
-    and version-suffixed fit schemas are not used.
+    pando_condition_grn_fit contract. The canonical RegCompass handoff uses each
+    condition's own outer-fold estimability mask, allowing condition-unique edges
+    to enter the primary penalty while non-estimable edges remain structural
+    zeros. Canonical behavior is implemented directly in defining functions;
+    runtime function rewriting and version-suffixed fit schemas are not used.
 License: MIT
 Encoding: UTF-8
 LazyData: true
