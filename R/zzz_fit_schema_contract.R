@@ -71,9 +71,12 @@ for (.condition_function_name in c(
     }
 }
 
-# The version-specific validator is removed after all callers are rewritten.
+# Retired version-specific and contrast helpers are absent from the usable API.
 if (exists('.condition_require_v5', inherits = FALSE)) {
     rm(.condition_require_v5)
+}
+if (exists('condition_grn_contrast', inherits = FALSE)) {
+    rm(condition_grn_contrast)
 }
 rm(.condition_function_name)
 if (exists('.condition_function', inherits = FALSE)) {
