@@ -12,7 +12,7 @@ condition_grn_subgraph(
 )
 }
 \arguments{
-\item{fit}{A \code{pando_condition_grn_fit_v5} object.}
+\item{fit}{A canonical \code{pando_condition_grn_fit} object.}
 \item{condition}{One fitted condition label.}
 \item{scale}{Standardized or raw coefficient scale.}
 \item{active_tol}{Minimum absolute standardized effect retained as active,
@@ -23,4 +23,5 @@ A list containing the active edge table and induced TF, peak and target nodes.
 }
 \description{
 Extracts the active condition graph from the shared candidate supergraph.
+Version-suffixed fit schemas are rejected.
 }

@@ -14,10 +14,15 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     equal-condition within-condition variance scale. The default engine uses
     nested condition-stratified cell cross-fitting, sparse-group shared-support
     selection, and a support-constrained hierarchical-ridge refit.
-    Standard Pando networks remain the compatibility surface. Complete shared,
-    condition, deviation, contrast, estimability, activity, transformation,
-    direction, and single-cell projection layers are exposed through a
-    versioned contract for reproducible downstream metacell comparisons.
+    Standard Pando networks remain the compatibility surface. Absolute
+    condition coefficients, shared coefficients, condition deviations,
+    estimability, activity, transformation, direction, and single-cell
+    projection layers are exposed through the single canonical
+    pando_condition_grn_fit contract for reproducible downstream metacell
+    comparisons. Version-suffixed condition-fit schemas are not public APIs.
+    The public and stored contract contains no reference-condition coefficient,
+    reference contrast, or comparison mask; conditions are compared directly on
+    the shared equal-condition coordinate.
 License: MIT
 Encoding: UTF-8
 LazyData: true

@@ -13,7 +13,7 @@ project_condition_grn_cells(
   scale = c("std", "raw"),
   output = c("gene_score", "edge_contribution"),
   targets = NULL,
-  nonestimable = c("propagate", "error"),
+  nonestimable = c("structural_zero", "error"),
   support_policy = c("pairwise_common", "global_common",
     "condition_estimable", "strict"),
   comparison_conditions = NULL,
@@ -24,14 +24,17 @@ project_condition_grn_cells(
 }
 \arguments{
 \item{object}{The \code{GRNData} containing the paired RNA and ATAC cells.}
-\item{fit}{Optional v5 fit; otherwise retrieved from \code{object}.}
+\item{fit}{Optional canonical \code{pando_condition_grn_fit} object; otherwise
+retrieved from \code{object}. Version-suffixed schemas are rejected.}
 \item{network_name, cell_type}{Optional fit filters used when \code{fit} is
 omitted.}
 \item{component}{Absolute condition, shared or deviation component.}
 \item{scale}{Pooled standardized target units or raw target units.}
 \item{output}{Gene scores or gene scores plus edge contributions.}
 \item{targets}{Optional target subset.}
-\item{nonestimable}{Propagate unavailable effects to \code{NA}, or stop.}
+\item{nonestimable}{Define unavailable edge contributions as exact structural
+zeros, or stop. Structural zeros enter target summation and downstream metacell
+aggregation.}
 \item{support_policy}{Use pairwise-common or global-common support for primary
 comparisons. Condition-estimable and strict support are diagnostic only.}
 \item{comparison_conditions}{Two conditions defining pairwise-common support
@@ -43,11 +46,14 @@ coefficients for interpretation only.}
 edge metadata, independent of the returned score scale.}
 }
 \value{
-A \code{ConditionGRNProjection} with signed cell-by-target scores, directions,
-edge effects, target-condition estimability and a metacell aggregation contract.
+A \code{ConditionGRNProjection} with finite signed cell-by-target scores,
+directions, edge effects, explicit structural-zero masks, target-condition
+estimability and a metacell aggregation contract.
 }
 \description{
 The default returns the stored outer-heldout cell projection. Full-fit
 coefficients are available only as an explicitly labelled interpretation path.
+Every non-estimable edge contributes zero before target aggregation and is
+retained in downstream analysis with an auditable structural-zero mask.
 RegCompass aggregates the held-out cell scores using exact membership.
 }
