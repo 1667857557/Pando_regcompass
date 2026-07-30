@@ -78,7 +78,7 @@ Do not recompute TF×ATAC from metacell averages, renormalize separately by
 condition, or refit after aggregation.
 
 All equations are maintained in one location:
-[RegCompass mathematical model](https://github.com/1667857557/Regcompass/blob/Main/docs/mathematical-model.md).
+[RegCompass Tutorial 3: mathematical model](https://github.com/1667857557/Regcompass/blob/Main/docs/tutorial-03-mathematical-model.md).
 
 ## Citation
 
