@@ -24,7 +24,8 @@ project_condition_grn_cells(
 }
 \arguments{
 \item{object}{The \code{GRNData} containing the paired RNA and ATAC cells.}
-\item{fit}{Optional v5 fit; otherwise retrieved from \code{object}.}
+\item{fit}{Optional canonical \code{pando_condition_grn_fit} object; otherwise
+retrieved from \code{object}. Version-suffixed schemas are rejected.}
 \item{network_name, cell_type}{Optional fit filters used when \code{fit} is
 omitted.}
 \item{component}{Absolute condition, shared or deviation component.}
