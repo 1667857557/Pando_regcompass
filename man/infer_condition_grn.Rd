@@ -25,7 +25,6 @@ infer_condition_grn(object, ...)
   candidate_screen = c("motif_domain", "pooled_within_condition"),
   alpha = 0.5,
   condition_mix = 0.5,
-  reference_condition = NULL,
   comparison_conditions = NULL,
   condition_weight = "equal",
   nlambda = 50L,
@@ -68,7 +67,6 @@ within-condition sensitivity screen.}
 \item{alpha}{Elastic-net mixing during support selection.}
 \item{condition_mix}{Mixing between shared row support and
 condition-specific element support. Must be greater than zero.}
-\item{reference_condition}{Condition used for the stored compatibility contrast.}
 \item{comparison_conditions}{Conditions defining the primary common-support
 comparison.}
 \item{condition_weight}{Must be \code{equal}; cells do not define condition weights.}
@@ -100,7 +98,8 @@ A \code{GRNData} object containing standard Pando \code{Network} objects named
 \code{<network_name>__<cell_type>__shared} and
 \code{<network_name>__<cell_type>__condition__<condition>}. The lossless v5
 contract for each independently fitted cell type is available through
-\code{condition_grn_fit()}.
+\code{condition_grn_fit()} and contains absolute condition coefficients without
+a reference-condition contrast.
 }
 \description{
 Fits an independent condition-aware TF-peak-target model for each requested
@@ -114,7 +113,9 @@ condition-specific correlations. Consequently, pure condition mean shifts are
 removed but opposite signs do not cancel during screening.
 
 Unavailable coefficients are \code{NA}; estimable inactive coefficients are
-exact zero. Pando does not create metacells in this workflow.
+exact zero. Conditions are compared directly on the common equal-condition
+coordinate; no reference-condition coefficient, stored contrast, or comparison
+mask is generated. Pando does not create metacells in this workflow.
 }
 \examples{
 \dontrun{
@@ -124,8 +125,7 @@ object <- infer_condition_grn(
   condition_col = "condition",
   cell_type = "T_cell",
   genes = metabolic_genes,
-  condition_mix = 0.5,
-  reference_condition = "Control"
+  condition_mix = 0.5
 )
 fit <- condition_grn_fit(object, cell_type = "T_cell")
 }
