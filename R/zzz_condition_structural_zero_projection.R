@@ -94,6 +94,24 @@ aggregate_condition_grn_projection <- function(
     if (!inherits(projection, 'ConditionGRNProjection')) {
         stop('projection must inherit from ConditionGRNProjection.')
     }
+    membership$cell_id <- as.character(membership$cell_id)
+    membership[[group_col]] <- as.character(membership[[group_col]])
+    cells <- rownames(projection$gene_score)
+    membership <- membership[match(cells, membership$cell_id), , drop = FALSE]
+    if (anyNA(membership$cell_id)) {
+        stop('membership does not cover every projected single cell.')
+    }
+    structural_zero_fraction <- NULL
+    if (!is.null(projection$gene_structural_zero_mask)) {
+        groups <- unique(membership[[group_col]])
+        structural_zero_fraction <- do.call(rbind, lapply(groups, function(group) {
+            rows <- membership[[group_col]] == group
+            colMeans(
+                projection$gene_structural_zero_mask[rows, , drop = FALSE]
+            )
+        }))
+        rownames(structural_zero_fraction) <- groups
+    }
     projection$gene_score[!is.finite(projection$gene_score)] <- 0
     value <- .aggregate_condition_grn_projection_na(
         projection, membership, group_col = group_col
@@ -101,6 +119,7 @@ aggregate_condition_grn_projection <- function(
     value$schema_version <- 'pando_condition_grn_group_projection_v2'
     value$gene_score[!is.finite(value$gene_score)] <- 0
     value$gene_direction <- sign(value$gene_score)
+    value$gene_structural_zero_fraction <- structural_zero_fraction
     value$nonestimable_policy <- 'structural_zero'
     value$structural_zero_enters_downstream <- TRUE
     value$aggregation_order <- paste(
