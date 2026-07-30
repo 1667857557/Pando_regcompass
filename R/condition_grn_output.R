@@ -1,5 +1,7 @@
 # Pando-compatible output helpers for condition-aware networks.
 
+.PANDO_CONDITION_GRN_FIT_SCHEMA <- 'pando_condition_grn_fit'
+
 .condition_format_coefs <- function(edges, estimate, corr) {
     data.frame(
         tf = edges$tf,
@@ -37,8 +39,8 @@
     condition_weight,
     alpha,
     condition_mix,
-    reference_condition,
-    comparison_conditions,
+    reference_condition = NULL,
+    comparison_conditions = NULL,
     fit_contract_key,
     lambda_selection,
     nlambda,
@@ -71,7 +73,6 @@
         cell_type_col = cell_type_col,
         condition_col = condition_col,
         condition_levels = condition_levels,
-        reference_condition = reference_condition,
         comparison_conditions = comparison_conditions,
         fit_contract_key = fit_contract_key,
         candidate_screen = candidate_screen,
@@ -86,7 +87,8 @@
         oof_scheme = oof_scheme,
         scale = scale,
         active_tol = active_tol,
-        seed = seed
+        seed = seed,
+        coefficient_contract = 'absolute_condition_effects_only'
     )
 }
 
@@ -101,7 +103,7 @@
     n_targets,
     active_tol,
     fit_engine,
-    reference_condition,
+    reference_condition = NULL,
     fit_contract_key
 ) {
     data.frame(
@@ -111,16 +113,37 @@
         network_level = network_level,
         condition = condition,
         fit_engine = fit_engine,
-        reference_condition = reference_condition,
         fit_contract_key = fit_contract_key,
         n_cells = as.integer(n_cells),
         n_targets = as.integer(n_targets),
         n_candidate_edges = as.integer(nrow(coefs)),
-        n_active_edges = as.integer(sum(
-            abs(coefs$estimate) > active_tol, na.rm = TRUE
-        )),
+        n_active_edges = as.integer(sum(abs(coefs$estimate) > active_tol, na.rm = TRUE)),
+        coefficient_contract = 'absolute_condition_effects_only',
         stringsAsFactors = FALSE
     )
+}
+
+.condition_bind_contract_matrix <- function(contracts, field, edge_ids) {
+    value <- do.call(rbind, lapply(contracts, `[[`, field))
+    rownames(value) <- edge_ids
+    value
+}
+
+.condition_bind_oof_projection <- function(contracts, field, cells, targets) {
+    out <- matrix(
+        NA_real_,
+        nrow = length(cells),
+        ncol = length(contracts),
+        dimnames = list(cells, targets)
+    )
+    for (i in seq_along(contracts)) {
+        value <- contracts[[i]][[field]]
+        if (is.null(names(value)) || !setequal(names(value), cells)) {
+            stop('OOF projection cells differ across target contracts.')
+        }
+        out[, i] <- as.numeric(value[cells])
+    }
+    out
 }
 
 .condition_combine_fit_contracts <- function(
@@ -129,8 +152,8 @@
     cell_type,
     cell_type_col,
     condition_col,
-    reference_condition,
-    comparison_conditions,
+    reference_condition = NULL,
+    comparison_conditions = NULL,
     candidate_screen,
     scale,
     fit_engine
@@ -141,73 +164,65 @@
     if (anyDuplicated(edge_table$edge_id)) {
         stop('ConditionGRNFit contains duplicated edge identifiers.')
     }
-    bind_matrix <- function(field) {
-        value <- do.call(rbind, lapply(contracts, `[[`, field))
-        rownames(value) <- edge_table$edge_id
-        value
-    }
-    beta <- bind_matrix('beta')
-    beta_selection <- bind_matrix('beta_selection')
-    beta_condition <- bind_matrix('beta_condition')
-    delta_condition <- bind_matrix('delta_condition')
-    contrast <- bind_matrix('contrast')
-    structural_candidate_mask <- bind_matrix('structural_candidate_mask')
-    screening_mask <- bind_matrix('screening_mask')
-    estimability_mask <- bind_matrix('estimability_mask')
-    support_mask <- bind_matrix('support_mask')
-    active_mask <- bind_matrix('active_mask')
-    beta_shared <- unlist(
-        lapply(contracts, `[[`, 'beta_shared'), use.names = FALSE
+    edge_ids <- edge_table$edge_id
+    beta <- .condition_bind_contract_matrix(contracts, 'beta', edge_ids)
+    beta_selection <- .condition_bind_contract_matrix(
+        contracts, 'beta_selection', edge_ids
     )
-    names(beta_shared) <- edge_table$edge_id
+    beta_condition <- .condition_bind_contract_matrix(
+        contracts, 'beta_condition', edge_ids
+    )
+    delta_condition <- .condition_bind_contract_matrix(
+        contracts, 'delta_condition', edge_ids
+    )
+    structural_candidate_mask <- .condition_bind_contract_matrix(
+        contracts, 'structural_candidate_mask', edge_ids
+    )
+    screening_mask <- .condition_bind_contract_matrix(
+        contracts, 'screening_mask', edge_ids
+    )
+    estimability_mask <- .condition_bind_contract_matrix(
+        contracts, 'estimability_mask', edge_ids
+    )
+    support_mask <- .condition_bind_contract_matrix(
+        contracts, 'support_mask', edge_ids
+    )
+    active_mask <- .condition_bind_contract_matrix(
+        contracts, 'active_mask', edge_ids
+    )
+    beta_shared <- unlist(lapply(contracts, `[[`, 'beta_shared'), use.names = FALSE)
+    names(beta_shared) <- edge_ids
     predictor_center <- unlist(
         lapply(contracts, `[[`, 'predictor_center'), use.names = FALSE
     )
     predictor_scale <- unlist(
         lapply(contracts, `[[`, 'predictor_scale'), use.names = FALSE
     )
-    names(predictor_center) <- names(predictor_scale) <- edge_table$edge_id
+    names(predictor_center) <- names(predictor_scale) <- edge_ids
     response_transform <- data.frame(
         target = vapply(contracts, `[[`, character(1), 'target'),
         center = vapply(contracts, `[[`, numeric(1), 'response_center'),
         scale = vapply(contracts, `[[`, numeric(1), 'response_scale'),
-        reference_condition = reference_condition,
         stringsAsFactors = FALSE
     )
     target_fit <- data.frame(
-        target = vapply(contracts, `[[`, character(1), 'target'),
+        target = response_transform$target,
         selected_lambda = vapply(contracts, `[[`, numeric(1), 'selected_lambda'),
         alpha = vapply(contracts, `[[`, numeric(1), 'alpha'),
         condition_mix = vapply(contracts, `[[`, numeric(1), 'condition_mix'),
         stringsAsFactors = FALSE
     )
-    condition_rsq_train <- do.call(
-        rbind, lapply(contracts, `[[`, 'condition_rsq_train')
-    )
-    condition_rsq_oof <- do.call(
-        rbind, lapply(contracts, `[[`, 'condition_rsq_oof')
-    )
-    condition_rmse_oof <- do.call(
-        rbind, lapply(contracts, `[[`, 'condition_rmse_oof')
-    )
+    condition_rsq_train <- do.call(rbind, lapply(contracts, `[[`, 'condition_rsq_train'))
+    condition_rsq_oof <- do.call(rbind, lapply(contracts, `[[`, 'condition_rsq_oof'))
+    condition_rmse_oof <- do.call(rbind, lapply(contracts, `[[`, 'condition_rmse_oof'))
     rownames(condition_rsq_train) <- rownames(condition_rsq_oof) <-
         rownames(condition_rmse_oof) <- response_transform$target
     target_rsq_oof_pooled <- stats::setNames(
         vapply(contracts, `[[`, numeric(1), 'target_rsq_oof_pooled'),
         response_transform$target
     )
-    cv_method <- stats::setNames(
-        vapply(contracts, `[[`, character(1), 'cv_method'),
-        response_transform$target
-    )
-    oof_model <- stats::setNames(
-        vapply(contracts, `[[`, character(1), 'oof_model'),
-        response_transform$target
-    )
     predictive_oof_available <- stats::setNames(
-        vapply(
-            contracts, `[[`, logical(1), 'predictive_oof_available'
-        ),
+        vapply(contracts, `[[`, logical(1), 'predictive_oof_available'),
         response_transform$target
     )
     oof_validation_level <- stats::setNames(
@@ -223,48 +238,30 @@
     beta_condition_raw <- beta_condition * raw_factor
     delta_condition_raw <- delta_condition * raw_factor
     beta_shared_raw <- beta_shared * raw_factor
-    comparison_mask <- .condition_reference_comparison_mask(
-        estimability_mask, reference_condition
-    )
     oof_cells <- names(contracts[[1L]]$projection_common_oof)
     if (is.null(oof_cells) || anyDuplicated(oof_cells)) {
         stop('OOF projection cells must be unique and named.')
     }
-    bind_oof_projection <- function(field) {
-        out <- matrix(
-            NA_real_,
-            nrow = length(oof_cells),
-            ncol = length(contracts),
-            dimnames = list(oof_cells, response_transform$target)
-        )
-        for (i in seq_along(contracts)) {
-            value <- contracts[[i]][[field]]
-            if (is.null(names(value)) ||
-                !setequal(names(value), oof_cells)) {
-                stop('OOF projection cells differ across target contracts.')
-            }
-            out[, i] <- as.numeric(value[oof_cells])
-        }
-        out
-    }
-    projection_common_oof <- bind_oof_projection(
-        'projection_common_oof'
+    projection_common_oof <- .condition_bind_oof_projection(
+        contracts, 'projection_common_oof', oof_cells, response_transform$target
     )
-    projection_condition_full_oof <- bind_oof_projection(
-        'projection_condition_full_oof'
+    projection_condition_full_oof <- .condition_bind_oof_projection(
+        contracts, 'projection_condition_full_oof', oof_cells,
+        response_transform$target
     )
-    projection_global_common_oof <- bind_oof_projection(
-        'projection_global_common_oof'
+    projection_global_common_oof <- .condition_bind_oof_projection(
+        contracts, 'projection_global_common_oof', oof_cells,
+        response_transform$target
     )
-    oof_assignment_count <- bind_oof_projection('oof_assignment_count')
+    oof_assignment_count <- .condition_bind_oof_projection(
+        contracts, 'oof_assignment_count', oof_cells, response_transform$target
+    )
     if (any(oof_assignment_count != 1L)) {
         stop('Every target and cell must have exactly one outer-fold assignment.')
     }
     target_transform_contract <- data.frame(
         target = response_transform$target,
-        transform_policy = vapply(
-            contracts, `[[`, character(1), 'transform_policy'
-        ),
+        transform_policy = vapply(contracts, `[[`, character(1), 'transform_policy'),
         predictor_center_hash = vapply(
             contracts, `[[`, character(1), 'predictor_center_hash'
         ),
@@ -278,14 +275,15 @@
     )
     structure(
         list(
-            schema_version = 'pando_condition_grn_fit_v5',
-            contract_version = 'condition_oof_comparability_v1',
+            schema_version = .PANDO_CONDITION_GRN_FIT_SCHEMA,
+            schema_policy = 'single_unversioned_schema',
+            contract_version = 'condition_absolute_oof_v3',
+            coefficient_contract = 'absolute_condition_effects_only',
             network_name = network_name,
             cell_type = cell_type,
             cell_type_col = cell_type_col,
             condition_col = condition_col,
             condition_levels = colnames(beta),
-            reference_condition = reference_condition,
             comparison_conditions = comparison_conditions,
             fit_engine = fit_engine,
             candidate_screen = candidate_screen,
@@ -303,7 +301,6 @@
             beta_condition_raw = beta_condition_raw,
             beta_shared_raw = beta_shared_raw,
             delta_condition_raw = delta_condition_raw,
-            contrast = contrast,
             topology_mask = structural_candidate_mask,
             structural_candidate_mask = structural_candidate_mask,
             screening_mask = screening_mask,
@@ -313,9 +310,8 @@
             active_mask = active_mask,
             absolute_direction = sign(beta_condition),
             deviation_direction = sign(delta_condition),
-            comparison_mask = comparison_mask,
             predictor_transform = data.frame(
-                edge_id = edge_table$edge_id,
+                edge_id = edge_ids,
                 center = predictor_center,
                 scale = predictor_scale,
                 stringsAsFactors = FALSE
@@ -331,22 +327,22 @@
             target_rsq_oof_pooled = target_rsq_oof_pooled,
             target_rsq_oof_pooled_definition =
                 '1 - pooled OOF SSE / pooled within-condition SST',
-            cv_method = cv_method,
-            oof_model = oof_model,
+            cv_method = stats::setNames(
+                vapply(contracts, `[[`, character(1), 'cv_method'),
+                response_transform$target
+            ),
+            oof_model = stats::setNames(
+                vapply(contracts, `[[`, character(1), 'oof_model'),
+                response_transform$target
+            ),
             predictive_oof_available = predictive_oof_available,
             oof_validation_level = oof_validation_level,
             projection_common_oof = projection_common_oof,
-            projection_condition_full_oof =
-                projection_condition_full_oof,
-            projection_global_common_oof =
-                projection_global_common_oof,
-            projection_origin =
-                'outer_condition_stratified_cell_oof',
+            projection_condition_full_oof = projection_condition_full_oof,
+            projection_global_common_oof = projection_global_common_oof,
+            projection_origin = 'outer_condition_stratified_cell_oof',
             projection_used_for_penalty = all(vapply(
-                contracts,
-                `[[`,
-                logical(1),
-                'projection_used_for_penalty'
+                contracts, `[[`, logical(1), 'projection_used_for_penalty'
             )),
             full_fit_projection_used_for_penalty = FALSE,
             oof_cell_coverage = stats::setNames(
@@ -355,9 +351,7 @@
             ),
             oof_projection_available_fraction = stats::setNames(
                 vapply(
-                    contracts,
-                    `[[`,
-                    numeric(1),
+                    contracts, `[[`, numeric(1),
                     'oof_projection_available_fraction'
                 ),
                 response_transform$target
@@ -366,17 +360,14 @@
             fold_transform_policy =
                 'equal_condition_center_equal_condition_within_variance_v1',
             oof_fold = stats::setNames(
-                lapply(contracts, `[[`, 'oof_fold'),
-                response_transform$target
+                lapply(contracts, `[[`, 'oof_fold'), response_transform$target
             ),
             cv_fold_transform = stats::setNames(
                 lapply(contracts, `[[`, 'cv_fold_transform'),
                 response_transform$target
             ),
             cv_effective_nfolds = stats::setNames(
-                vapply(contracts, function(x) {
-                    as.integer(x$cv_effective_nfolds)
-                }, integer(1)),
+                vapply(contracts, function(x) as.integer(x$cv_effective_nfolds), integer(1)),
                 response_transform$target
             ),
             outer_nfolds = stats::setNames(
@@ -388,47 +379,33 @@
                 response_transform$target
             ),
             lambda_path = stats::setNames(
-                lapply(contracts, `[[`, 'lambda_path'),
-                response_transform$target
+                lapply(contracts, `[[`, 'lambda_path'), response_transform$target
             ),
             cv = stats::setNames(
-                lapply(contracts, function(x) {
-                    list(mean = x$cv_mean, se = x$cv_se)
-                }),
+                lapply(contracts, function(x) list(mean = x$cv_mean, se = x$cv_se)),
                 response_transform$target
             ),
             refit = stats::setNames(
-                lapply(contracts, `[[`, 'refit'),
-                response_transform$target
+                lapply(contracts, `[[`, 'refit'), response_transform$target
             ),
             refit_stability = stats::setNames(
                 lapply(contracts, `[[`, 'refit_stability'),
                 response_transform$target
             ),
-            refit_stability_edge = do.call(
-                rbind,
-                lapply(contracts, function(x) {
-                    value <- x$refit_stability$edge
-                    if (!nrow(value)) return(value)
-                    value$target <- x$target
-                    value
-                })
-            ),
+            refit_stability_edge = do.call(rbind, lapply(contracts, function(x) {
+                value <- x$refit_stability$edge
+                if (!nrow(value)) return(value)
+                value$target <- x$target
+                value
+            })),
             condition_weight = contracts[[1L]]$condition_weight,
             active_tol = contracts[[1L]]$active_tol,
             universal_summary = 'estimability-aware shared baseline',
-            contrast_formula = 'beta_condition - beta_reference',
-            pairwise_contrast_formula =
-                'beta_condition[, condition_2] - beta_condition[, condition_1]',
-            comparison_mask_formula =
-                'estimable_in_condition_1 AND estimable_in_condition_2',
             condition_subgraph_definition =
                 'active_mask on the shared TF-peak-target candidate supergraph',
             direction_semantics = list(
                 absolute = 'sign(beta_condition)',
-                deviation = 'sign(delta_condition)',
-                pairwise =
-                    'sign(beta_condition[, condition_2] - beta_condition[, condition_1])'
+                deviation = 'sign(delta_condition)'
             ),
             normalization_contract = list(
                 input = 'paired_single_cells',
@@ -443,23 +420,18 @@
             ),
             projection_contract = list(
                 function_name = 'project_condition_grn_cells',
-                score =
-                    'outer-heldout sum(z_edge * beta_condition) by target',
-                projection_origin =
-                    'outer_condition_stratified_cell_oof',
-                projection_used_for_penalty =
-                    all(predictive_oof_available),
+                score = 'outer-heldout sum(z_edge * beta_condition) by target',
+                projection_origin = 'outer_condition_stratified_cell_oof',
+                projection_used_for_penalty = all(predictive_oof_available),
                 full_fit_projection_used_for_penalty = FALSE,
                 signed = TRUE,
                 support_policy = c(
                     'pairwise_common', 'global_common',
-                    'condition_estimable_diagnostic',
-                    'strict_diagnostic'
+                    'condition_estimable_diagnostic', 'strict_diagnostic'
                 ),
-                primary_support_policy =
-                    'pairwise_common or global_common only',
+                primary_support_policy = 'pairwise_common or global_common only',
                 condition_full_role = 'exploratory_only',
-                nonestimable = 'NA is unavailable; zero is estimable inactive',
+                nonestimable = 'structural_zero_before_target_summation',
                 metacell_aggregation =
                     'mean of cell-first TF-times-ATAC projections',
                 refit_after_aggregation = FALSE
@@ -469,45 +441,14 @@
     )
 }
 
-.condition_reference_comparison_mask <- function(
-    estimability_mask, reference_condition
-) {
-    estimability_mask <- as.matrix(estimability_mask)
-    if (!is.logical(estimability_mask) || anyNA(estimability_mask) ||
-        is.null(rownames(estimability_mask)) ||
-        is.null(colnames(estimability_mask))) {
-        stop('estimability_mask must be a named logical matrix without NA values.')
-    }
-    if (!is.character(reference_condition) ||
-        length(reference_condition) != 1L ||
-        !reference_condition %in% colnames(estimability_mask)) {
-        stop('reference_condition must identify one estimability-mask column.')
-    }
-    reference_estimable <- estimability_mask[, reference_condition]
-    out <- estimability_mask & matrix(
-        reference_estimable,
-        nrow = nrow(estimability_mask),
-        ncol = ncol(estimability_mask)
-    )
-    dimnames(out) <- dimnames(estimability_mask)
-    out
-}
-
 #' Extract complete condition-aware GRN fit contracts
 #'
-#' @param object A GRNData object returned by infer_condition_grn().
+#' @param object A GRNData object returned by [infer_condition_grn()].
 #' @param network_name Optional network prefix.
 #' @param cell_type Optional fitted cell-type label.
-#' @return One ConditionGRNFit object when exactly one fit matches, otherwise
-#' a named list of matching ConditionGRNFit objects. Each fit contains the
-#' exact edge dictionary, condition coefficient matrix, reference contrasts,
-#' edge-by-condition estimability and activity masks, equal-condition transformations,
-#' the fitted cell/assay contract, target-specific lambda selection,
-#' condition-level fit quality, and reproducibility metadata.
+#' @return One canonical `pando_condition_grn_fit` object or a named list.
 #' @export
-condition_grn_fit <- function(
-    object, network_name = NULL, cell_type = NULL
-) {
+condition_grn_fit <- function(object, network_name = NULL, cell_type = NULL) {
     UseMethod('condition_grn_fit')
 }
 
@@ -519,109 +460,42 @@ condition_grn_fit.GRNData <- function(
 ) {
     fits <- object@grn@params$condition_grn_fits
     if (is.null(fits) || !length(fits)) {
+        mode <- object@grn@params$analysis_mode
+        if (identical(mode, 'standard_grn')) {
+            stop('This object used standard infer_grn(); no condition coefficients were calculated.')
+        }
         stop('No ConditionGRNFit contracts were found in this GRNData object.')
     }
     keep <- vapply(fits, function(x) {
-        (is.null(network_name) ||
-            identical(x$network_name, network_name)) &&
+        (is.null(network_name) || identical(x$network_name, network_name)) &&
             (is.null(cell_type) || identical(x$cell_type, cell_type))
     }, logical(1))
     fits <- fits[keep]
-    if (!length(fits)) {
-        stop('No ConditionGRNFit contract matched the requested filters.')
-    }
+    if (!length(fits)) stop('No ConditionGRNFit contract matched the requested filters.')
+    invisible(lapply(fits, .condition_require_fit))
     if (length(fits) == 1L) fits[[1L]] else fits
 }
 
-.condition_require_v5 <- function(fit) {
+.condition_require_fit <- function(fit) {
     if (!inherits(fit, 'ConditionGRNFit') ||
-        !identical(fit$schema_version, 'pando_condition_grn_fit_v5')) {
-        stop('fit must be a pando_condition_grn_fit_v5 ConditionGRNFit object.')
+        !identical(fit$schema_version, .PANDO_CONDITION_GRN_FIT_SCHEMA)) {
+        stop('fit must use the canonical pando_condition_grn_fit schema.')
     }
     invisible(TRUE)
 }
 
-#' Compare two condition-specific sub-GRNs
-#'
-#' @param fit A `pando_condition_grn_fit_v5` object.
-#' @param condition_1 Baseline condition label.
-#' @param condition_2 Comparison condition label.
-#' @param scale Coefficient scale, standardized or raw assay units.
-#' @param active_tol Minimum absolute standardized effect used for activity and
-#' sign-switch calls, independent of the coefficient display scale.
-#' @return A data frame on the shared edge dictionary with absolute effects,
-#' pairwise differences, directions, activity, estimability and sign switches.
-#' @export
-condition_grn_contrast <- function(
-    fit,
-    condition_1,
-    condition_2,
-    scale = c('std', 'raw'),
-    active_tol = fit$active_tol
-) {
-    .condition_require_v5(fit)
-    scale <- match.arg(scale)
-    conditions <- c(as.character(condition_1), as.character(condition_2))
-    if (length(unique(conditions)) != 2L ||
-        !all(conditions %in% fit$condition_levels)) {
-        stop('condition_1 and condition_2 must identify two fitted conditions.')
-    }
-    beta <- if (scale == 'std') {
-        fit$beta_condition_std
-    } else {
-        fit$beta_condition_raw
-    }
-    beta_1 <- beta[, conditions[[1L]]]
-    beta_2 <- beta[, conditions[[2L]]]
-    estimable_1 <- fit$estimability_mask[, conditions[[1L]]]
-    estimable_2 <- fit$estimability_mask[, conditions[[2L]]]
-    comparable <- estimable_1 & estimable_2
-    delta_beta <- beta_2 - beta_1
-    delta_beta[!comparable] <- NA_real_
-    beta_activity_1 <- fit$beta_condition_std[, conditions[[1L]]]
-    beta_activity_2 <- fit$beta_condition_std[, conditions[[2L]]]
-    active_1 <- estimable_1 & abs(beta_activity_1) > active_tol
-    active_2 <- estimable_2 & abs(beta_activity_2) > active_tol
-    sign_switch <- comparable & active_1 & active_2 &
-        beta_1 * beta_2 < 0
-    data.frame(
-        fit$edge_table,
-        condition_1 = conditions[[1L]],
-        condition_2 = conditions[[2L]],
-        beta_condition_1 = beta_1,
-        beta_condition_2 = beta_2,
-        delta_beta = delta_beta,
-        absolute_direction_1 = sign(beta_1),
-        absolute_direction_2 = sign(beta_2),
-        pairwise_direction = sign(delta_beta),
-        estimable_1 = estimable_1,
-        estimable_2 = estimable_2,
-        comparable = comparable,
-        active_1 = active_1,
-        active_2 = active_2,
-        sign_switch = sign_switch,
-        stringsAsFactors = FALSE,
-        check.names = FALSE
-    )
-}
-
 #' Extract one active condition sub-GRN
 #'
-#' @param fit A `pando_condition_grn_fit_v5` object.
+#' @param fit A canonical `pando_condition_grn_fit` object.
 #' @param condition Fitted condition label.
 #' @param scale Coefficient scale, standardized or raw assay units.
-#' @param active_tol Minimum absolute standardized effect retained as active,
-#' independent of the coefficient display scale.
-#' @return A list containing the active edge table and its induced TF, peak and
-#' target node sets.
+#' @param active_tol Minimum absolute standardized effect retained as active.
+#' @return Active edges and induced TF, peak, and target node sets.
 #' @export
 condition_grn_subgraph <- function(
-    fit,
-    condition,
-    scale = c('std', 'raw'),
-    active_tol = fit$active_tol
+    fit, condition, scale = c('std', 'raw'), active_tol = fit$active_tol
 ) {
-    .condition_require_v5(fit)
+    .condition_require_fit(fit)
     scale <- match.arg(scale)
     condition <- as.character(condition)
     if (length(condition) != 1L || !condition %in% fit$condition_levels) {
@@ -633,8 +507,7 @@ condition_grn_subgraph <- function(
         fit$beta_condition_raw[, condition]
     }
     estimable <- fit$estimability_mask[, condition]
-    active <- estimable &
-        abs(fit$beta_condition_std[, condition]) > active_tol
+    active <- estimable & abs(fit$beta_condition_std[, condition]) > active_tol
     edges <- data.frame(
         fit$edge_table[active, , drop = FALSE],
         estimate = beta[active],
@@ -670,9 +543,7 @@ condition_grn_subgraph <- function(
 }
 
 .condition_levels <- function(x) {
-    if (is.factor(x)) {
-        return(levels(droplevels(x)))
-    }
+    if (is.factor(x)) return(levels(droplevels(x)))
     unique(as.character(x))
 }
 
