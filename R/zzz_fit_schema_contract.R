@@ -2,9 +2,12 @@
 
 .PANDO_CONDITION_GRN_FIT_SCHEMA <- 'pando_condition_grn_fit'
 
-.condition_absolute_fit_contract_canonical <- .condition_absolute_fit_contract
+if (!exists('.condition_absolute_fit_contract_pre_schema', inherits = FALSE)) {
+    .condition_absolute_fit_contract_pre_schema <-
+        .condition_absolute_fit_contract
+}
 .condition_absolute_fit_contract <- function(fit) {
-    fit <- .condition_absolute_fit_contract_canonical(fit)
+    fit <- .condition_absolute_fit_contract_pre_schema(fit)
     if (!is.list(fit)) return(fit)
     fit$schema_version <- .PANDO_CONDITION_GRN_FIT_SCHEMA
     fit$schema_policy <- 'single_unversioned_schema'
@@ -23,9 +26,40 @@
     invisible(TRUE)
 }
 
-# Internal compatibility for original source paths that still call the old
-# validator symbol. It validates only the canonical unversioned schema and does
-# not accept pando_condition_grn_fit_v4, pando_condition_grn_fit_v5, or aliases.
-.condition_require_v5 <- function(fit) {
-    .condition_require_fit(fit)
+.condition_replace_validator_symbol <- function(x) {
+    if (is.symbol(x) && identical(as.character(x), '.condition_require_v5')) {
+        return(as.name('.condition_require_fit'))
+    }
+    if (is.call(x) || is.pairlist(x) || is.expression(x)) {
+        for (i in seq_along(x)) {
+            x[[i]] <- .condition_replace_validator_symbol(x[[i]])
+        }
+    }
+    x
+}
+
+for (.condition_function_name in c(
+    '.project_condition_grn_cells_na',
+    'condition_grn_subgraph'
+)) {
+    if (exists(.condition_function_name, inherits = FALSE)) {
+        .condition_function <- get(
+            .condition_function_name,
+            inherits = FALSE
+        )
+        body(.condition_function) <- .condition_replace_validator_symbol(
+            body(.condition_function)
+        )
+        assign(
+            .condition_function_name,
+            .condition_function,
+            inherits = FALSE
+        )
+    }
+}
+rm(.condition_function_name, .condition_function)
+
+# The version-specific validator is removed after all callers are rewritten.
+if (exists('.condition_require_v5', inherits = FALSE)) {
+    rm(.condition_require_v5)
 }
