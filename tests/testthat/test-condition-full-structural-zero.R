@@ -19,16 +19,16 @@ test_that("exact-zero predictors are retained but not coefficient-estimable", {
 
 test_that("condition-full OOF uses zero on the non-estimable side", {
     set.seed(9)
-    common_a <- rnorm(24)
-    common_b <- rnorm(24)
-    unique_b <- rnorm(24)
+    common_a <- rnorm(30)
+    common_b <- rnorm(30)
+    unique_b <- rnorm(30)
     x <- list(
         A = cbind(common = common_a, unique = 0, closed = 0),
         B = cbind(common = common_b, unique = unique_b, closed = 0)
     )
     y <- list(
-        A = 0.8 * common_a + rnorm(24, sd = 0.1),
-        B = 0.8 * common_b + 0.7 * unique_b + rnorm(24, sd = 0.1)
+        A = 0.8 * common_a,
+        B = 0.8 * common_b + 2 * unique_b
     )
     mask <- matrix(
         TRUE, 3, 2,
@@ -37,13 +37,13 @@ test_that("condition-full OOF uses zero on the non-estimable side", {
     fit <- Pando:::.condition_nested_crossfit_within_cell_type(
         X_list = x,
         y_list = y,
-        lambda = c(0.1, 0.02),
+        lambda = c(1e-4, 1e-6),
         coefficient_mask = mask,
         outer_nfolds = 3L,
         inner_nfolds = 2L,
         comparison_conditions = c("A", "B"),
         seed = 27L,
-        max_iter = 1000L
+        max_iter = 3000L
     )
     full_a <- fit$projection_condition_full_oof$A
     common_a_score <- fit$projection_common_oof$A
@@ -51,7 +51,7 @@ test_that("condition-full OOF uses zero on the non-estimable side", {
     common_b_score <- fit$projection_common_oof$B
     expect_true(all(is.finite(c(full_a, common_a_score, full_b, common_b_score))))
     expect_equal(full_a, common_a_score, tolerance = 1e-8)
-    expect_true(any(abs(full_b - common_b_score) > 1e-8))
+    expect_gt(max(abs(full_b - common_b_score)), 1e-4)
     expect_identical(fit$primary_projection, "condition_full_oof")
     expect_identical(
         fit$nonestimable_projection_policy,
@@ -86,6 +86,9 @@ test_that("a fully closed predictor produces finite zero OOF projections", {
     expect_equal(unlist(fit$projection_common_oof), rep(0, 24))
     expect_equal(unlist(fit$projection_global_common_oof), rep(0, 24))
     expect_true(all(unlist(fit$oof_assignment_count) == 1L))
+    expect_true(all(vapply(fit$fold_support, function(one) {
+        all(one$projection_support_mask["closed", ])
+    }, logical(1))))
 })
 
 test_that("refit keeps structural-zero coefficients unavailable", {
