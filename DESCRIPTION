@@ -17,10 +17,12 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     Standard Pando networks remain the compatibility surface. Absolute
     condition coefficients, shared coefficients, condition deviations,
     estimability, activity, transformation, direction, and single-cell
-    projection layers are exposed through a versioned contract for reproducible
-    downstream metacell comparisons. The public and stored contract contains no
-    reference-condition coefficient, reference contrast, or comparison mask;
-    conditions are compared directly on the shared equal-condition coordinate.
+    projection layers are exposed through the single canonical
+    pando_condition_grn_fit contract for reproducible downstream metacell
+    comparisons. Version-suffixed condition-fit schemas are not public APIs.
+    The public and stored contract contains no reference-condition coefficient,
+    reference contrast, or comparison mask; conditions are compared directly on
+    the shared equal-condition coordinate.
 License: MIT
 Encoding: UTF-8
 LazyData: true
