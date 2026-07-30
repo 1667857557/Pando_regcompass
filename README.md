@@ -53,7 +53,6 @@ condition_object <- infer_condition_grn(
   comparison_conditions = c("Control", "Drug"),
   condition_mix = 0.5,
   condition_weight = "equal",
-  reference_condition = "Control",
   outer_nfolds = 5L,
   inner_nfolds = 5L,
   scale = TRUE
@@ -98,7 +97,7 @@ named, for example, `condition_grn__T_cell__shared`. In a condition network, an
 unavailable edge has `estimate = NA`; an estimable inactive edge has
 `estimate = 0`.
 
-### Lossless condition contract
+### Lossless absolute-condition contract
 
 ```r
 fit <- condition_grn_fit(
@@ -115,13 +114,14 @@ fit$estimability_mask
 fit$absolute_direction
 
 condition_grn_subgraph(fit, "Drug")
-condition_grn_contrast(fit, "Control", "Drug")
 ```
 
-`beta_condition` is the absolute regulatory effect. `delta_condition` is the
-deviation from the shared effect and must not be interpreted as the absolute
-direction. Unavailable effects are `NA`; estimable inactive effects are exact
-zero.
+`beta_condition` is the absolute regulatory effect on the common
+within-cell-type coordinate. The public and stored contract contains no
+reference-condition coefficient, reference contrast, comparison mask, or
+contrast helper. Conditions are compared directly by their absolute
+coefficients or their condition-specific OOF projections. Unavailable effects
+are `NA`; estimable inactive effects are exact zero.
 
 ### RegCompass handoff
 
