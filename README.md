@@ -106,6 +106,7 @@ fit <- condition_grn_fit(
   cell_type = "T_cell"
 )
 
+fit$schema_version
 fit$beta_condition_std
 fit$beta_shared_std
 fit$delta_condition_std
@@ -115,6 +116,13 @@ fit$absolute_direction
 
 condition_grn_subgraph(fit, "Drug")
 ```
+
+`fit$schema_version` is always `pando_condition_grn_fit`. This is the only
+supported fit schema. Version-suffixed names such as
+`pando_condition_grn_fit_v4` and `pando_condition_grn_fit_v5` are not public
+contracts and are rejected by downstream validators. The public extractor
+remains the single `condition_grn_fit()` API; no version-specific extractor or
+compatibility alias is exported.
 
 `beta_condition` is the absolute regulatory effect on the common
 within-cell-type coordinate. The public and stored contract contains no
