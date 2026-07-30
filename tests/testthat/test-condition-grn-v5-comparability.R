@@ -115,6 +115,7 @@ test_that("nested cross-fitting assigns every cell exactly once", {
         fit$projection_origin,
         "outer_condition_stratified_cell_oof"
     )
+    expect_identical(fit$primary_projection, "condition_full_oof")
     expect_true(fit$projection_used_for_penalty)
     expect_false(fit$full_fit_projection_used_for_penalty)
     expect_length(fit$fold_transform, 3L)
@@ -125,17 +126,17 @@ test_that("nested cross-fitting assigns every cell exactly once", {
     )))
 })
 
-test_that("OOF assignment remains complete when a fold has no estimable edge", {
+test_that("OOF assignment uses structural zeros when no edge is estimable", {
     x <- list(
-        A = matrix(1, nrow = 12, ncol = 1,
-                   dimnames = list(NULL, "constant_edge")),
-        B = matrix(1, nrow = 12, ncol = 1,
-                   dimnames = list(NULL, "constant_edge"))
+        A = matrix(0, nrow = 12, ncol = 1,
+                   dimnames = list(NULL, "closed_edge")),
+        B = matrix(0, nrow = 12, ncol = 1,
+                   dimnames = list(NULL, "closed_edge"))
     )
     y <- list(A = seq_len(12), B = seq_len(12) + 2)
     mask <- matrix(
         TRUE, 1, 2,
-        dimnames = list("constant_edge", c("A", "B"))
+        dimnames = list("closed_edge", c("A", "B"))
     )
     fit <- Pando:::.condition_nested_crossfit_within_cell_type(
         X_list = x,
@@ -149,12 +150,13 @@ test_that("OOF assignment remains complete when a fold has no estimable edge", {
     )
     expect_true(all(unlist(fit$oof_assignment_count) == 1L))
     expect_true(all(is.finite(unlist(fit$oof_prediction))))
-    expect_true(all(is.na(unlist(fit$projection_common_oof))))
+    expect_equal(unlist(fit$projection_condition_full_oof), rep(0, 24))
+    expect_equal(unlist(fit$projection_common_oof), rep(0, 24))
     expect_true(all(vapply(
         fit$fold_support,
         function(x) identical(
-            x$projection_unavailable_reason,
-            "no_outer_training_estimable_predictor"
+            x$projection_status,
+            "intercept_only_all_predictors_structural_zero"
         ),
         logical(1)
     )))
