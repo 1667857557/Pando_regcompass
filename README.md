@@ -120,8 +120,9 @@ condition_grn_subgraph(fit, "Drug")
 within-cell-type coordinate. The public and stored contract contains no
 reference-condition coefficient, reference contrast, comparison mask, or
 contrast helper. Conditions are compared directly by their absolute
-coefficients or their condition-specific OOF projections. Unavailable effects
-are `NA`; estimable inactive effects are exact zero.
+coefficients or their condition-specific OOF projections. Unavailable model
+coefficients remain `NA` in the fit contract; estimable inactive coefficients
+are exact zero.
 
 ### RegCompass handoff
 
@@ -132,7 +133,7 @@ projection <- project_condition_grn_cells(
   component = "condition",
   scale = "std",
   targets = metabolic_genes,
-  nonestimable = "propagate",
+  nonestimable = "structural_zero",
   support_policy = "pairwise_common",
   comparison_conditions = c("Control", "Drug"),
   origin = "oof"
@@ -144,10 +145,14 @@ outer-fold training transform and coefficient, then returns signed held-out
 cell-by-target regulatory scores. Every fitted cell is assigned exactly one
 outer-fold prediction. `origin = "full_fit"` is interpretation-only and is
 explicitly ineligible for penalty construction.
-RegCompass should aggregate these scores within condition × broad cell type
-after projection. It must not recompute
-TF×ATAC from metacell averages, renormalize by condition, refit coefficients or
-replace unavailable values with zero.
+
+At the projection-contribution layer, an edge that is not estimable under the
+requested support policy contributes exactly zero. It is retained as an
+auditable structural zero in `edge_structural_zero_mask`; target scores remain
+finite and structural zeros enter metacell means and downstream RegCompass
+analysis. RegCompass must aggregate the cell-first scores within condition ×
+broad cell type, without recomputing TF×ATAC from metacell averages,
+renormalizing by condition, or refitting coefficients.
 
 ## Citation
 
