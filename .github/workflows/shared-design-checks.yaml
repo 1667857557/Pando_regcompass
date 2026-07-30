@@ -28,13 +28,14 @@ jobs:
           )
           invisible(lapply(files, parse))
 
-      - name: Verify the v4 within-cell-type condition sub-GRN contract
+      - name: Verify the canonical within-cell-type condition sub-GRN contract
         shell: Rscript {0}
         run: |
           source("R/condition_grn_solver.R", local = globalenv())
           source("R/condition_grn_refit.R", local = globalenv())
           source("R/condition_grn_output.R", local = globalenv())
           source("R/condition_grn_projection.R", local = globalenv())
+          source("R/zzz_fit_schema_contract.R", local = globalenv())
 
           edge <- data.frame(
             edge_id = c("e1", "e2", "e3"),
@@ -52,7 +53,7 @@ jobs:
           )
           fit <- structure(
             list(
-              schema_version = "pando_condition_grn_fit_v4",
+              schema_version = "pando_condition_grn_fit",
               cell_type = "T_cell",
               fit_engine = "condition_sparse_within_cell_type_oof_refit",
               coefficient_scale = "pooled_cell_type_standardized_refit",
@@ -74,24 +75,29 @@ jobs:
             ),
             class = c("ConditionGRNFit", "list")
           )
+          .condition_require_fit(fit)
           control <- condition_grn_subgraph(fit, "Control", scale = "raw")
           drug <- condition_grn_subgraph(fit, "Drug", scale = "raw")
-          contrast <- condition_grn_contrast(
-            fit, "Control", "Drug", scale = "raw"
-          )
           stopifnot(
             identical(sort(control$nodes$tf), c("TF1", "TF3")),
             identical(sort(drug$nodes$tf), c("TF2", "TF3")),
-            isTRUE(contrast$sign_switch[contrast$edge_id == "e3"]),
-            identical(
-              unname(contrast$active_1),
-              unname(fit$active_mask[, "Control"])
-            ),
-            identical(
-              unname(contrast$active_2),
-              unname(fit$active_mask[, "Drug"])
-            )
+            sign(beta["e3", "Control"]) != sign(beta["e3", "Drug"]),
+            !exists(".condition_require_v5", inherits = FALSE),
+            !exists("condition_grn_contrast", inherits = FALSE)
           )
+
+          for (legacy_schema in c(
+            "pando_condition_grn_fit_v4",
+            "pando_condition_grn_fit_v5"
+          )) {
+            legacy_fit <- fit
+            legacy_fit$schema_version <- legacy_schema
+            rejected <- inherits(
+              try(.condition_require_fit(legacy_fit), silent = TRUE),
+              "try-error"
+            )
+            stopifnot(rejected)
+          }
 
           raw_predictor <- c(2, 5, 8)
           beta_std <- 0.75
@@ -116,7 +122,10 @@ jobs:
           stopifnot(
             any(namespace == "export(infer_grn)"),
             any(namespace == "export(infer_condition_grn)"),
+            any(namespace == "export(condition_grn_fit)"),
             any(namespace == "export(project_condition_grn_cells)"),
+            !any(grepl("condition_grn_fit_v[0-9]+", namespace)),
+            !any(namespace == "export(condition_grn_contrast)"),
             !any(grepl("prepare_grn_design|validate_grn_design", namespace))
           )
 
@@ -131,4 +140,4 @@ jobs:
           stopifnot(!any(file.exists(removed)))
 
           description <- read.dcf("DESCRIPTION")
-          stopifnot(identical(unname(description[1, "Version"]), "1.4.0"))
+          stopifnot(identical(unname(description[1, "Version"]), "1.5.0"))
