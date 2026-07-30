@@ -17,13 +17,14 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     candidate supergraph and an equal-condition within-condition variance scale
     are used within each broad cell type. The condition engine uses nested
     condition-stratified cell cross-fitting, sparse-group shared-support
-    selection, and a support-constrained hierarchical-ridge refit. Absolute
-    condition coefficients, estimability, activity, transformations, direction,
-    and single-cell projection layers are exposed through the single canonical
-    pando_condition_grn_fit contract. Non-estimable projection edges contribute
-    structural zeros before target aggregation. Canonical behavior is
-    implemented directly in the defining functions; runtime function rewriting
-    and version-suffixed fit schemas are not used.
+    selection, and a support-constrained hierarchical-ridge refit. The primary
+    projection is condition-full outer-heldout support: jointly estimable edges
+    form the common component, condition-specific estimable edges remain in the
+    focal condition, and every non-estimable edge contributes a projectable
+    structural zero in that condition. Exact-zero predictors remain represented
+    in the shared candidate supergraph without being assigned fitted
+    coefficients. Canonical behavior is implemented directly in the defining
+    functions; version-suffixed fit schemas are not used.
 License: MIT
 Encoding: UTF-8
 LazyData: true

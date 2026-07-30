@@ -35,13 +35,16 @@ omitted.}
 \item{nonestimable}{Define unavailable edge contributions as exact structural
 zeros, or stop. Structural zeros enter target summation and downstream metacell
 aggregation.}
-\item{support_policy}{Use pairwise-common or global-common support for primary
-comparisons. Condition-estimable and strict support are diagnostic only.}
+\item{support_policy}{Select a common-support decomposition or the lower-level
+condition-estimable projection. Use \code{project_condition_grn_primary_cells()}
+for the canonical condition-full OOF penalty.}
 \item{comparison_conditions}{Two conditions defining pairwise-common support
 when the fit contains more than two conditions.}
 \item{origin}{Use outer-heldout cell projections for analysis, or full-fit
 coefficients for interpretation only.}
-\item{diagnostic_only}{Must be true for condition-estimable or strict support.}
+\item{diagnostic_only}{Required by this lower-level function for
+condition-estimable or strict support. The primary wrapper promotes the stored
+condition-full OOF projection without refitting.}
 \item{active_tol}{Minimum absolute standardized effect recorded as active in
 edge metadata, independent of the returned score scale.}
 }
@@ -51,9 +54,10 @@ directions, edge effects, explicit structural-zero masks, target-condition
 estimability and a metacell aggregation contract.
 }
 \description{
-The default returns the stored outer-heldout cell projection. Full-fit
-coefficients are available only as an explicitly labelled interpretation path.
-Every non-estimable edge contributes zero before target aggregation and is
-retained in downstream analysis with an auditable structural-zero mask.
-RegCompass aggregates the held-out cell scores using exact membership.
+This lower-level interface exposes common-support and diagnostic decompositions.
+The canonical RegCompass primary route is
+\code{project_condition_grn_primary_cells()}, which uses the stored
+condition-full outer-heldout projection. Every non-estimable edge contributes
+zero in the affected condition. Exact-zero predictors remain represented as
+projectable structural-zero candidates without fitted coefficients.
 }
