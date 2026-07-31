@@ -16,14 +16,20 @@ jobs:
         with:
           ref: agent/cpp-batched-condition-refit
           fetch-depth: 0
-      - name: Extract and apply reviewed bundle
+      - name: Verify and apply reviewed bundle
         shell: bash
         run: |
-          awk '/^H4sI/{print; exit}' \
-            .github/workflows/agent-apply-fused-target-engine.yml \
+          cat \
+            .agent-bundle/chunk00 \
+            .agent-bundle/chunk01 \
+            .agent-bundle/chunk02 \
+            .agent-bundle/chunk03 \
             | base64 --decode > /tmp/pando-changes.tar.gz
+          echo "1b20a10084e12e6038a9d1cfd064451c7321b3cd488cd4b6b5d2f0213cdb5942  /tmp/pando-changes.tar.gz" \
+            | sha256sum -c -
           tar -tzf /tmp/pando-changes.tar.gz
           tar -xzf /tmp/pando-changes.tar.gz -C .
+          rm -rf .agent-bundle
           rm -f .github/workflows/agent-export-source.yml
           rm -f .github/workflows/agent-apply-fused-target-engine.yml
           rm -f .github/workflows/agent-run-fused-target-engine.yml
