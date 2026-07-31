@@ -1,10 +1,14 @@
 # Nested cross-fitting and condition-balanced transformations.
 
-.condition_population_variance <- function(x) {
+.condition_population_variance <- function(x, center = NULL) {
     if (!ncol(x)) {
         return(numeric())
     }
-    center <- as.numeric(Matrix::colMeans(x))
+    if (is.null(center)) {
+        center <- as.numeric(Matrix::colMeans(x))
+    } else {
+        center <- as.numeric(center)
+    }
     second_moment <- as.numeric(Matrix::colMeans(x * x))
     pmax(second_moment - center * center, 0)
 }
@@ -16,8 +20,46 @@
     unname(tools::md5sum(path))
 }
 
+.condition_build_fold_statistics <- function(
+    X_list, y_list, coefficient_mask = NULL
+) {
+    p <- ncol(X_list[[1L]])
+    k <- length(X_list)
+    task <- lapply(seq_along(X_list), function(index) {
+        X <- X_list[[index]]
+        y <- as.numeric(y_list[[index]])
+        x_mean <- as.numeric(Matrix::colMeans(X))
+        y_mean <- mean(y)
+        list(
+            x_mean = x_mean,
+            x_variance = .condition_population_variance(X, center = x_mean),
+            y_mean = y_mean,
+            y_variance = mean((y - y_mean)^2)
+        )
+    })
+    if (is.null(coefficient_mask)) {
+        coefficient_mask <- matrix(
+            TRUE, p, k,
+            dimnames = list(colnames(X_list[[1L]]), names(X_list))
+        )
+    }
+    coefficient_mask <- as.matrix(coefficient_mask)
+    variance_mask <- vapply(task, function(value) {
+        is.finite(value$x_variance) &
+            value$x_variance > .Machine$double.eps
+    }, logical(p))
+    if (is.null(dim(variance_mask))) {
+        variance_mask <- matrix(variance_mask, nrow = p)
+    }
+    dimnames(variance_mask) <- dimnames(coefficient_mask)
+    list(
+        task = task,
+        estimability_mask = coefficient_mask & variance_mask
+    )
+}
+
 .condition_build_balanced_transform <- function(
-    X_list, y_list, condition_weights = NULL
+    X_list, y_list, condition_weights = NULL, fold_statistics = NULL
 ) {
     if (!is.list(X_list) || !length(X_list) ||
         !is.list(y_list) || length(X_list) != length(y_list)) {
@@ -43,18 +85,19 @@
         stop('condition_weights must be positive and sum to one.')
     }
     equal_weights <- rep(1 / k, k)
-    if (!isTRUE(all.equal(
-            condition_weights, equal_weights, tolerance = 0
-        ))) {
+    if (!isTRUE(all.equal(condition_weights, equal_weights, tolerance = 0))) {
         stop(
             'Comparable condition transforms require exactly equal condition weights.'
         )
     }
+    if (is.null(fold_statistics)) {
+        fold_statistics <- .condition_build_fold_statistics(X_list, y_list)
+    }
     predictor_means <- vapply(
-        X_list, function(x) as.numeric(Matrix::colMeans(x)), numeric(p)
+        fold_statistics$task, `[[`, numeric(p), 'x_mean'
     )
     predictor_variances <- vapply(
-        X_list, .condition_population_variance, numeric(p)
+        fold_statistics$task, `[[`, numeric(p), 'x_variance'
     )
     if (is.null(dim(predictor_means))) {
         predictor_means <- matrix(predictor_means, nrow = p)
@@ -64,10 +107,12 @@
     predictor_scale <- sqrt(as.numeric(
         predictor_variances %*% condition_weights
     ))
-    response_means <- vapply(y_list, mean, numeric(1))
-    response_variances <- vapply(y_list, function(y) {
-        mean((as.numeric(y) - mean(y))^2)
-    }, numeric(1))
+    response_means <- vapply(
+        fold_statistics$task, `[[`, numeric(1), 'y_mean'
+    )
+    response_variances <- vapply(
+        fold_statistics$task, `[[`, numeric(1), 'y_variance'
+    )
     response_center <- sum(condition_weights * response_means)
     response_scale <- sqrt(sum(condition_weights * response_variances))
     predictor_estimable <- is.finite(predictor_scale) &
@@ -111,17 +156,27 @@
     )
 }
 
+.condition_scale_columns_sparse <- function(x, scale) {
+    scale <- as.numeric(scale)
+    if (length(scale) != ncol(x) || any(!is.finite(scale)) ||
+        any(scale <= 0)) {
+        stop('Predictor scale must be finite, positive and aligned to columns.')
+    }
+    if (inherits(x, 'sparseMatrix')) {
+        value <- x %*% Matrix::Diagonal(x = 1 / scale)
+        dimnames(value) <- dimnames(x)
+        return(methods::as(value, 'dgCMatrix'))
+    }
+    value <- sweep(as.matrix(x), 2L, scale, '/')
+    dimnames(value) <- dimnames(x)
+    value
+}
+
 .condition_apply_balanced_transform <- function(
     X_list, y_list = NULL, transform
 ) {
     X_scaled <- lapply(X_list, function(x) {
-        value <- sweep(
-            as.matrix(x), 2L, transform$predictor_center, '-'
-        )
-        Matrix::Matrix(
-            sweep(value, 2L, transform$predictor_scale, '/'),
-            sparse = FALSE
-        )
+        .condition_scale_columns_sparse(x, transform$predictor_scale)
     })
     names(X_scaled) <- names(X_list)
     y_scaled <- if (is.null(y_list)) {
@@ -133,10 +188,17 @@
         })
     }
     if (!is.null(y_scaled)) names(y_scaled) <- names(y_list)
-    list(X = X_scaled, y = y_scaled)
+    list(
+        X = X_scaled,
+        y = y_scaled,
+        predictor_center_implementation =
+            'implicit_in_condition_intercept_and_projection_shift'
+    )
 }
 
-.condition_training_estimability <- function(X_list, coefficient_mask) {
+.condition_training_estimability <- function(
+    X_list, coefficient_mask, fold_statistics = NULL
+) {
     p <- ncol(X_list[[1L]])
     k <- length(X_list)
     if (is.null(coefficient_mask)) {
@@ -147,23 +209,17 @@
     }
     coefficient_mask <- as.matrix(coefficient_mask)
     if (!is.logical(coefficient_mask) ||
-        !identical(dim(coefficient_mask), c(p, k)) ||
-        anyNA(coefficient_mask)) {
+        !identical(dim(coefficient_mask), c(p, k)) || anyNA(coefficient_mask)) {
         stop('coefficient_mask must be a logical predictors-by-conditions matrix.')
     }
-    variance_mask <- vapply(
-        X_list,
-        function(x) {
-            value <- .condition_population_variance(x)
-            is.finite(value) & value > .Machine$double.eps
-        },
-        logical(p)
-    )
-    if (is.null(dim(variance_mask))) {
-        variance_mask <- matrix(variance_mask, nrow = p)
+    if (is.null(fold_statistics)) {
+        fold_statistics <- .condition_build_fold_statistics(
+            X_list,
+            lapply(X_list, function(x) rep(0, nrow(x))),
+            coefficient_mask
+        )
     }
-    dimnames(variance_mask) <- dimnames(coefficient_mask)
-    coefficient_mask & variance_mask
+    fold_statistics$estimability_mask
 }
 
 .condition_select_lambda_nested <- function(
@@ -174,10 +230,27 @@
     if (!identical(condition_weight, 'equal')) {
         stop('Nested comparable selection requires condition_weight = "equal".')
     }
+    actual <- .condition_true_variance_mask(X_list, coefficient_mask)
+    lambda <- sort(unique(as.numeric(lambda)), decreasing = TRUE)
     effective_nfolds <- min(
-        as.integer(nfolds),
-        min(vapply(y_list, length, integer(1)))
+        as.integer(nfolds), min(vapply(y_list, length, integer(1)))
     )
+    if (!any(rowSums(actual) > 0L)) {
+        return(list(
+            selected_index = 1L,
+            selected_lambda = lambda[[1L]],
+            lambda_min = lambda[[1L]],
+            lambda_1se = lambda[[1L]],
+            cv_mean = rep(NA_real_, length(lambda)),
+            cv_se = rep(NA_real_, length(lambda)),
+            fold_loss = matrix(
+                NA_real_, nrow = effective_nfolds, ncol = length(lambda)
+            ),
+            fold_transform = vector('list', effective_nfolds),
+            effective_nfolds = effective_nfolds,
+            selection_reason = 'intercept_only_all_predictors_structural_zero'
+        ))
+    }
     if (effective_nfolds < 2L) {
         stop('Inner cross-validation requires at least two cells per condition.')
     }
@@ -206,8 +279,11 @@
         })
         names(X_train_raw) <- names(X_valid_raw) <- names(X_list)
         names(y_train_raw) <- names(y_valid_raw) <- names(y_list)
+        fold_stats <- .condition_build_fold_statistics(
+            X_train_raw, y_train_raw, coefficient_mask
+        )
         transform <- .condition_build_balanced_transform(
-            X_train_raw, y_train_raw
+            X_train_raw, y_train_raw, fold_statistics = fold_stats
         )
         fold_transform[[fold]] <- transform
         train_scaled <- .condition_apply_balanced_transform(
@@ -216,44 +292,47 @@
         valid_scaled <- .condition_apply_balanced_transform(
             X_valid_raw, y_valid_raw, transform
         )
-        fold_mask <- .condition_training_estimability(
-            X_train_raw, coefficient_mask
-        )
+        fold_mask <- fold_stats$estimability_mask
         keep <- rowSums(fold_mask) > 0L & transform$predictor_estimable
         if (!any(keep)) {
             next
         }
+        X_train <- lapply(train_scaled$X, function(x) x[, keep, drop = FALSE])
+        X_valid <- lapply(valid_scaled$X, function(x) x[, keep, drop = FALSE])
+        mask <- fold_mask[keep, , drop = FALSE]
+        scaled_mask <- .condition_true_variance_mask(X_train, mask)
         path <- .condition_fit_multitask_path(
-            X_list = lapply(train_scaled$X, function(x) {
-                x[, keep, drop = FALSE]
-            }),
+            X_list = X_train,
             y_list = train_scaled$y,
             lambda = lambda,
             alpha = alpha,
             condition_mix = condition_mix,
             condition_weight = 'equal',
-            coefficient_mask = fold_mask[keep, , drop = FALSE],
+            coefficient_mask = mask,
             max_iter = max_iter,
             tol_objective = tol_objective,
-            tol_coef = tol_coef
+            tol_coef = tol_coef,
+            verified_estimability_mask = scaled_mask
+        )
+        cache <- .condition_make_refit_cache(
+            X_train, train_scaled$y, condition_weight = 'equal'
         )
         for (lambda_index in seq_along(lambda)) {
             selection_fit <- path$fits[[lambda_index]]
             refit <- .condition_refit_shared_baseline(
-                X_list = lapply(train_scaled$X, function(x) {
-                    x[, keep, drop = FALSE]
-                }),
+                X_list = X_train,
                 y_list = train_scaled$y,
                 beta_selection = selection_fit$beta,
-                estimability_mask = fold_mask[keep, , drop = FALSE],
+                estimability_mask = scaled_mask,
                 ridge = max(selection_fit$lambda * (1 - alpha), 1e-6),
                 active_tol = active_tol,
-                condition_weight = 'equal'
+                condition_weight = 'equal',
+                cache = cache,
+                estimability_verified = TRUE
             )
             mse <- vapply(seq_along(X_list), function(task) {
                 prediction <- refit$intercept[[task]] + as.numeric(
-                    valid_scaled$X[[task]][, keep, drop = FALSE] %*%
-                        refit$beta[, task]
+                    X_valid[[task]] %*% refit$beta[, task]
                 )
                 mean((valid_scaled$y[[task]] - prediction)^2)
             }, numeric(1))
@@ -269,27 +348,35 @@
         stop('Inner cross-validation produced no finite validation loss.')
     }
     minimum_index <- which.min(cv_mean)
+    eligible <- which(
+        cv_mean <= cv_mean[[minimum_index]] + cv_se[[minimum_index]]
+    )
     selected_index <- if (lambda_selection == 'lambda.min') {
         minimum_index
     } else {
-        eligible <- which(
-            cv_mean <= cv_mean[[minimum_index]] + cv_se[[minimum_index]]
-        )
         eligible[[1L]]
     }
     list(
         selected_index = selected_index,
         selected_lambda = lambda[[selected_index]],
         lambda_min = lambda[[minimum_index]],
-        lambda_1se = lambda[[which(
-            cv_mean <= cv_mean[[minimum_index]] + cv_se[[minimum_index]]
-        )[[1L]]]],
+        lambda_1se = lambda[[eligible[[1L]]]],
         cv_mean = cv_mean,
         cv_se = cv_se,
         fold_loss = fold_loss,
         fold_transform = fold_transform,
         effective_nfolds = effective_nfolds
     )
+}
+
+.condition_projection_score <- function(X, beta, center, scale, mask) {
+    score <- rep(0, nrow(X))
+    if (!any(mask)) {
+        return(score)
+    }
+    coefficient <- beta[mask]
+    score <- as.numeric(X[, mask, drop = FALSE] %*% coefficient)
+    score - sum((center[mask] / scale[mask]) * coefficient)
 }
 
 .condition_nested_crossfit_within_cell_type <- function(
@@ -320,13 +407,7 @@
     if (is.null(names(X_list))) names(X_list) <- names(y_list)
     if (is.null(names(y_list))) names(y_list) <- names(X_list)
     conditions <- names(X_list)
-    if (is.null(comparison_conditions)) {
-        comparison_conditions <- if (length(conditions) == 2L) {
-            conditions
-        } else {
-            conditions
-        }
-    }
+    if (is.null(comparison_conditions)) comparison_conditions <- conditions
     comparison_conditions <- unique(as.character(comparison_conditions))
     if (length(comparison_conditions) < 2L ||
         !all(comparison_conditions %in% conditions)) {
@@ -358,7 +439,6 @@
     fold_selected_lambda <- rep(NA_real_, outer$effective_nfolds)
     fold_inner_cv <- vector('list', outer$effective_nfolds)
     fold_support <- vector('list', outer$effective_nfolds)
-
     for (fold in seq_len(outer$effective_nfolds)) {
         test <- lapply(outer$folds, `==`, fold)
         X_train_raw <- lapply(seq_along(X_list), function(task) {
@@ -370,56 +450,69 @@
         X_test_raw <- lapply(seq_along(X_list), function(task) {
             X_list[[task]][test[[task]], , drop = FALSE]
         })
-        y_test_raw <- lapply(seq_along(y_list), function(task) {
-            y_list[[task]][test[[task]]]
-        })
         names(X_train_raw) <- names(X_test_raw) <- conditions
-        names(y_train_raw) <- names(y_test_raw) <- conditions
+        names(y_train_raw) <- conditions
+        fold_stats <- .condition_build_fold_statistics(
+            X_train_raw, y_train_raw, coefficient_mask
+        )
         transform <- .condition_build_balanced_transform(
-            X_train_raw, y_train_raw
+            X_train_raw, y_train_raw, fold_statistics = fold_stats
         )
         train_scaled <- .condition_apply_balanced_transform(
             X_train_raw, y_train_raw, transform
         )
         test_scaled <- .condition_apply_balanced_transform(
-            X_test_raw, y_test_raw, transform
+            X_test_raw, transform = transform
         )
-        fold_mask <- .condition_training_estimability(
-            X_train_raw, coefficient_mask
-        )
-        keep <- rowSums(fold_mask) > 0L & transform$predictor_estimable
+        fold_estimable <- fold_stats$estimability_mask
+        fold_structural_zero <- !fold_estimable
+        dimnames(fold_structural_zero) <- dimnames(fold_estimable)
+        keep <- rowSums(fold_estimable) > 0L & transform$predictor_estimable
+        common_pair_full <- rowSums(
+            fold_estimable[, comparison_conditions, drop = FALSE]
+        ) == length(comparison_conditions)
+        common_global_full <- rowSums(fold_estimable) == length(conditions)
         fold_transform[[fold]] <- transform
-        if (!any(keep)) {
-            fold_support[[fold]] <- list(
-                estimability_mask = fold_mask,
-                comparison_conditions = comparison_conditions,
-                pairwise_or_requested_common = stats::setNames(
-                    logical(), character()
-                ),
-                global_common = stats::setNames(logical(), character()),
-                projection_unavailable_reason =
-                    'no_outer_training_estimable_predictor'
+        fold_support[[fold]] <- list(
+            coefficient_estimable_mask = fold_estimable,
+            projectable_structural_zero_mask = fold_structural_zero,
+            projection_support_mask = fold_estimable | fold_structural_zero,
+            comparison_conditions = comparison_conditions,
+            pairwise_or_requested_common = stats::setNames(
+                common_pair_full, rownames(fold_estimable)
+            ),
+            global_common = stats::setNames(
+                common_global_full, rownames(fold_estimable)
             )
+        )
+        if (!any(keep)) {
+            fold_support[[fold]]$projection_status <-
+                'intercept_only_all_predictors_structural_zero'
             for (task in seq_along(X_list)) {
                 intercept_scaled <- mean(train_scaled$y[[task]])
                 prediction[[task]][test[[task]]] <-
                     intercept_scaled * transform$response_scale +
                     transform$response_center
+                projection_full[[task]][test[[task]]] <- 0
+                projection_common[[task]][test[[task]]] <- 0
+                projection_global[[task]][test[[task]]] <- 0
                 assignment_count[[task]][test[[task]]] <-
                     assignment_count[[task]][test[[task]]] + 1L
             }
             next
         }
+        X_train <- lapply(train_scaled$X, function(x) x[, keep, drop = FALSE])
+        X_test <- lapply(test_scaled$X, function(x) x[, keep, drop = FALSE])
+        raw_mask <- fold_estimable[keep, , drop = FALSE]
+        scaled_mask <- .condition_true_variance_mask(X_train, raw_mask)
         fold_lambda <- if (isTRUE(lambda_auto)) {
             .condition_make_lambda_path(
-                X_list = lapply(train_scaled$X, function(x) {
-                    x[, keep, drop = FALSE]
-                }),
+                X_list = X_train,
                 y_list = train_scaled$y,
                 alpha = alpha,
                 condition_mix = condition_mix,
                 condition_weight = 'equal',
-                coefficient_mask = fold_mask[keep, , drop = FALSE],
+                coefficient_mask = scaled_mask,
                 nlambda = nlambda,
                 lambda_min_ratio = lambda_min_ratio
             )
@@ -427,15 +520,13 @@
             lambda
         }
         inner <- .condition_select_lambda_nested(
-            lapply(X_train_raw, function(x) {
-                x[, keep, drop = FALSE]
-            }),
+            lapply(X_train_raw, function(x) x[, keep, drop = FALSE]),
             y_train_raw,
             fold_lambda,
             alpha,
             condition_mix,
             condition_weight,
-            fold_mask[keep, , drop = FALSE],
+            raw_mask,
             inner_nfolds,
             active_tol,
             lambda_selection,
@@ -447,69 +538,62 @@
         fold_selected_lambda[[fold]] <- inner$selected_lambda
         fold_inner_cv[[fold]] <- inner
         selected <- .condition_fit_multitask_path(
-            X_list = lapply(train_scaled$X, function(x) {
-                x[, keep, drop = FALSE]
-            }),
+            X_list = X_train,
             y_list = train_scaled$y,
             lambda = inner$selected_lambda,
             alpha = alpha,
             condition_mix = condition_mix,
             condition_weight = 'equal',
-            coefficient_mask = fold_mask[keep, , drop = FALSE],
+            coefficient_mask = raw_mask,
             max_iter = max_iter,
             tol_objective = tol_objective,
-            tol_coef = tol_coef
+            tol_coef = tol_coef,
+            verified_estimability_mask = scaled_mask
         )$fits[[1L]]
+        cache <- .condition_make_refit_cache(
+            X_train, train_scaled$y, condition_weight = 'equal'
+        )
         refit <- .condition_refit_shared_baseline(
-            X_list = lapply(train_scaled$X, function(x) {
-                x[, keep, drop = FALSE]
-            }),
+            X_list = X_train,
             y_list = train_scaled$y,
             beta_selection = selected$beta,
-            estimability_mask = fold_mask[keep, , drop = FALSE],
+            estimability_mask = scaled_mask,
             ridge = max(selected$lambda * (1 - alpha), 1e-6),
             active_tol = active_tol,
-            condition_weight = 'equal'
+            condition_weight = 'equal',
+            cache = cache,
+            estimability_verified = TRUE
         )
-        common_pair <- rowSums(
-            fold_mask[keep, comparison_conditions, drop = FALSE]
-        ) == length(comparison_conditions)
-        common_global <- rowSums(
-            fold_mask[keep, , drop = FALSE]
-        ) == length(conditions)
-        fold_support[[fold]] <- list(
-            estimability_mask = fold_mask,
-            comparison_conditions = comparison_conditions,
-            pairwise_or_requested_common = stats::setNames(
-                common_pair, rownames(fold_mask)[keep]
-            ),
-            global_common = stats::setNames(
-                common_global, rownames(fold_mask)[keep]
-            )
-        )
+        common_pair <- common_pair_full[keep]
+        common_global <- common_global_full[keep]
+        center <- transform$predictor_center[keep]
+        scale <- transform$predictor_scale[keep]
         for (task in seq_along(X_list)) {
-            X_test <- test_scaled$X[[task]][, keep, drop = FALSE]
             beta <- refit$beta[, task]
             estimable <- refit$estimability_mask[, task]
-            full_score <- if (any(estimable)) {
-                as.numeric(X_test[, estimable, drop = FALSE] %*% beta[estimable])
-            } else {
-                rep(NA_real_, nrow(X_test))
+            linear_score <- rep(0, nrow(X_test[[task]]))
+            if (any(estimable)) {
+                linear_score <- as.numeric(
+                    X_test[[task]][, estimable, drop = FALSE] %*%
+                        beta[estimable]
+                )
             }
-            common_score <- if (any(common_pair)) {
-                as.numeric(X_test[, common_pair, drop = FALSE] %*%
-                    beta[common_pair])
-            } else {
-                rep(NA_real_, nrow(X_test))
+            full_score <- linear_score
+            if (any(estimable)) {
+                full_score <- full_score - sum(
+                    (center[estimable] / scale[estimable]) * beta[estimable]
+                )
             }
-            global_score <- if (any(common_global)) {
-                as.numeric(X_test[, common_global, drop = FALSE] %*%
-                    beta[common_global])
-            } else {
-                rep(NA_real_, nrow(X_test))
-            }
+            common_estimable <- common_pair & estimable
+            common_score <- .condition_projection_score(
+                X_test[[task]], beta, center, scale, common_estimable
+            )
+            global_estimable <- common_global & estimable
+            global_score <- .condition_projection_score(
+                X_test[[task]], beta, center, scale, global_estimable
+            )
             raw_prediction <- (
-                refit$intercept[[task]] + full_score
+                refit$intercept[[task]] + linear_score
             ) * transform$response_scale + transform$response_center
             prediction[[task]][test[[task]]] <- raw_prediction
             projection_full[[task]][test[[task]]] <- full_score
@@ -522,7 +606,7 @@
     if (any(vapply(assignment_count, function(x) any(x != 1L), logical(1)))) {
         stop('Every cell must receive exactly one outer-fold projection.')
     }
-    projection_available_fraction <- vapply(projection_common, function(x) {
+    projection_available_fraction <- vapply(projection_full, function(x) {
         mean(is.finite(x))
     }, numeric(1))
     cell_coverage <- vapply(assignment_count, function(x) {
@@ -542,15 +626,21 @@
         fold_support = fold_support,
         oof_assignment_count = assignment_count,
         oof_cell_coverage = cell_coverage,
-        oof_projection_available_fraction =
-            projection_available_fraction,
+        oof_projection_available_fraction = projection_available_fraction,
         comparison_conditions = comparison_conditions,
         projection_origin = 'outer_condition_stratified_cell_oof',
+        primary_projection = 'condition_full_oof',
+        common_projection_role = 'shared_estimable_component',
+        condition_unique_projection_role =
+            'condition_full_oof_minus_common_support_oof',
+        nonestimable_projection_policy = 'structural_zero_by_condition',
         projection_used_for_penalty = TRUE,
         full_fit_projection_used_for_penalty = FALSE,
         fold_transform_policy =
             'equal_condition_center_equal_condition_within_variance_v1',
+        predictor_center_implementation =
+            'implicit_in_condition_intercept_and_projection_shift',
         oof_model =
-            'nested_selection_shared_baseline_refit_heldout_projection'
+            'nested_selection_cached_refit_heldout_condition_full_projection'
     )
 }
