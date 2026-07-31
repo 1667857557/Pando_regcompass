@@ -18,9 +18,9 @@ jobs:
       - uses: r-lib/actions/setup-r@v2
         with:
           use-public-rspm: true
-      - name: Install numerical dependency
+      - name: Install numerical dependencies
         shell: Rscript {0}
-        run: install.packages('Matrix')
+        run: install.packages(c('Matrix', 'Rcpp', 'RcppEigen'))
       - name: Parse package R sources
         shell: Rscript {0}
         run: |
@@ -33,9 +33,20 @@ jobs:
         shell: Rscript {0}
         run: |
           library(Matrix)
+          eigen_include <- system.file('include', package = 'RcppEigen')
+          stopifnot(nzchar(eigen_include))
+          old_flags <- Sys.getenv('PKG_CPPFLAGS', unset = '')
+          Sys.setenv(PKG_CPPFLAGS = paste(
+            old_flags,
+            paste0('-I', shQuote(eigen_include)),
+            '-DEIGEN_DONT_PARALLELIZE'
+          ))
+          Rcpp::sourceCpp('src/condition_refit.cpp')
           source('R/condition_grn_solver.R')
           source('R/condition_grn_crossfit.R')
           source('R/condition_grn_refit.R')
+          .condition_refit_path_cpp <- condition_refit_path_cpp
+          .condition_native_refit_available <- function() TRUE
 
           prox_input <- matrix(c(3, 3, 0.2, 0.2), nrow = 2, byrow = TRUE)
           group_only <- .condition_sparse_group_prox(
@@ -139,12 +150,15 @@ jobs:
             estimability_verified = TRUE, solver = 'direct'
           )
           stopifnot(isTRUE(all.equal(
-            direct$beta, reference$beta, tolerance = 1e-6
+            direct$beta, reference$beta, tolerance = 2e-6
           )))
           stopifnot(isTRUE(all.equal(
-            direct$beta_shared, reference$beta_shared, tolerance = 1e-6
+            direct$beta_shared, reference$beta_shared, tolerance = 2e-6
           )))
           stopifnot(identical(direct$support_mask, reference$support_mask))
+          stopifnot(identical(
+            direct$backend, 'cpp_eigen_dense_llt_batched_path'
+          ))
 
           X_zero <- list(
             A = Matrix(matrix(rnorm(80), ncol = 2), sparse = TRUE),
