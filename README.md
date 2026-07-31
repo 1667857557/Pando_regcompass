@@ -44,20 +44,23 @@ The canonical condition workflow contains only the main nested-CV and final
 support-constrained refit. Bootstrap stability, ridge-grid sensitivity and other
 sensitivity refits are not run or stored.
 
-The default `auto` backend uses the compiled Eigen sparse-group FISTA solver when
-the package shared library is loaded and otherwise falls back to the reference R
-implementation. Predictor scaling remains sparse; equal-condition centering is
-handled algebraically by the condition intercept and the projection shift.
-Fold-level centered Gram matrices and response cross-products are cached and
-reused across the lambda path.
+The TF-by-ATAC product, sparse-group lambda path and support-constrained refit are
+all compiled C++17/RcppEigen kernels. Missing native registration, unsupported
+matrix layouts, invalid dimensions, failed factorization, non-finite arithmetic
+or failed residual verification stop the analysis immediately. There is no
+runtime R fallback.
 
-For numerical auditing:
+Predictor scaling remains sparse; equal-condition centering is handled
+algebraically by the condition intercept and the projection shift. Fold-level
+centered Gram matrices and response cross-products are cached. All lambda refits
+for one inner fold are sent to the native refit kernel in one batch, which reuses
+the cached sufficient statistics and the estimability-dependent shared Schur
+system while preserving the original double-precision equations and output
+schema.
 
-```r
-options(Pando.condition_solver = "R")    # reference implementation
-options(Pando.condition_solver = "cpp")  # require compiled implementation
-options(Pando.condition_solver = "auto") # default
-```
+The alternating R refit remains available only as the internal numerical oracle
+`Pando:::.condition_refit_shared_baseline_reference()` for package regression
+tests. It is not a selectable analysis backend.
 
 ## Primary RegCompass handoff
 
