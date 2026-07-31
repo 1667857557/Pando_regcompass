@@ -20,7 +20,9 @@ jobs:
         shell: Rscript {0}
         run: |
           install.packages(c("remotes", "testthat"))
-          remotes::install_deps(dependencies = TRUE)
+          remotes::install_deps(
+            dependencies = c("Depends", "Imports", "LinkingTo")
+          )
       - name: Install Pando
         shell: Rscript {0}
         run: remotes::install_local(".", upgrade = "never")
