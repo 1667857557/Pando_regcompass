@@ -650,11 +650,26 @@
     y <- as.numeric(response_raw[, 1L])
     tf_names <- unique(edges$tf)
     peak_names <- unique(edges$region)
-    tf_matrix <- gene_data[, tf_names, drop = FALSE]
-    peak_matrix <- peak_data[, peak_names, drop = FALSE]
-    tf_edge <- tf_matrix[, match(edges$tf, colnames(tf_matrix)), drop = FALSE]
-    peak_edge <- peak_matrix[, match(edges$region, colnames(peak_matrix)), drop = FALSE]
-    X <- tf_edge * peak_edge
+    tf_matrix <- methods::as(
+        gene_data[, tf_names, drop = FALSE], 'dgCMatrix'
+    )
+    peak_matrix <- methods::as(
+        peak_data[, peak_names, drop = FALSE], 'dgCMatrix'
+    )
+    tf_index <- match(edges$tf, colnames(tf_matrix))
+    peak_index <- match(edges$region, colnames(peak_matrix))
+    if (anyNA(tf_index) || anyNA(peak_index)) {
+        stop('TF and peak edge indices are not aligned to the design matrices.')
+    }
+    X <- .condition_product_matrix_cpp(
+        tf_matrix,
+        peak_matrix,
+        as.integer(tf_index),
+        as.integer(peak_index)
+    )
+    dimnames(X) <- list(
+        rownames(tf_matrix), colnames(tf_matrix)[tf_index]
+    )
     edge_variance <- .condition_population_variance(X)
     keep <- is.finite(edge_variance) & edge_variance > .Machine$double.eps
     X <- X[, keep, drop = FALSE]
