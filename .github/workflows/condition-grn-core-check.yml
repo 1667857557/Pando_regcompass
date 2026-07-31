@@ -29,11 +29,16 @@ jobs:
         run: |
           files <- list.files('R', pattern = '\\.R$', full.names = TRUE)
           invisible(lapply(files, parse))
-      - name: Run condition-aware solver smoke tests
+          stopifnot(length(list.files(
+            'R', pattern = '^zzz.*condition_grn.*\\.R$'
+          )) == 0L)
+      - name: Run condition-aware numerical smoke tests
         shell: Rscript {0}
         run: |
           library(Matrix)
           source('R/condition_grn_solver.R')
+          source('R/condition_grn_crossfit.R')
+          source('R/condition_grn_refit.R')
 
           prox_input <- matrix(c(3, 3, 0.2, 0.2), nrow = 2, byrow = TRUE)
           group_only <- .condition_sparse_group_prox(
@@ -65,6 +70,7 @@ jobs:
             Control = Matrix(matrix(rnorm(160), ncol = 4), sparse = TRUE),
             Drug = Matrix(matrix(rnorm(160), ncol = 4), sparse = TRUE)
           )
+          colnames(X$Control) <- colnames(X$Drug) <- paste0('e', 1:4)
           y <- list(Control = rnorm(40), Drug = rnorm(40))
           independent <- .condition_fit_multitask_lambda(
             X, y, lambda = 0.05, alpha = 0.5, condition_mix = 1,
@@ -87,7 +93,62 @@ jobs:
             tolerance = 1e-3
           )))
 
-          set.seed(12)
+          set.seed(13)
+          refit_X <- list(
+            Control = matrix(rnorm(180), nrow = 45, ncol = 4),
+            Drug = matrix(rnorm(180), nrow = 45, ncol = 4)
+          )
+          colnames(refit_X$Control) <- colnames(refit_X$Drug) <- paste0('e', 1:4)
+          refit_y <- list(
+            Control = 0.8 * refit_X$Control[, 1] -
+              0.3 * refit_X$Control[, 3] + rnorm(45, sd = 0.1),
+            Drug = -0.4 * refit_X$Drug[, 1] +
+              0.5 * refit_X$Drug[, 2] + rnorm(45, sd = 0.1)
+          )
+          selection <- matrix(
+            c(0.8, -0.4, 0, 0.5, -0.3, 0, 0, 0),
+            nrow = 4,
+            dimnames = list(paste0('e', 1:4), c('Control', 'Drug'))
+          )
+          mask <- matrix(TRUE, 4, 2, dimnames = dimnames(selection))
+          fold_stats <- .condition_build_fold_statistics(
+            refit_X, refit_y, mask
+          )
+          cached_transform <- .condition_build_balanced_transform(
+            refit_X, refit_y, fold_statistics = fold_stats
+          )
+          plain_transform <- .condition_build_balanced_transform(
+            refit_X, refit_y
+          )
+          stopifnot(identical(
+            cached_transform$predictor_center,
+            plain_transform$predictor_center
+          ))
+          stopifnot(identical(
+            cached_transform$predictor_scale,
+            plain_transform$predictor_scale
+          ))
+          cache <- .condition_make_refit_cache(refit_X, refit_y, 'equal')
+          reference <- .condition_refit_shared_baseline_reference(
+            refit_X, refit_y, selection, mask,
+            ridge = 0.05, active_tol = 1e-8,
+            condition_weight = 'equal', cache = cache,
+            estimability_verified = TRUE
+          )
+          direct <- .condition_refit_shared_baseline(
+            refit_X, refit_y, selection, mask,
+            ridge = 0.05, active_tol = 1e-8,
+            condition_weight = 'equal', cache = cache,
+            estimability_verified = TRUE, solver = 'direct'
+          )
+          stopifnot(isTRUE(all.equal(
+            direct$beta, reference$beta, tolerance = 1e-6
+          )))
+          stopifnot(isTRUE(all.equal(
+            direct$beta_shared, reference$beta_shared, tolerance = 1e-6
+          )))
+          stopifnot(identical(direct$support_mask, reference$support_mask))
+
           X_zero <- list(
             A = Matrix(matrix(rnorm(80), ncol = 2), sparse = TRUE),
             B = Matrix(matrix(rnorm(80), ncol = 2), sparse = TRUE)

@@ -40,6 +40,7 @@
     verbose
 ) {
     names(features) <- features
+    condition_index <- split(seq_along(condition), condition, drop = TRUE)
     fit_one <- function(gene) {
         tryCatch(
             .condition_fit_target(
@@ -47,6 +48,7 @@
                 gene_data = gene_data,
                 peak_data = peak_data,
                 condition = condition,
+                condition_index = condition_index,
                 peaks2gene = peaks2gene,
                 peaks2motif = peaks2motif,
                 motif2tf = motif2tf,
@@ -91,7 +93,6 @@
             }
         )
     }
-
     results <- .condition_map(
         features, fit_one, parallel = parallel, BPPARAM = BPPARAM, verbose = verbose
     )
@@ -129,7 +130,8 @@
     seed,
     max_iter,
     tol_objective,
-    tol_coef
+    tol_coef,
+    condition_index = NULL
 ) {
     if (!target %in% rownames(peaks2gene)) {
         .condition_target_skip(
@@ -141,9 +143,11 @@
     if (length(candidate_peaks) == 0L) {
         .condition_target_skip('No candidate regulatory peaks were found.')
     }
-
     response_raw <- gene_data[, target, drop = FALSE]
     condition_levels <- levels(condition)
+    if (is.null(condition_index)) {
+        condition_index <- split(seq_along(condition), condition, drop = TRUE)
+    }
     peak_raw <- peak_data[, candidate_peaks, drop = FALSE]
     peak_mask <- .condition_component_masks(
         peak_raw, response_raw, condition, peak_cor, candidate_screen
@@ -155,7 +159,9 @@
             return(character())
         }
         tf_flag <- as.logical(
-            sparseMatrixStats::colMaxs(motif2tf[motif_flag, , drop = FALSE]) > 0
+            sparseMatrixStats::colMaxs(
+                motif2tf[motif_flag, , drop = FALSE]
+            ) > 0
         )
         setdiff(colnames(motif2tf)[tf_flag], target)
     })
@@ -166,7 +172,6 @@
             'No motif-mapped TFs were found for candidate peaks.'
         )
     }
-
     tf_raw <- gene_data[, gene_tfs, drop = FALSE]
     tf_mask <- .condition_component_masks(
         tf_raw, response_raw, condition, tf_cor, candidate_screen
@@ -200,7 +205,6 @@
             'No TF-peak-target edge passed shared candidate screening.'
         )
     }
-
     tf_variance <- .condition_column_variance(
         gene_data[, unique(edges$tf), drop = FALSE]
     )
@@ -225,14 +229,14 @@
             'No edges remained after TF and peak variance checks.'
         )
     }
-
     prepared_design <- .condition_build_design(
         response_raw = response_raw,
         gene_data = gene_data,
         peak_data = peak_data,
         edges = edges,
         condition = condition,
-        scale = scale
+        scale = scale,
+        condition_index = condition_index
     )
     edges <- prepared_design$edges
     X <- prepared_design$X
@@ -246,10 +250,10 @@
             'No non-constant interaction predictors remained.'
         )
     }
-
     for (level in condition_levels) {
+        index <- condition_index[[level]]
         variance <- .condition_population_variance(
-            X[condition == level, , drop = FALSE]
+            X[index, , drop = FALSE]
         )
         edge_mask[, level] <- edge_mask[, level] &
             is.finite(variance) & variance > .Machine$double.eps
@@ -291,17 +295,19 @@
         )
     }
     X_list <- lapply(condition_levels, function(level) {
-        X[condition == level, , drop = FALSE]
+        X[condition_index[[level]], , drop = FALSE]
     })
-    y_list <- lapply(condition_levels, function(level) y[condition == level])
+    y_list <- lapply(condition_levels, function(level) {
+        y[condition_index[[level]]]
+    })
     X_raw_list <- lapply(condition_levels, function(level) {
-        X_raw[condition == level, , drop = FALSE]
+        X_raw[condition_index[[level]], , drop = FALSE]
     })
     y_raw_list <- lapply(condition_levels, function(level) {
-        y_raw[condition == level]
+        y_raw[condition_index[[level]]]
     })
     cell_id_list <- lapply(condition_levels, function(level) {
-        rownames(gene_data)[condition == level]
+        rownames(gene_data)[condition_index[[level]]]
     })
     names(X_list) <- names(y_list) <- condition_levels
     names(X_raw_list) <- names(y_raw_list) <- condition_levels
@@ -320,7 +326,6 @@
     } else {
         sort(unique(as.numeric(lambda)), decreasing = TRUE)
     }
-
     cv <- .condition_nested_crossfit_within_cell_type(
         X_list = X_raw_list,
         y_list = y_raw_list,
@@ -369,16 +374,11 @@
         'oof_assignment_count'
     )
     for (field in oof_projection_fields) {
-        cv[[field]] <- lapply(
-            seq_along(cv[[field]]), function(task) {
-                stats::setNames(
-                    cv[[field]][[task]], cell_id_list[[task]]
-                )
-            }
-        )
+        cv[[field]] <- lapply(seq_along(cv[[field]]), function(task) {
+            stats::setNames(cv[[field]][[task]], cell_id_list[[task]])
+        })
         names(cv[[field]]) <- condition_levels
     }
-
     full_cv <- .condition_select_lambda_nested(
         X_list = X_raw_list,
         y_list = y_raw_list,
@@ -395,65 +395,53 @@
         tol_objective = tol_objective,
         tol_coef = tol_coef
     )
-
+    full_estimability <- .condition_true_variance_mask(X_list, edge_mask)
+    selected_index <- match(full_cv$selected_lambda, lambda_path)
+    required_lambda <- lambda_path[seq_len(selected_index)]
     full_path <- .condition_fit_multitask_path(
         X_list = X_list,
         y_list = y_list,
-        lambda = lambda_path,
+        lambda = required_lambda,
         alpha = alpha,
         condition_mix = condition_mix,
         condition_weight = condition_weight,
         coefficient_mask = edge_mask,
         max_iter = max_iter,
         tol_objective = tol_objective,
-        tol_coef = tol_coef
+        tol_coef = tol_coef,
+        verified_estimability_mask = full_estimability
     )
-    selected_index <- match(full_cv$selected_lambda, full_path$lambda)
-    selected <- full_path$fits[[selected_index]]
+    selected <- full_path$fits[[length(full_path$fits)]]
     beta_selection <- selected$beta
     colnames(beta_selection) <- condition_levels
     rownames(beta_selection) <- edges$edge_id
+    full_cache <- .condition_make_refit_cache(
+        X_list, y_list, condition_weight = condition_weight
+    )
     refit <- .condition_refit_shared_baseline(
         X_list = X_list,
         y_list = y_list,
         beta_selection = beta_selection,
-        estimability_mask = edge_mask,
+        estimability_mask = full_estimability,
         ridge = max(selected$lambda * (1 - alpha), 1e-6),
         active_tol = active_tol,
-        condition_weight = condition_weight
+        condition_weight = condition_weight,
+        cache = full_cache,
+        estimability_verified = TRUE
     )
     beta <- refit$beta
     rownames(beta) <- edges$edge_id
-    refit_stability <- .condition_refit_stability_diagnostics(
-        X_list = X_list,
-        y_list = y_list,
-        beta_selection = beta_selection,
-        estimability_mask = edge_mask,
-        ridge = refit$ridge,
-        comparison_conditions = comparison_conditions,
-        selection_lambda = selected$lambda,
-        alpha = alpha,
-        condition_mix = condition_mix,
-        active_tol = active_tol,
-        condition_weight = condition_weight,
-        bootstrap_replicates = 20L,
-        seed = .condition_seed_for('refit-stability', seed),
-        max_iter = max_iter,
-        tol_objective = tol_objective,
-        tol_coef = tol_coef
-    )
-
     pooled_tf_corr <- .condition_named_cor(
         gene_data[, unique(edges$tf), drop = FALSE], response_raw
     )
     condition_tf_corr <- lapply(condition_levels, function(level) {
+        index <- condition_index[[level]]
         .condition_named_cor(
-            gene_data[condition == level, unique(edges$tf), drop = FALSE],
-            response_raw[condition == level, , drop = FALSE]
+            gene_data[index, unique(edges$tf), drop = FALSE],
+            response_raw[index, , drop = FALSE]
         )
     })
     names(condition_tf_corr) <- condition_levels
-
     universal_beta <- refit$beta_shared
     universal_coefs <- .condition_format_coefs(
         edges, universal_beta, pooled_tf_corr[edges$tf]
@@ -466,7 +454,6 @@
         )
     })
     names(condition_coefs) <- condition_levels
-
     condition_gof <- stats::setNames(
         vector('list', length(condition_levels)), condition_levels
     )
@@ -485,13 +472,12 @@
             nvariables = nrow(edges),
             stringsAsFactors = FALSE
         )
-        universal_intercept <- mean(
-            y_list[[task]] - as.numeric(X_list[[task]] %*% universal_beta)
+        universal_linear <- as.numeric(X_list[[task]] %*% universal_beta)
+        universal_intercept <- mean(y_list[[task]] - universal_linear)
+        universal_prediction <- universal_intercept + universal_linear
+        universal_rsq[[task]] <- .condition_rsq(
+            y_list[[task]], universal_prediction
         )
-        universal_prediction <- universal_intercept + as.numeric(
-            X_list[[task]] %*% universal_beta
-        )
-        universal_rsq[[task]] <- .condition_rsq(y_list[[task]], universal_prediction)
     }
     universal_gof <- data.frame(
         target = target,
@@ -504,7 +490,6 @@
     if (!any(is.finite(universal_rsq))) {
         universal_gof$rsq <- NA_real_
     }
-
     selected_cv_mean <- if (all(is.na(full_cv$cv_mean))) {
         NA_real_
     } else {
@@ -578,50 +563,37 @@
             stats::setNames(rep(NA_real_, length(condition_levels)), condition_levels)
         } else {
             stats::setNames(vapply(seq_along(condition_levels), function(task) {
-                .condition_rsq(
-                    y_raw_list[[task]], cv$oof_prediction[[task]]
-                )
+                .condition_rsq(y_raw_list[[task]], cv$oof_prediction[[task]])
             }, numeric(1)), condition_levels)
         },
         condition_rmse_oof = if (is.null(cv$oof_prediction)) {
             stats::setNames(rep(NA_real_, length(condition_levels)), condition_levels)
         } else {
             stats::setNames(vapply(seq_along(condition_levels), function(task) {
-                sqrt(mean(
-                    (y_raw_list[[task]] - cv$oof_prediction[[task]])^2
-                ))
+                sqrt(mean((y_raw_list[[task]] - cv$oof_prediction[[task]])^2))
             }, numeric(1)), condition_levels)
         },
         target_rsq_oof_pooled = if (is.null(cv$oof_prediction)) {
             NA_real_
         } else {
-            .condition_pooled_task_rsq(
-                y_raw_list, cv$oof_prediction
-            )
+            .condition_pooled_task_rsq(y_raw_list, cv$oof_prediction)
         },
         oof_fold = if (is.null(cv$oof_fold)) NULL else cv$oof_fold,
-        cv_fold_transform = if (is.null(cv$fold_transform)) {
-            NULL
-        } else {
-            cv$fold_transform
-        },
+        cv_fold_transform = if (is.null(cv$fold_transform)) NULL else cv$fold_transform,
         outer_nfolds = cv$outer_nfolds,
         inner_nfolds = cv$inner_nfolds,
         cv_effective_nfolds = cv$outer_nfolds,
         cv_method = cv$cv_method,
         oof_model = cv$oof_model,
-        projection_condition_full_oof =
-            unlist(
-                unname(cv$projection_condition_full_oof),
-                use.names = TRUE
-            ),
-        projection_common_oof =
-            unlist(unname(cv$projection_common_oof), use.names = TRUE),
-        projection_global_common_oof =
-            unlist(
-                unname(cv$projection_global_common_oof),
-                use.names = TRUE
-            ),
+        projection_condition_full_oof = unlist(
+            unname(cv$projection_condition_full_oof), use.names = TRUE
+        ),
+        projection_common_oof = unlist(
+            unname(cv$projection_common_oof), use.names = TRUE
+        ),
+        projection_global_common_oof = unlist(
+            unname(cv$projection_global_common_oof), use.names = TRUE
+        ),
         projection_origin = cv$projection_origin,
         projection_used_for_penalty =
             cv$projection_used_for_penalty &&
@@ -632,14 +604,13 @@
         oof_cell_coverage = mean(unlist(cv$oof_cell_coverage)),
         oof_projection_available_fraction =
             mean(unlist(cv$oof_projection_available_fraction)),
-        oof_assignment_count =
-            unlist(unname(cv$oof_assignment_count), use.names = TRUE),
+        oof_assignment_count = unlist(
+            unname(cv$oof_assignment_count), use.names = TRUE
+        ),
         outer_selected_lambda = cv$fold_selected_lambda,
         comparison_conditions = comparison_conditions,
-        predictive_oof_available =
-            identical(candidate_screen, 'motif_domain'),
-        oof_validation_level =
-            'outer_condition_stratified_heldout_cells',
+        predictive_oof_available = identical(candidate_screen, 'motif_domain'),
+        oof_validation_level = 'outer_condition_stratified_heldout_cells',
         selected_lambda = selected$lambda,
         lambda_path = lambda_path,
         cv_mean = full_cv$cv_mean,
@@ -651,7 +622,7 @@
         fit_engine = fit_engine,
         reference_condition = reference_condition,
         refit = list(
-            method = 'support_constrained_common_metric_ridge',
+            method = 'support_constrained_common_metric_ridge_direct_schur',
             ridge = refit$ridge,
             common_metric = refit$common_metric,
             converged = refit$converged,
@@ -659,12 +630,9 @@
             coef_change = refit$coef_change,
             support_source = 'condition_sparse_selection',
             inactive_semantics = 'estimable_zero',
-            unavailable_semantics = 'NA',
-            stability_status = refit_stability$status
-        ),
-        refit_stability = refit_stability
+            unavailable_semantics = 'NA'
+        )
     )
-
     list(
         universal_coefs = universal_coefs,
         condition_coefs = condition_coefs,
@@ -676,14 +644,14 @@
 }
 
 .condition_build_design <- function(
-    response_raw, gene_data, peak_data, edges, condition, scale
+    response_raw, gene_data, peak_data, edges, condition, scale,
+    condition_index = NULL
 ) {
     y <- as.numeric(response_raw[, 1L])
     tf_names <- unique(edges$tf)
     peak_names <- unique(edges$region)
     tf_matrix <- gene_data[, tf_names, drop = FALSE]
     peak_matrix <- peak_data[, peak_names, drop = FALSE]
-
     tf_edge <- tf_matrix[, match(edges$tf, colnames(tf_matrix)), drop = FALSE]
     peak_edge <- peak_matrix[, match(edges$region, colnames(peak_matrix)), drop = FALSE]
     X <- tf_edge * peak_edge
@@ -700,15 +668,21 @@
     transform <- NULL
     if (scale) {
         levels_condition <- levels(condition)
+        if (is.null(condition_index)) {
+            condition_index <- split(seq_along(condition), condition, drop = TRUE)
+        }
         X_list <- lapply(levels_condition, function(level) {
-            X_raw[condition == level, , drop = FALSE]
+            X_raw[condition_index[[level]], , drop = FALSE]
         })
         y_list <- lapply(levels_condition, function(level) {
-            y_raw[condition == level]
+            y_raw[condition_index[[level]]]
         })
         names(X_list) <- names(y_list) <- levels_condition
+        fold_stats <- .condition_build_fold_statistics(X_list, y_list)
         transform <- tryCatch(
-            .condition_build_balanced_transform(X_list, y_list),
+            .condition_build_balanced_transform(
+                X_list, y_list, fold_statistics = fold_stats
+            ),
             error = function(error) {
                 .condition_target_skip(conditionMessage(error))
             }
@@ -752,7 +726,8 @@
 
 .condition_scale_vector <- function(x) {
     standard_deviation <- stats::sd(x)
-    if (!is.finite(standard_deviation) || standard_deviation <= .Machine$double.eps) {
+    if (!is.finite(standard_deviation) ||
+        standard_deviation <= .Machine$double.eps) {
         return(NULL)
     }
     (x - mean(x)) / standard_deviation
@@ -762,7 +737,8 @@
     dense <- as.matrix(x)
     means <- colMeans(dense)
     standard_deviations <- apply(dense, 2, stats::sd)
-    valid <- is.finite(standard_deviations) & standard_deviations > .Machine$double.eps
+    valid <- is.finite(standard_deviations) &
+        standard_deviations > .Machine$double.eps
     dense <- dense[, valid, drop = FALSE]
     means <- means[valid]
     standard_deviations <- standard_deviations[valid]
@@ -800,11 +776,10 @@
 ) {
     levels_condition <- levels(condition)
     if (candidate_screen == 'motif_domain') {
-        out <- matrix(
+        return(matrix(
             TRUE, nrow = ncol(x), ncol = length(levels_condition),
             dimnames = list(colnames(x), levels_condition)
-        )
-        return(out)
+        ))
     }
     if (candidate_screen != 'pooled_within_condition') {
         stop('Unsupported candidate screening strategy.')
