@@ -141,12 +141,16 @@ jobs:
 
           description <- read.dcf("DESCRIPTION")
           stopifnot(
-            identical(unname(description[1, "Version"]), "1.5.2"),
+            identical(unname(description[1, "Version"]), "1.6.0"),
             identical(
-              unname(description[1, "Config/Pando/NativeSparseABI"]), "3"
+              unname(description[1, "Config/Pando/NativeSparseABI"]), "4"
             ),
             identical(
               unname(description[1, "Config/Pando/ConditionRefitBackend"]),
               "cpp-eigen-direct-path-fail-fast"
+            ),
+            identical(
+              unname(description[1, "Config/Pando/ConditionTargetEngineBackend"]),
+              "cpp-eigen-fused-nested-cv-path-refit-validation-fail-fast"
             )
           )
