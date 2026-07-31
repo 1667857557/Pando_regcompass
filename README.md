@@ -52,11 +52,10 @@ runtime R fallback.
 
 Predictor scaling remains sparse; equal-condition centering is handled
 algebraically by the condition intercept and the projection shift. Fold-level
-centered Gram matrices and response cross-products are cached. All lambda refits
-for one inner fold are sent to the native refit kernel in one batch, which reuses
-the cached sufficient statistics and the estimability-dependent shared Schur
-system while preserving the original double-precision equations and output
-schema.
+centered Gram matrices and response cross-products are cached. Each refit is
+sent to the native path-capable kernel with the cached sufficient statistics,
+preserving the original double-precision equations and output schema while
+removing R-level Schur construction and matrix slicing.
 
 The alternating R refit remains available only as the internal numerical oracle
 `Pando:::.condition_refit_shared_baseline_reference()` for package regression
@@ -75,7 +74,7 @@ projection <- project_condition_grn_primary_cells(
 
 The primary route is `condition-full OOF`:
 
-- an edge estimable in the focal condition contributes its outer-heldout
+- an edge estimable in the focal condition contributes its outerheldout
   condition coefficient;
 - jointly estimable edges form the common-support component;
 - an edge non-estimable in one or both conditions contributes exactly zero in
