@@ -35,6 +35,17 @@ inline Eigen::SparseMatrix<double> pando_condition_as_dgCMatrix(
         if (column_pointer[column] > column_pointer[column + 1]) {
             Rcpp::stop(label + " has a non-monotone column pointer.");
         }
+        int previous_row = -1;
+        for (int index = column_pointer[column];
+             index < column_pointer[column + 1]; ++index) {
+            if (row_index[index] <= previous_row) {
+                Rcpp::stop(
+                    label +
+                    " has non-increasing row indices within a sparse column."
+                );
+            }
+            previous_row = row_index[index];
+        }
     }
     for (int index = 0; index < nonzero; ++index) {
         if (row_index[index] < 0 || row_index[index] >= rows ||
