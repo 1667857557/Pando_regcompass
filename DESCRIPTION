@@ -20,16 +20,16 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     selection, and a support-constrained hierarchical-ridge refit. The numerical
     core keeps TF-by-ATAC designs sparse, reads canonical dgCMatrix slots without
     S4-to-dense coercion, initializes FISTA from centered spectral estimates and
-    uses a compiled Eigen proximal-gradient path solver with an R reference
-    fallback. The TF-by-ATAC product kernel also has an exact sparse R fallback,
-    selectable through the Pando.condition_product option. Bootstrap stability,
-    ridge-grid sensitivity and related sensitivity refits are excluded from the
-    canonical workflow. The primary projection is condition-full outer-heldout
-    support: jointly estimable edges form the common component,
-    condition-specific estimable edges remain in the focal condition, and every
-    non-estimable edge contributes a projectable structural zero in that
-    condition. Exact-zero predictors remain represented in the shared candidate
-    supergraph without being assigned fitted coefficients.
+    uses only the compiled Eigen proximal-gradient path solver. The TF-by-ATAC
+    product kernel is also C++-only; missing registration, unsupported sparse
+    classes and native execution errors terminate the analysis. Bootstrap
+    stability, ridge-grid sensitivity and related sensitivity refits are
+    excluded from the canonical workflow. The primary projection is
+    condition-full outer-heldout support: jointly estimable edges form the common
+    component, condition-specific estimable edges remain in the focal condition,
+    and every non-estimable edge contributes a projectable structural zero in
+    that condition. Exact-zero predictors remain represented in the shared
+    candidate supergraph without being assigned fitted coefficients.
 License: MIT
 Encoding: UTF-8
 LazyData: true
@@ -78,6 +78,6 @@ Suggests:
 Remotes: 
     github::immunogenomics/presto
 Config/Pando/NativeSparseABI: 2
-Config/Pando/ConditionProductBackend: auto-cpp-with-exact-sparse-r-fallback
-Config/Pando/ConditionSolverBackend: auto-cpp-with-r-reference-fallback
+Config/Pando/ConditionProductBackend: cpp-only-fail-fast
+Config/Pando/ConditionSolverBackend: cpp-only-fail-fast
 Config/Pando/InstalledRuntimeCI: R-4.5.1-Matrix-1.7.4
