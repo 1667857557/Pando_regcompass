@@ -62,12 +62,26 @@ test_that("installed sparse condition kernels use strict C++ execution", {
     )
 })
 
-test_that("strict native product kernel rejects unsupported S4 layouts", {
+test_that("strict native kernels reject unsupported or invalid sparse layouts", {
     symmetric <- methods::as(Matrix::Diagonal(3), "dsCMatrix")
     expect_error(
         Pando:::.condition_product_matrix_cpp(
             symmetric, symmetric, as.integer(1:3), as.integer(1:3)
         ),
         "dgCMatrix"
+    )
+
+    invalid <- methods::as(Matrix::sparseMatrix(
+        i = c(1L, 3L),
+        j = c(1L, 1L),
+        x = c(1, 2),
+        dims = c(3L, 1L)
+    ), "dgCMatrix")
+    invalid@i <- rev(invalid@i)
+    expect_error(
+        Pando:::.condition_product_matrix_cpp(
+            invalid, invalid, 1L, 1L
+        ),
+        "non-increasing row indices"
     )
 })
