@@ -53,7 +53,7 @@ test_that("cached hierarchical refit matches the reference implementation", {
 })
 
 test_that("compiled and R sparse-group paths are numerically equivalent", {
-    skip_if_not(Pando:::.condition_native_solver_available())
+    skip_if(!Pando:::.condition_native_solver_available())
     set.seed(21)
     x <- list(
         A = Matrix::Matrix(matrix(rnorm(180), 45, 4), sparse = TRUE),
