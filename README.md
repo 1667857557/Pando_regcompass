@@ -38,6 +38,27 @@ Each broad cell type is fitted separately. Conditions share the candidate
 supergraph, coefficient coordinate, target columns and fold-local transforms.
 They may have different active edges, exact zeros and opposite directions.
 
+## Numerical core
+
+The canonical condition workflow contains only the main nested-CV and final
+support-constrained refit. Bootstrap stability, ridge-grid sensitivity and other
+sensitivity refits are not run or stored.
+
+The default `auto` backend uses the compiled Eigen sparse-group FISTA solver when
+the package shared library is loaded and otherwise falls back to the reference R
+implementation. Predictor scaling remains sparse; equal-condition centering is
+handled algebraically by the condition intercept and the projection shift.
+Fold-level centered Gram matrices and response cross-products are cached and
+reused across the lambda path.
+
+For numerical auditing:
+
+```r
+options(Pando.condition_solver = "R")    # reference implementation
+options(Pando.condition_solver = "cpp")  # require compiled implementation
+options(Pando.condition_solver = "auto") # default
+```
+
 ## Primary RegCompass handoff
 
 ```r
