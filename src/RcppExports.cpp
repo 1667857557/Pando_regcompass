@@ -27,8 +27,23 @@ BEGIN_RCPP
 END_RCPP
 }
 
+SEXP condition_product_matrix_cpp(SEXP left_matrix, SEXP right_matrix, Rcpp::IntegerVector left_index, Rcpp::IntegerVector right_index);
+RcppExport SEXP _Pando_condition_product_matrix_cpp(SEXP left_matrixSEXP, SEXP right_matrixSEXP, SEXP left_indexSEXP, SEXP right_indexSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type left_matrix(left_matrixSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type right_matrix(right_matrixSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type left_index(left_indexSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type right_index(right_indexSEXP);
+    rcpp_result_gen = Rcpp::wrap(condition_product_matrix_cpp(left_matrix, right_matrix, left_index, right_index));
+    return rcpp_result_gen;
+END_RCPP
+}
+
 static const R_CallMethodDef CallEntries[] = {
     {"_Pando_condition_fit_multitask_path_cpp", (DL_FUNC) &_Pando_condition_fit_multitask_path_cpp, 11},
+    {"_Pando_condition_product_matrix_cpp", (DL_FUNC) &_Pando_condition_product_matrix_cpp, 4},
     {NULL, NULL, 0}
 };
 
