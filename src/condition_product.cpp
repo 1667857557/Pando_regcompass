@@ -1,4 +1,4 @@
-#include <RcppEigen.h>
+#include "condition_sparse_input.h"
 #include <vector>
 
 using Eigen::SparseMatrix;
@@ -9,13 +9,12 @@ SEXP condition_product_matrix_cpp(
     SEXP left_matrix, SEXP right_matrix,
     Rcpp::IntegerVector left_index, Rcpp::IntegerVector right_index
 ) {
-    Eigen::MappedSparseMatrix<double> lm =
-        Rcpp::as<Eigen::MappedSparseMatrix<double>>(left_matrix);
-    Eigen::MappedSparseMatrix<double> rm =
-        Rcpp::as<Eigen::MappedSparseMatrix<double>>(right_matrix);
-    SparseMatrix<double> left(lm), right(rm);
-    left.makeCompressed();
-    right.makeCompressed();
+    SparseMatrix<double> left = pando_condition_as_dgCMatrix(
+        left_matrix, "left_matrix"
+    );
+    SparseMatrix<double> right = pando_condition_as_dgCMatrix(
+        right_matrix, "right_matrix"
+    );
     const int n = left_index.size();
     if (left.rows() != right.rows() || right_index.size() != n) {
         Rcpp::stop("Input dimensions are not aligned.");
