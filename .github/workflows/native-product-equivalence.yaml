@@ -16,6 +16,22 @@ jobs:
       - uses: r-lib/actions/setup-r@v2
         with:
           use-public-rspm: true
+      - name: Remove remote-only dependency metadata
+        shell: python
+        run: |
+          from pathlib import Path
+          lines = Path("DESCRIPTION").read_text().splitlines()
+          output = []
+          skipping = False
+          for line in lines:
+              if line.startswith("Remotes:"):
+                  skipping = True
+                  continue
+              if skipping and (line.startswith(" ") or line.startswith("\t")):
+                  continue
+              skipping = False
+              output.append(line)
+          Path("DESCRIPTION").write_text("\n".join(output) + "\n")
       - name: Install package dependencies
         shell: Rscript {0}
         run: |
@@ -25,7 +41,9 @@ jobs:
           )
       - name: Install Pando
         shell: Rscript {0}
-        run: remotes::install_local(".", upgrade = "never")
+        run: remotes::install_local(
+          ".", dependencies = FALSE, upgrade = "never"
+        )
       - name: Run exact product checks
         shell: Rscript {0}
         run: |
