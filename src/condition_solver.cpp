@@ -1,4 +1,5 @@
 #include <RcppEigen.h>
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <string>
@@ -245,7 +246,10 @@ Rcpp::List fit_one_lambda(
     }
     if (iteration > max_iter) iteration = max_iter;
     SmoothResult final_smooth = profiled_smooth(B, X, y, loss_weights, ridge);
-    SEXP history_output = keep_history ? Rcpp::wrap(history) : R_NilValue;
+    SEXP history_output = R_NilValue;
+    if (keep_history) {
+        history_output = Rcpp::wrap(history);
+    }
     return Rcpp::List::create(
         Rcpp::Named("beta") = B,
         Rcpp::Named("intercept") = final_smooth.intercept,
