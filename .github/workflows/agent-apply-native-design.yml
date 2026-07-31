@@ -1,0 +1,341 @@
+name: Apply native sparse interaction design patch
+
+on:
+  push:
+    branches: [agent/native-sparse-interaction-design]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/native-sparse-interaction-design
+          fetch-depth: 0
+
+      - name: Apply canonical native design patch
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('R/condition_grn_fit.R')
+          text = path.read_text()
+          old = """.condition_build_design <- function(
+              response_raw, gene_data, peak_data, edges, condition, scale,
+              condition_index = NULL
+          ) {
+              y <- as.numeric(response_raw[, 1L])
+              tf_names <- unique(edges$tf)
+              peak_names <- unique(edges$region)
+              tf_matrix <- gene_data[, tf_names, drop = FALSE]
+              peak_matrix <- peak_data[, peak_names, drop = FALSE]
+              tf_edge <- tf_matrix[, match(edges$tf, colnames(tf_matrix)), drop = FALSE]
+              peak_edge <- peak_matrix[, match(edges$region, colnames(peak_matrix)), drop = FALSE]
+              X <- tf_edge * peak_edge
+          """
+          new = """.condition_native_design_available <- function() {
+              is.loaded('_Pando_condition_interaction_design_cpp', PACKAGE = 'Pando')
+          }
+
+          .condition_interaction_design_reference <- function(
+              tf_matrix, peak_matrix, tf_index, peak_index
+          ) {
+              tf_edge <- tf_matrix[, tf_index, drop = FALSE]
+              peak_edge <- peak_matrix[, peak_index, drop = FALSE]
+              value <- tf_edge * peak_edge
+              dimnames(value) <- list(
+                  rownames(tf_matrix), colnames(tf_matrix)[tf_index]
+              )
+              value
+          }
+
+          .condition_interaction_design <- function(
+              tf_matrix,
+              peak_matrix,
+              tf_index,
+              peak_index,
+              backend = getOption('Pando.condition_design_backend', 'auto')
+          ) {
+              backend <- match.arg(backend, c('auto', 'cpp', 'R'))
+              tf_index <- as.integer(tf_index)
+              peak_index <- as.integer(peak_index)
+              if (nrow(tf_matrix) != nrow(peak_matrix) ||
+                  length(tf_index) != length(peak_index) ||
+                  anyNA(tf_index) || anyNA(peak_index) ||
+                  any(tf_index < 1L | tf_index > ncol(tf_matrix)) ||
+                  any(peak_index < 1L | peak_index > ncol(peak_matrix))) {
+                  stop('TF and ATAC edge indices must be complete and aligned.')
+              }
+              native_eligible <-
+                  inherits(tf_matrix, 'dgCMatrix') &&
+                  inherits(peak_matrix, 'dgCMatrix')
+              use_cpp <- backend != 'R' && native_eligible &&
+                  .condition_native_design_available()
+              if (backend == 'cpp' && !use_cpp) {
+                  stop(
+                      paste(
+                          'The compiled sparse interaction-design kernel is not',
+                          'loaded or the inputs are not dgCMatrix objects.'
+                      )
+                  )
+              }
+              value <- if (use_cpp) {
+                  .condition_interaction_design_cpp(
+                      tf_matrix, peak_matrix, tf_index, peak_index
+                  )
+              } else {
+                  .condition_interaction_design_reference(
+                      tf_matrix, peak_matrix, tf_index, peak_index
+                  )
+              }
+              dimnames(value) <- list(
+                  rownames(tf_matrix), colnames(tf_matrix)[tf_index]
+              )
+              value
+          }
+
+          .condition_build_design <- function(
+              response_raw, gene_data, peak_data, edges, condition, scale,
+              condition_index = NULL
+          ) {
+              y <- as.numeric(response_raw[, 1L])
+              tf_names <- unique(edges$tf)
+              peak_names <- unique(edges$region)
+              tf_matrix <- gene_data[, tf_names, drop = FALSE]
+              peak_matrix <- peak_data[, peak_names, drop = FALSE]
+              tf_index <- match(edges$tf, colnames(tf_matrix))
+              peak_index <- match(edges$region, colnames(peak_matrix))
+              X <- .condition_interaction_design(
+                  tf_matrix, peak_matrix, tf_index, peak_index
+              )
+          """
+          if text.count(old) != 1:
+              raise SystemExit('canonical .condition_build_design prefix was not found exactly once')
+          path.write_text(text.replace(old, new, 1))
+
+          exports = Path('R/RcppExports.R')
+          text = exports.read_text()
+          addition = """
+
+          .condition_interaction_design_cpp <- function(tf_matrix, peak_matrix, tf_index, peak_index) {
+              .Call(`_Pando_condition_interaction_design_cpp`, tf_matrix, peak_matrix, tf_index, peak_index)
+          }
+          """
+          if '_Pando_condition_interaction_design_cpp' not in text:
+              exports.write_text(text.rstrip() + addition + '\n')
+
+          cpp_exports = Path('src/RcppExports.cpp')
+          text = cpp_exports.read_text()
+          marker = 'static const R_CallMethodDef CallEntries[] = {'
+          wrapper = """
+          SEXP condition_interaction_design_cpp(SEXP tf_matrix, SEXP peak_matrix, Rcpp::IntegerVector tf_index, Rcpp::IntegerVector peak_index);
+          RcppExport SEXP _Pando_condition_interaction_design_cpp(SEXP tf_matrixSEXP, SEXP peak_matrixSEXP, SEXP tf_indexSEXP, SEXP peak_indexSEXP) {
+          BEGIN_RCPP
+              Rcpp::RObject rcpp_result_gen;
+              Rcpp::RNGScope rcpp_rngScope_gen;
+              Rcpp::traits::input_parameter< SEXP >::type tf_matrix(tf_matrixSEXP);
+              Rcpp::traits::input_parameter< SEXP >::type peak_matrix(peak_matrixSEXP);
+              Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type tf_index(tf_indexSEXP);
+              Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type peak_index(peak_indexSEXP);
+              rcpp_result_gen = Rcpp::wrap(condition_interaction_design_cpp(tf_matrix, peak_matrix, tf_index, peak_index));
+              return rcpp_result_gen;
+          END_RCPP
+          }
+
+          """
+          if '_Pando_condition_interaction_design_cpp' not in text:
+              if text.count(marker) != 1:
+                  raise SystemExit('Rcpp registration marker not found')
+              text = text.replace(marker, wrapper + marker, 1)
+              old_entry = '{"_Pando_condition_fit_multitask_path_cpp", (DL_FUNC) &_Pando_condition_fit_multitask_path_cpp, 11},'
+              new_entry = old_entry + '\n    {"_Pando_condition_interaction_design_cpp", (DL_FUNC) &_Pando_condition_interaction_design_cpp, 4},'
+              if text.count(old_entry) != 1:
+                  raise SystemExit('existing Rcpp registration entry not found')
+              cpp_exports.write_text(text.replace(old_entry, new_entry, 1))
+
+          Path('src/condition_design.cpp').write_text(r'''#include <RcppEigen.h>
+#include <vector>
+
+using Eigen::SparseMatrix;
+using Eigen::Triplet;
+
+namespace {
+
+SparseMatrix<double> as_dgc_matrix(SEXP value) {
+    Eigen::MappedSparseMatrix<double> mapped =
+        Rcpp::as<Eigen::MappedSparseMatrix<double>>(value);
+    SparseMatrix<double> answer(mapped);
+    answer.makeCompressed();
+    return answer;
+}
+
+}  // namespace
+
+// [[Rcpp::export]]
+SEXP condition_interaction_design_cpp(
+    SEXP tf_matrix,
+    SEXP peak_matrix,
+    Rcpp::IntegerVector tf_index,
+    Rcpp::IntegerVector peak_index
+) {
+    SparseMatrix<double> tf = as_dgc_matrix(tf_matrix);
+    SparseMatrix<double> peak = as_dgc_matrix(peak_matrix);
+    const int edges = tf_index.size();
+    if (tf.rows() != peak.rows()) {
+        Rcpp::stop("TF and ATAC matrices must have identical row counts.");
+    }
+    if (peak_index.size() != edges) {
+        Rcpp::stop("TF and ATAC edge-index vectors must have equal lengths.");
+    }
+
+    std::vector<Triplet<double>> triplets;
+    triplets.reserve(static_cast<std::size_t>(peak.nonZeros()));
+    for (int edge = 0; edge < edges; ++edge) {
+        const int tf_column = tf_index[edge] - 1;
+        const int peak_column = peak_index[edge] - 1;
+        if (tf_column < 0 || tf_column >= tf.cols() ||
+            peak_column < 0 || peak_column >= peak.cols()) {
+            Rcpp::stop("Sparse interaction-design indices are out of range.");
+        }
+        SparseMatrix<double>::InnerIterator tf_it(tf, tf_column);
+        SparseMatrix<double>::InnerIterator peak_it(peak, peak_column);
+        while (tf_it && peak_it) {
+            if (tf_it.row() < peak_it.row()) {
+                ++tf_it;
+            } else if (peak_it.row() < tf_it.row()) {
+                ++peak_it;
+            } else {
+                const double product = tf_it.value() * peak_it.value();
+                if (product != 0.0) {
+                    triplets.emplace_back(tf_it.row(), edge, product);
+                }
+                ++tf_it;
+                ++peak_it;
+            }
+        }
+        if ((edge & 255) == 0) {
+            Rcpp::checkUserInterrupt();
+        }
+    }
+
+    SparseMatrix<double> answer(tf.rows(), edges);
+    answer.setFromTriplets(triplets.begin(), triplets.end());
+    answer.makeCompressed();
+    return Rcpp::wrap(answer);
+}
+''')
+
+          Path('tests/testthat/test-condition-design-native.R').write_text(r'''test_that('native sparse TF-by-ATAC design matches the R reference exactly', {
+    skip_if_not(Pando:::.condition_native_design_available())
+    cells <- paste0('c', seq_len(8L))
+    tf <- Matrix::sparseMatrix(
+        i = c(1, 2, 4, 7, 1, 3, 6, 8),
+        j = c(1, 1, 1, 1, 2, 2, 2, 2),
+        x = c(1, -2, 0.5, 3, 4, -1, 2, 5),
+        dims = c(8, 2),
+        dimnames = list(cells, c('TF1', 'TF2'))
+    )
+    peak <- Matrix::sparseMatrix(
+        i = c(1, 3, 4, 7, 2, 3, 6, 8),
+        j = c(1, 1, 1, 1, 2, 2, 2, 2),
+        x = c(2, 1, -2, 0.5, 3, -4, 1.5, 2),
+        dims = c(8, 2),
+        dimnames = list(cells, c('P1', 'P2'))
+    )
+    tf_index <- c(1L, 2L, 1L, 2L)
+    peak_index <- c(1L, 1L, 2L, 2L)
+
+    reference <- Pando:::.condition_interaction_design(
+        tf, peak, tf_index, peak_index, backend = 'R'
+    )
+    native <- Pando:::.condition_interaction_design(
+        tf, peak, tf_index, peak_index, backend = 'cpp'
+    )
+
+    expect_s4_class(native, 'dgCMatrix')
+    expect_identical(dimnames(native), dimnames(reference))
+    expect_identical(as.matrix(native), as.matrix(reference))
+    expect_identical(
+        which(native != 0, arr.ind = TRUE),
+        which(reference != 0, arr.ind = TRUE)
+    )
+})
+
+test_that('canonical design function preserves its complete return contract', {
+    skip_if_not(Pando:::.condition_native_design_available())
+    cells <- paste0('c', seq_len(10L))
+    gene <- Matrix::Matrix(
+        cbind(
+            TF1 = c(0, 1, 2, 0, 3, 1, 0, 2, 1, 4),
+            TF2 = c(1, 0, 1, 2, 0, 3, 1, 0, 2, 1),
+            G = seq_len(10L)
+        ),
+        sparse = TRUE,
+        dimnames = list(cells, c('TF1', 'TF2', 'G'))
+    )
+    peak <- Matrix::Matrix(
+        cbind(
+            P1 = c(1, 0, 1, 0, 2, 0, 1, 0, 2, 1),
+            P2 = c(0, 1, 0, 2, 0, 1, 0, 2, 1, 0)
+        ),
+        sparse = TRUE,
+        dimnames = list(cells, c('P1', 'P2'))
+    )
+    edges <- data.frame(
+        tf = c('TF1', 'TF2', 'TF1'),
+        target = 'G',
+        region = c('P1', 'P2', 'P2'),
+        edge_id = paste(c('TF1', 'TF2', 'TF1'), c('P1', 'P2', 'P2'), 'G', sep = '\001'),
+        stringsAsFactors = FALSE
+    )
+    condition <- factor(rep(c('A', 'B'), each = 5L))
+    old <- options(Pando.condition_design_backend = 'R')
+    on.exit(options(old), add = TRUE)
+    reference <- Pando:::.condition_build_design(
+        gene[, 'G', drop = FALSE], gene, peak, edges, condition, TRUE
+    )
+    options(Pando.condition_design_backend = 'cpp')
+    native <- Pando:::.condition_build_design(
+        gene[, 'G', drop = FALSE], gene, peak, edges, condition, TRUE
+    )
+
+    expect_identical(names(native), names(reference))
+    expect_identical(native$edges, reference$edges)
+    expect_identical(dimnames(native$X_raw), dimnames(reference$X_raw))
+    expect_identical(as.matrix(native$X_raw), as.matrix(reference$X_raw))
+    expect_identical(as.matrix(native$X), as.matrix(reference$X))
+    expect_identical(native$y, reference$y)
+    expect_identical(native$y_raw, reference$y_raw)
+    expect_identical(native$predictor_center, reference$predictor_center)
+    expect_identical(native$predictor_scale, reference$predictor_scale)
+    expect_identical(native$response_center, reference$response_center)
+    expect_identical(native$response_scale, reference$response_scale)
+})
+
+test_that('canonical design is defined once without runtime replacement files', {
+    source_text <- paste(readLines('R/condition_grn_fit.R', warn = FALSE), collapse = '\n')
+    expect_identical(
+        lengths(regmatches(source_text, gregexpr(
+            '.condition_build_design <- function', source_text, fixed = TRUE
+        ))),
+        1L
+    )
+    expect_false(any(grepl('condition_design', list.files('R', pattern = '^zzz'))))
+})
+''')
+
+          workflow = Path('.github/workflows/agent-apply-native-design.yml')
+          workflow.unlink()
+
+      - name: Commit canonical implementation
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add R/condition_grn_fit.R R/RcppExports.R src/RcppExports.cpp src/condition_design.cpp tests/testthat/test-condition-design-native.R .github/workflows/agent-apply-native-design.yml
+          git commit -m "Compile sparse TF-by-ATAC design construction"
+          git push origin HEAD:agent/native-sparse-interaction-design
