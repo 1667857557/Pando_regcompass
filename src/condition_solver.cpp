@@ -1,4 +1,4 @@
-#include <RcppEigen.h>
+#include "condition_sparse_input.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -22,10 +22,10 @@ std::vector<SparseMatrix<double>> as_sparse_list(const Rcpp::List& input) {
     answer.reserve(input.size());
     for (R_xlen_t i = 0; i < input.size(); ++i) {
         SEXP value = input[i];
-        if (Rf_isS4(value) && Rf_inherits(value, "sparseMatrix")) {
-            Eigen::MappedSparseMatrix<double> mapped =
-                Rcpp::as<Eigen::MappedSparseMatrix<double>>(value);
-            answer.emplace_back(mapped);
+        if (Rf_isS4(value)) {
+            answer.emplace_back(pando_condition_as_dgCMatrix(
+                value, "X_list sparse element"
+            ));
         } else {
             Rcpp::NumericMatrix dense(value);
             Eigen::Map<MatrixXd> mapped(
@@ -132,28 +132,52 @@ MatrixXd sparse_group_prox(
     return U;
 }
 
-double centered_squared_norm(const SparseMatrix<double>& X) {
+double centered_spectral_squared_norm(const SparseMatrix<double>& X) {
     if (X.rows() == 0 || X.cols() == 0) return 0.0;
-    VectorXd ones = VectorXd::Ones(X.rows());
-    VectorXd mean =
-        (X.transpose() * ones) / static_cast<double>(X.rows());
-    return std::max(
-        X.squaredNorm() - X.rows() * mean.squaredNorm(),
-        0.0
-    );
+    VectorXd direction(X.cols());
+    for (int column = 0; column < X.cols(); ++column) {
+        direction[column] = 1.0 + static_cast<double>(column % 7) / 7.0;
+    }
+    direction.normalize();
+    double previous = -1.0;
+    for (int iteration = 0; iteration < 30; ++iteration) {
+        VectorXd projected = X * direction;
+        projected.array() -= projected.mean();
+        const double estimate = projected.squaredNorm();
+        VectorXd next = X.transpose() * projected;
+        const double next_norm = next.norm();
+        if (!std::isfinite(estimate) || !std::isfinite(next_norm)) {
+            Rcpp::stop("Centered spectral-norm iteration became non-finite.");
+        }
+        if (next_norm <= std::numeric_limits<double>::epsilon()) {
+            return std::max(estimate, 0.0);
+        }
+        direction = next / next_norm;
+        if (previous >= 0.0 &&
+            std::abs(estimate - previous) <=
+                1e-8 * std::max(1.0, estimate)) {
+            break;
+        }
+        previous = estimate;
+    }
+    VectorXd projected = X * direction;
+    projected.array() -= projected.mean();
+    return std::max(projected.squaredNorm(), 0.0);
 }
 
-double safe_step_for_lambda(
-    const VectorXd& centered_norm,
+double initial_step_for_lambda(
+    const VectorXd& centered_spectral_norm,
     const VectorXd& loss_weights,
     double ridge
 ) {
-    double upper = ridge;
-    for (int task = 0; task < centered_norm.size(); ++task) {
-        upper += loss_weights[task] * centered_norm[task];
+    double lipschitz = ridge;
+    for (int task = 0; task < centered_spectral_norm.size(); ++task) {
+        const double task_lipschitz = ridge +
+            1.05 * loss_weights[task] * centered_spectral_norm[task];
+        lipschitz = std::max(lipschitz, task_lipschitz);
     }
-    return (!std::isfinite(upper) || upper <= 0.0) ?
-        1.0 : 1.0 / upper;
+    return (!std::isfinite(lipschitz) || lipschitz <= 0.0) ?
+        1.0 : 1.0 / lipschitz;
 }
 
 Rcpp::List fit_one_lambda(
@@ -166,7 +190,7 @@ Rcpp::List fit_one_lambda(
     double condition_mix,
     const MatrixXd& initial_B,
     double initial_step,
-    double safe_step,
+    double default_step,
     int max_iter,
     double tol_objective,
     double tol_coef,
@@ -181,9 +205,9 @@ Rcpp::List fit_one_lambda(
     }
     MatrixXd Z = B;
     double acceleration = 1.0;
-    double step = safe_step;
+    double step = default_step;
     if (std::isfinite(initial_step) && initial_step > 0.0) {
-        step = std::max(initial_step, safe_step);
+        step = std::max(initial_step, default_step);
     }
     SmoothResult smooth_B =
         profiled_smooth(B, X, y, loss_weights, ridge);
@@ -371,7 +395,7 @@ Rcpp::List condition_fit_multitask_path_cpp(
         }
     }
     VectorXd loss_weights(tasks);
-    VectorXd centered_norm(tasks);
+    VectorXd centered_spectral_norm(tasks);
     double total_n = 0.0;
     for (int task = 0; task < tasks; ++task) {
         if (X[task].cols() != p ||
@@ -381,7 +405,8 @@ Rcpp::List condition_fit_multitask_path_cpp(
             );
         }
         total_n += X[task].rows();
-        centered_norm[task] = centered_squared_norm(X[task]);
+        centered_spectral_norm[task] =
+            centered_spectral_squared_norm(X[task]);
     }
     if (condition_weight == "equal") {
         for (int task = 0; task < tasks; ++task) {
@@ -403,8 +428,8 @@ Rcpp::List condition_fit_multitask_path_cpp(
             );
         }
         const double ridge = current_lambda * (1.0 - alpha);
-        const double safe_step = safe_step_for_lambda(
-            centered_norm, loss_weights, ridge
+        const double default_step = initial_step_for_lambda(
+            centered_spectral_norm, loss_weights, ridge
         );
         Rcpp::List fit = fit_one_lambda(
             X,
@@ -416,7 +441,7 @@ Rcpp::List condition_fit_multitask_path_cpp(
             condition_mix,
             B,
             step,
-            safe_step,
+            default_step,
             max_iter,
             tol_objective,
             tol_coef,
