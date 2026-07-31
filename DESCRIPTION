@@ -1,5 +1,5 @@
 Package: Pando
-Version: 1.5.1
+Version: 1.5.2
 Type: Package
 Title: Inferring regulomes from multi-modal single-cell genomics data
 Authors@R: person(given = "Jonas Simon",
@@ -20,12 +20,15 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     selection, and a support-constrained hierarchical-ridge refit. The numerical
     core keeps TF-by-ATAC designs sparse, reads canonical dgCMatrix slots without
     S4-to-dense coercion, initializes FISTA from centered spectral estimates and
-    uses only the compiled Eigen proximal-gradient path solver. The TF-by-ATAC
-    product kernel is also C++-only; missing registration, unsupported sparse
-    classes and native execution errors terminate the analysis. Bootstrap
-    stability, ridge-grid sensitivity and related sensitivity refits are
-    excluded from the canonical workflow. The primary projection is
-    condition-full outer-heldout support: jointly estimable edges form the common
+    uses only the compiled Eigen proximal-gradient path solver. Fold-local ridge
+    refits are evaluated by one compiled double-precision Eigen path kernel that
+    reuses sufficient statistics and the shared Schur system across the lambda
+    path. The TF-by-ATAC product, sparse-group solver and refit kernels are all
+    C++-only; missing registration, invalid dimensions, failed Cholesky systems,
+    non-finite arithmetic or residual-check failures terminate the analysis.
+    Bootstrap stability, ridge-grid sensitivity and related sensitivity refits
+    are excluded from the canonical workflow. The primary projection is
+    condition-full outerheldout support: jointly estimable edges form the common
     component, condition-specific estimable edges remain in the focal condition,
     and every non-estimable edge contributes a projectable structural zero in
     that condition. Exact-zero predictors remain represented in the shared
@@ -77,7 +80,8 @@ Suggests:
     brms
 Remotes: 
     github::immunogenomics/presto
-Config/Pando/NativeSparseABI: 2
+Config/Pando/NativeSparseABI: 3
 Config/Pando/ConditionProductBackend: cpp-only-fail-fast
 Config/Pando/ConditionSolverBackend: cpp-only-fail-fast
+Config/Pando/ConditionRefitBackend: cpp-eigen-batched-path-fail-fast
 Config/Pando/InstalledRuntimeCI: R-4.5.1-Matrix-1.7.4
