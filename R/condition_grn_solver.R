@@ -7,6 +7,16 @@
     sum(x * x)
 }
 
+.condition_centered_sqnorm <- function(x) {
+    n <- nrow(x)
+    if (!n || !ncol(x)) {
+        return(0)
+    }
+    raw <- .condition_sqnorm(x)
+    mu <- as.numeric(Matrix::colMeans(x))
+    max(raw - n * sum(mu * mu), 0)
+}
+
 .condition_column_variance <- function(x) {
     n <- nrow(x)
     if (n <= 1L) {
@@ -68,7 +78,9 @@
     stats::weighted.mean(task_mse, n_validation)
 }
 
-.condition_loss_weights <- function(X_list, condition_weight = c('equal', 'cell_count')) {
+.condition_loss_weights <- function(
+    X_list, condition_weight = c('equal', 'cell_count')
+) {
     condition_weight <- match.arg(condition_weight)
     n_condition <- vapply(X_list, nrow, integer(1))
     if (any(n_condition <= 0L)) {
@@ -86,7 +98,6 @@
     gradient <- matrix(0, nrow = p, ncol = n_tasks)
     intercept <- numeric(n_tasks)
     value <- 0
-
     for (task in seq_len(n_tasks)) {
         xb <- as.numeric(X_list[[task]] %*% B[, task])
         intercept[[task]] <- mean(y_list[[task]] - xb)
@@ -96,12 +107,10 @@
             crossprod(X_list[[task]], residual)
         )
     }
-
     if (ridge > 0) {
         value <- value + 0.5 * ridge * sum(B * B)
         gradient <- gradient + ridge * B
     }
-
     list(value = value, gradient = gradient, intercept = intercept)
 }
 
@@ -147,15 +156,15 @@
     if (!is.null(coefficient_mask)) {
         V[!coefficient_mask] <- 0
     }
-
     element_threshold <- step * lambda * alpha * condition_mix * element_factor
     U <- sign(V) * pmax(abs(V) - element_threshold, 0)
-
     group_threshold <- step * lambda * alpha * (1 - condition_mix) * group_factor
     row_norm <- sqrt(rowSums(U * U))
     row_scale <- rep(0, length(row_norm))
     nonzero <- row_norm > 0
-    row_scale[nonzero] <- pmax(1 - group_threshold[nonzero] / row_norm[nonzero], 0)
+    row_scale[nonzero] <- pmax(
+        1 - group_threshold[nonzero] / row_norm[nonzero], 0
+    )
     U <- U * row_scale
     if (!is.null(coefficient_mask)) {
         U[!coefficient_mask] <- 0
@@ -163,38 +172,11 @@
     U
 }
 
-.condition_objective <- function(
-    B,
-    X_list,
-    y_list,
-    loss_weights,
-    lambda,
-    alpha,
-    condition_mix,
-    group_factor = NULL,
-    element_factor = NULL
-) {
-    smooth <- .condition_profiled_smooth(
-        B = B,
-        X_list = X_list,
-        y_list = y_list,
-        loss_weights = loss_weights,
-        ridge = lambda * (1 - alpha)
-    )
-    smooth$value + .condition_sparse_group_penalty(
-        B = B,
-        lambda = lambda,
-        alpha = alpha,
-        condition_mix = condition_mix,
-        group_factor = group_factor,
-        element_factor = element_factor
-    )
-}
-
 .condition_initial_step <- function(X_list, loss_weights, ridge) {
     upper_bound <- ridge
     for (task in seq_along(X_list)) {
-        upper_bound <- upper_bound + loss_weights[[task]] * .condition_sqnorm(X_list[[task]])
+        upper_bound <- upper_bound +
+            loss_weights[[task]] * .condition_centered_sqnorm(X_list[[task]])
     }
     if (!is.finite(upper_bound) || upper_bound <= 0) {
         return(1)
@@ -225,42 +207,41 @@
     if (length(X_list) < 2L || length(X_list) != length(y_list)) {
         stop('X_list and y_list must contain the same two or more conditions.')
     }
-    if (!is.numeric(lambda) || length(lambda) != 1L || !is.finite(lambda) || lambda < 0) {
+    if (!is.numeric(lambda) || length(lambda) != 1L ||
+        !is.finite(lambda) || lambda < 0) {
         stop('lambda must be one finite non-negative number.')
     }
-    if (!is.numeric(alpha) || length(alpha) != 1L || alpha < 0 || alpha > 1) {
+    if (!is.numeric(alpha) || length(alpha) != 1L ||
+        alpha < 0 || alpha > 1) {
         stop('alpha must be between 0 and 1.')
     }
     if (!is.numeric(condition_mix) || length(condition_mix) != 1L ||
         condition_mix < 0 || condition_mix > 1) {
         stop('condition_mix must be between 0 and 1.')
     }
-
     p <- ncol(X_list[[1L]])
     n_tasks <- length(X_list)
     if (p == 0L) {
         stop('At least one predictor is required.')
     }
     for (task in seq_len(n_tasks)) {
-        if (ncol(X_list[[task]]) != p || nrow(X_list[[task]]) != length(y_list[[task]])) {
-            stop('All task matrices must share predictor columns and match their response lengths.')
+        if (ncol(X_list[[task]]) != p ||
+            nrow(X_list[[task]]) != length(y_list[[task]])) {
+            stop(
+                'All task matrices must share predictor columns and ',
+                'match their response lengths.'
+            )
         }
     }
-
     if (is.null(group_factor)) {
         group_factor <- rep(1, p)
     }
     if (is.null(element_factor)) {
         element_factor <- matrix(1, p, n_tasks)
     }
-    if (!identical(dim(element_factor), c(p, n_tasks))) {
-        stop('element_factor must have dimensions predictors by conditions.')
-    }
     if (is.null(coefficient_mask)) {
         coefficient_mask <- matrix(
-            TRUE,
-            nrow = p,
-            ncol = n_tasks,
+            TRUE, p, n_tasks,
             dimnames = list(colnames(X_list[[1L]]), names(X_list))
         )
     }
@@ -268,9 +249,11 @@
     if (!identical(dim(coefficient_mask), c(p, n_tasks)) ||
         !is.logical(coefficient_mask) || anyNA(coefficient_mask) ||
         any(rowSums(coefficient_mask) == 0L)) {
-        stop('coefficient_mask must be a logical predictors-by-conditions matrix with one eligible condition per predictor.')
+        stop(
+            'coefficient_mask must be a logical predictors-by-conditions ',
+            'matrix with one eligible condition per predictor.'
+        )
     }
-
     loss_weights <- .condition_loss_weights(X_list, condition_weight)
     ridge <- lambda * (1 - alpha)
     B <- if (is.null(initial_B)) matrix(0, p, n_tasks) else as.matrix(initial_B)
@@ -280,35 +263,40 @@
     B[!coefficient_mask] <- 0
     Z <- B
     acceleration <- 1
+    safe_step <- .condition_initial_step(X_list, loss_weights, ridge)
     step <- if (is.null(initial_step)) {
-        .condition_initial_step(X_list, loss_weights, ridge)
+        safe_step
     } else {
-        initial_step
+        max(as.numeric(initial_step), safe_step)
     }
-    objective_previous <- .condition_objective(
-        B, X_list, y_list, loss_weights, lambda, alpha, condition_mix,
-        group_factor, element_factor
+    smooth_B <- .condition_profiled_smooth(
+        B, X_list, y_list, loss_weights, ridge
     )
+    objective_previous <- smooth_B$value +
+        .condition_sparse_group_penalty(
+            B, lambda, alpha, condition_mix, group_factor, element_factor
+        )
     history <- if (keep_history) objective_previous else NULL
     converged <- FALSE
     coef_change <- Inf
     objective_change <- Inf
-
+    iteration <- 0L
     for (iteration in seq_len(max_iter)) {
-        smooth_Z <- .condition_profiled_smooth(
-            Z, X_list, y_list, loss_weights, ridge
-        )
-
+        smooth_Z <- if (identical(Z, B)) {
+            smooth_B
+        } else {
+            .condition_profiled_smooth(Z, X_list, y_list, loss_weights, ridge)
+        }
         repeat {
             candidate <- .condition_sparse_group_prox(
-                V = Z - step * smooth_Z$gradient,
-                step = step,
-                lambda = lambda,
-                alpha = alpha,
-                condition_mix = condition_mix,
-                group_factor = group_factor,
-                element_factor = element_factor,
-                coefficient_mask = coefficient_mask
+                Z - step * smooth_Z$gradient,
+                step,
+                lambda,
+                alpha,
+                condition_mix,
+                group_factor,
+                element_factor,
+                coefficient_mask
             )
             smooth_candidate <- .condition_profiled_smooth(
                 candidate, X_list, y_list, loss_weights, ridge
@@ -325,29 +313,25 @@
                 stop('Backtracking line search reached min_step.')
             }
         }
-
         objective_candidate <- smooth_candidate$value +
             .condition_sparse_group_penalty(
                 candidate, lambda, alpha, condition_mix,
                 group_factor, element_factor
             )
-
         if (objective_candidate > objective_previous + 1e-10) {
             acceleration <- 1
             Z <- B
-            smooth_Z <- .condition_profiled_smooth(
-                Z, X_list, y_list, loss_weights, ridge
-            )
+            smooth_Z <- smooth_B
             repeat {
                 candidate <- .condition_sparse_group_prox(
-                    V = Z - step * smooth_Z$gradient,
-                    step = step,
-                    lambda = lambda,
-                    alpha = alpha,
-                    condition_mix = condition_mix,
-                    group_factor = group_factor,
-                    element_factor = element_factor,
-                    coefficient_mask = coefficient_mask
+                    Z - step * smooth_Z$gradient,
+                    step,
+                    lambda,
+                    alpha,
+                    condition_mix,
+                    group_factor,
+                    element_factor,
+                    coefficient_mask
                 )
                 smooth_candidate <- .condition_profiled_smooth(
                     candidate, X_list, y_list, loss_weights, ridge
@@ -361,7 +345,9 @@
                 }
                 step <- step * backtrack
                 if (step < min_step) {
-                    stop('Backtracking line search reached min_step after restart.')
+                    stop(
+                        'Backtracking line search reached min_step after restart.'
+                    )
                 }
             }
             objective_candidate <- smooth_candidate$value +
@@ -370,7 +356,6 @@
                     group_factor, element_factor
                 )
         }
-
         coef_change <- sqrt(sum((candidate - B)^2)) /
             (sqrt(sum(B^2)) + .Machine$double.eps)
         objective_change <- abs(objective_candidate - objective_previous) /
@@ -378,33 +363,29 @@
         if (keep_history) {
             history <- c(history, objective_candidate)
         }
-
         B_previous <- B
         B <- candidate
+        smooth_B <- smooth_candidate
+        objective_previous <- objective_candidate
         if (objective_change < tol_objective && coef_change < tol_coef) {
             converged <- TRUE
-            objective_previous <- objective_candidate
             break
         }
-
         acceleration_new <- (1 + sqrt(1 + 4 * acceleration^2)) / 2
-        Z_new <- B + ((acceleration - 1) / acceleration_new) * (B - B_previous)
+        Z_new <- B + ((acceleration - 1) / acceleration_new) *
+            (B - B_previous)
         restart <- sum((Z - B) * (B - B_previous)) > 0
         if (restart) {
-            acceleration_new <- 1
-            Z_new <- B
+            acceleration <- 1
+            Z <- B
+        } else {
+            acceleration <- acceleration_new
+            Z <- Z_new
         }
-        acceleration <- acceleration_new
-        Z <- Z_new
-        objective_previous <- objective_candidate
     }
-
-    final_smooth <- .condition_profiled_smooth(
-        B, X_list, y_list, loss_weights, ridge
-    )
     list(
         beta = B,
-        intercept = final_smooth$intercept,
+        intercept = smooth_B$intercept,
         lambda = lambda,
         objective = objective_previous,
         objective_change = objective_change,
@@ -435,7 +416,6 @@
     if (!is.null(coefficient_mask)) {
         gradient[!coefficient_mask] <- 0
     }
-
     if (alpha <= .Machine$double.eps) {
         value <- max(abs(gradient))
     } else if (condition_mix <= .Machine$double.eps) {
@@ -467,17 +447,22 @@
         n_cells <- sum(vapply(X_list, nrow, integer(1)))
         lambda_min_ratio <- if (n_cells < ncol(X_list[[1L]])) 0.01 else 1e-4
     }
-    if (!is.finite(lambda_min_ratio) || lambda_min_ratio <= 0 || lambda_min_ratio >= 1) {
+    if (!is.finite(lambda_min_ratio) || lambda_min_ratio <= 0 ||
+        lambda_min_ratio >= 1) {
         stop('lambda_min_ratio must be between 0 and 1.')
     }
     lambda_max <- .condition_lambda_max(
         X_list, y_list, alpha, condition_mix, condition_weight,
         coefficient_mask = coefficient_mask
     )
-    exp(seq(log(lambda_max), log(lambda_max * lambda_min_ratio), length.out = nlambda))
+    exp(seq(
+        log(lambda_max),
+        log(lambda_max * lambda_min_ratio),
+        length.out = nlambda
+    ))
 }
 
-.condition_fit_multitask_path <- function(
+.condition_fit_multitask_path_reference <- function(
     X_list,
     y_list,
     lambda,
@@ -495,7 +480,6 @@
     if (length(lambda) == 0L || any(!is.finite(lambda)) || any(lambda < 0)) {
         stop('lambda must contain finite non-negative values.')
     }
-
     fits <- vector('list', length(lambda))
     initial_B <- NULL
     initial_step <- NULL
@@ -521,6 +505,161 @@
     list(lambda = lambda, fits = fits)
 }
 
+.condition_native_solver_available <- function() {
+    is.loaded('_Pando_condition_fit_multitask_path_cpp', PACKAGE = 'Pando')
+}
+
+.condition_fit_multitask_path_core <- function(
+    X_list,
+    y_list,
+    lambda,
+    alpha,
+    condition_mix,
+    condition_weight,
+    coefficient_mask,
+    max_iter,
+    tol_objective,
+    tol_coef,
+    keep_history,
+    backend = getOption('Pando.condition_solver', 'auto')
+) {
+    backend <- match.arg(backend, c('auto', 'cpp', 'R'))
+    use_cpp <- backend != 'R' && .condition_native_solver_available()
+    if (backend == 'cpp' && !use_cpp) {
+        stop('The compiled condition-GRN solver is not loaded.')
+    }
+    if (use_cpp) {
+        answer <- .condition_fit_multitask_path_cpp(
+            X_list,
+            y_list,
+            lambda,
+            alpha,
+            condition_mix,
+            condition_weight,
+            coefficient_mask,
+            as.integer(max_iter),
+            tol_objective,
+            tol_coef,
+            keep_history
+        )
+        predictor_names <- colnames(X_list[[1L]])
+        conditions <- names(X_list)
+        answer$fits <- lapply(answer$fits, function(fit) {
+            dimnames(fit$beta) <- list(predictor_names, conditions)
+            names(fit$intercept) <- conditions
+            fit$backend <- 'cpp_eigen_sparse_fista'
+            fit
+        })
+        return(answer)
+    }
+    answer <- .condition_fit_multitask_path_reference(
+        X_list,
+        y_list,
+        lambda,
+        alpha,
+        condition_mix,
+        condition_weight,
+        coefficient_mask,
+        max_iter,
+        tol_objective,
+        tol_coef,
+        keep_history
+    )
+    answer$fits <- lapply(answer$fits, function(fit) {
+        fit$backend <- 'R_reference_fista'
+        fit
+    })
+    answer
+}
+
+.condition_fit_multitask_path <- function(
+    X_list,
+    y_list,
+    lambda,
+    alpha = 0.5,
+    condition_mix = 0.5,
+    condition_weight = c('equal', 'cell_count'),
+    coefficient_mask = NULL,
+    max_iter = 5000L,
+    tol_objective = 1e-7,
+    tol_coef = 1e-6,
+    keep_history = FALSE,
+    backend = getOption('Pando.condition_solver', 'auto'),
+    verified_estimability_mask = NULL
+) {
+    condition_weight <- match.arg(condition_weight)
+    if (is.null(names(X_list))) names(X_list) <- names(y_list)
+    if (is.null(names(y_list))) names(y_list) <- names(X_list)
+    conditions <- names(X_list)
+    predictor_names <- colnames(X_list[[1L]])
+    lambda <- sort(unique(as.numeric(lambda)), decreasing = TRUE)
+    actual <- if (is.null(verified_estimability_mask)) {
+        .condition_true_variance_mask(X_list, coefficient_mask)
+    } else {
+        verified <- as.matrix(verified_estimability_mask)
+        if (!is.logical(verified) || anyNA(verified) ||
+            !identical(dim(verified), c(length(predictor_names), length(conditions)))) {
+            stop('verified_estimability_mask is not aligned with the path inputs.')
+        }
+        verified
+    }
+    keep <- rowSums(actual) > 0L
+    if (!any(keep)) {
+        loss_weights <- .condition_loss_weights(X_list, condition_weight)
+        fits <- lapply(lambda, function(value) {
+            intercept <- vapply(y_list, mean, numeric(1))
+            objective <- sum(vapply(seq_along(y_list), function(task) {
+                residual <- as.numeric(y_list[[task]]) - intercept[[task]]
+                0.5 * loss_weights[[task]] * sum(residual * residual)
+            }, numeric(1)))
+            list(
+                beta = matrix(
+                    0, length(predictor_names), length(conditions),
+                    dimnames = list(predictor_names, conditions)
+                ),
+                intercept = intercept,
+                lambda = value,
+                objective = objective,
+                objective_change = 0,
+                coef_change = 0,
+                iterations = 0L,
+                converged = TRUE,
+                step = 1,
+                history = if (keep_history) objective else NULL,
+                backend = 'intercept_only'
+            )
+        })
+        return(list(lambda = lambda, fits = fits))
+    }
+    X_core <- if (all(keep)) X_list else {
+        lapply(X_list, function(x) x[, keep, drop = FALSE])
+    }
+    answer <- .condition_fit_multitask_path_core(
+        X_core,
+        y_list,
+        lambda,
+        alpha,
+        condition_mix,
+        condition_weight,
+        actual[keep, , drop = FALSE],
+        max_iter,
+        tol_objective,
+        tol_coef,
+        keep_history,
+        backend
+    )
+    if (!all(keep)) {
+        answer$fits <- lapply(
+            answer$fits,
+            .condition_expand_path_fit,
+            keep = keep,
+            predictor_names = predictor_names,
+            conditions = conditions
+        )
+    }
+    answer
+}
+
 .condition_make_within_cell_type_folds <- function(
     y_list, nfolds = 5L, seed = 12345L
 ) {
@@ -538,10 +677,7 @@
     folds <- lapply(y_list, function(y) {
         sample(rep(seq_len(nfolds), length.out = length(y)))
     })
-    list(
-        folds = folds,
-        effective_nfolds = as.integer(nfolds)
-    )
+    list(folds = folds, effective_nfolds = as.integer(nfolds))
 }
 
 .condition_crossfit_within_cell_type <- function(
