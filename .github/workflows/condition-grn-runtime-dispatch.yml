@@ -75,21 +75,37 @@ jobs:
             dimnames = list(colnames(X_fit$A), c("A", "B"))
           )
           verified <- .condition_true_variance_mask(X_fit, fit_mask)
-          path <- .condition_fit_multitask_path(
-            X_fit,
-            y_fit,
-            lambda = c(0.2, 0.08),
-            coefficient_mask = fit_mask,
-            verified_estimability_mask = verified,
-            backend = "R",
-            max_iter = 2000L
+          rejected <- try(
+            .condition_fit_multitask_path(
+              X_fit,
+              y_fit,
+              lambda = c(0.2, 0.08),
+              coefficient_mask = fit_mask,
+              verified_estimability_mask = verified,
+              backend = "R",
+              max_iter = 2000L
+            ),
+            silent = TRUE
           )
-          stopifnot(identical(path$fits[[1L]]$backend, "R_reference_fista"))
+          stopifnot(
+            inherits(rejected, "try-error"),
+            grepl(
+              "requires the compiled C\\+\\+ solver",
+              as.character(rejected)
+            )
+          )
+
+          beta_selection <- matrix(
+            c(1, 0.5, -0.25, 0.75, 0.8, 0.4, -0.2, 0.6),
+            nrow = 4,
+            ncol = 2,
+            dimnames = list(colnames(X_fit$A), names(X_fit))
+          )
           cache <- .condition_make_refit_cache(X_fit, y_fit, "equal")
           refit <- .condition_refit_shared_baseline(
             X_fit,
             y_fit,
-            beta_selection = path$fits[[2L]]$beta,
+            beta_selection = beta_selection,
             estimability_mask = verified,
             ridge = 0.01,
             condition_weight = "equal",

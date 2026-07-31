@@ -140,4 +140,4 @@ jobs:
           stopifnot(!any(file.exists(removed)))
 
           description <- read.dcf("DESCRIPTION")
-          stopifnot(identical(unname(description[1, "Version"]), "1.5.0"))
+          stopifnot(identical(unname(description[1, "Version"]), "1.5.1"))

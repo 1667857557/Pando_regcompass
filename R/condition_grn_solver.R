@@ -524,35 +524,20 @@
     backend = getOption('Pando.condition_solver', 'auto')
 ) {
     backend <- match.arg(backend, c('auto', 'cpp', 'R'))
-    use_cpp <- backend != 'R' && .condition_native_solver_available()
-    if (backend == 'cpp' && !use_cpp) {
-        stop('The compiled condition-GRN solver is not loaded.')
-    }
-    if (use_cpp) {
-        answer <- .condition_fit_multitask_path_cpp(
-            X_list,
-            y_list,
-            lambda,
-            alpha,
-            condition_mix,
-            condition_weight,
-            coefficient_mask,
-            as.integer(max_iter),
-            tol_objective,
-            tol_coef,
-            keep_history
+    if (identical(backend, 'R')) {
+        stop(
+            'The R condition solver backend is not available; ',
+            'Pando requires the compiled C++ solver.',
+            call. = FALSE
         )
-        predictor_names <- colnames(X_list[[1L]])
-        conditions <- names(X_list)
-        answer$fits <- lapply(answer$fits, function(fit) {
-            dimnames(fit$beta) <- list(predictor_names, conditions)
-            names(fit$intercept) <- conditions
-            fit$backend <- 'cpp_eigen_sparse_fista'
-            fit
-        })
-        return(answer)
     }
-    answer <- .condition_fit_multitask_path_reference(
+    if (!.condition_native_solver_available()) {
+        stop(
+            'The compiled condition-GRN solver is not loaded or registered.',
+            call. = FALSE
+        )
+    }
+    answer <- .condition_fit_multitask_path_cpp(
         X_list,
         y_list,
         lambda,
@@ -560,7 +545,7 @@
         condition_mix,
         condition_weight,
         coefficient_mask,
-        max_iter,
+        as.integer(max_iter),
         tol_objective,
         tol_coef,
         keep_history
@@ -570,7 +555,7 @@
     answer$fits <- lapply(answer$fits, function(fit) {
         dimnames(fit$beta) <- list(predictor_names, conditions)
         names(fit$intercept) <- conditions
-        fit$backend <- 'R_reference_fista'
+        fit$backend <- 'cpp_eigen_sparse_fista'
         fit
     })
     answer
