@@ -3,38 +3,88 @@ name: native-condition-runtime
 on:
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply-cpp-only-source:
-    if: github.event.pull_request.head.ref == 'agent/fix-sparse-solver-step'
+  source-equivalence:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
         with:
-          ref: agent/fix-sparse-solver-step
-          fetch-depth: 0
-      - name: Rewrite canonical solver dispatch
-        shell: python
+          r-version: release
+          use-public-rspm: true
+      - name: Install numerical test dependencies
+        shell: Rscript {0}
+        run: install.packages(c("Matrix", "Rcpp", "RcppEigen", "testthat"))
+      - name: Run exact source-kernel product checks
+        shell: Rscript {0}
         run: |
-          from pathlib import Path
-          import base64
-          import re
-          path = Path("R/condition_grn_solver.R")
-          text = path.read_text()
-          pattern = re.compile(r"\.condition_fit_multitask_path_core <- function\(.*?\n\}\n\n(?=\.condition_fit_multitask_path <- function)", re.S)
-          replacement = base64.b64decode("LmNvbmRpdGlvbl9maXRfbXVsdGl0YXNrX3BhdGhfY29yZSA8LSBmdW5jdGlvbigKICAgIFhfbGlzdCwKICAgIHlfbGlzdCwKICAgIGxhbWJkYSwKICAgIGFscGhhLAogICAgY29uZGl0aW9uX21peCwKICAgIGNvbmRpdGlvbl93ZWlnaHQsCiAgICBjb2VmZmljaWVudF9tYXNrLAogICAgbWF4X2l0ZXIsCiAgICB0b2xfb2JqZWN0aXZlLAogICAgdG9sX2NvZWYsCiAgICBrZWVwX2hpc3RvcnksCiAgICBiYWNrZW5kID0gZ2V0T3B0aW9uKCdQYW5kby5jb25kaXRpb25fc29sdmVyJywgJ2F1dG8nKQopIHsKICAgIGJhY2tlbmQgPC0gbWF0Y2guYXJnKGJhY2tlbmQsIGMoJ2F1dG8nLCAnY3BwJywgJ1InKSkKICAgIGlmIChpZGVudGljYWwoYmFja2VuZCwgJ1InKSkgewogICAgICAgIHN0b3AoCiAgICAgICAgICAgICdUaGUgUiBjb25kaXRpb24gc29sdmVyIGJhY2tlbmQgaXMgbm90IGF2YWlsYWJsZTsgJywKICAgICAgICAgICAgJ1BhbmRvIHJlcXVpcmVzIHRoZSBjb21waWxlZCBDKysgc29sdmVyLicsCiAgICAgICAgICAgIGNhbGwuID0gRkFMU0UKICAgICAgICApCiAgICB9CiAgICBpZiAoIS5jb25kaXRpb25fbmF0aXZlX3NvbHZlcl9hdmFpbGFibGUoKSkgewogICAgICAgIHN0b3AoCiAgICAgICAgICAgICdUaGUgY29tcGlsZWQgY29uZGl0aW9uLUdSTiBzb2x2ZXIgaXMgbm90IGxvYWRlZCBvciByZWdpc3RlcmVkLicsCiAgICAgICAgICAgIGNhbGwuID0gRkFMU0UKICAgICAgICApCiAgICB9CiAgICBhbnN3ZXIgPC0gLmNvbmRpdGlvbl9maXRfbXVsdGl0YXNrX3BhdGhfY3BwKAogICAgICAgIFhfbGlzdCwKICAgICAgICB5X2xpc3QsCiAgICAgICAgbGFtYmRhLAogICAgICAgIGFscGhhLAogICAgICAgIGNvbmRpdGlvbl9taXgsCiAgICAgICAgY29uZGl0aW9uX3dlaWdodCwKICAgICAgICBjb2VmZmljaWVudF9tYXNrLAogICAgICAgIGFzLmludGVnZXIobWF4X2l0ZXIpLAogICAgICAgIHRvbF9vYmplY3RpdmUsCiAgICAgICAgdG9sX2NvZWYsCiAgICAgICAga2VlcF9oaXN0b3J5CiAgICApCiAgICBwcmVkaWN0b3JfbmFtZXMgPC0gY29sbmFtZXMoWF9saXN0W1sxTF1dKQogICAgY29uZGl0aW9ucyA8LSBuYW1lcyhYX2xpc3QpCiAgICBhbnN3ZXIkZml0cyA8LSBsYXBwbHkoYW5zd2VyJGZpdHMsIGZ1bmN0aW9uKGZpdCkgewogICAgICAgIGRpbW5hbWVzKGZpdCRiZXRhKSA8LSBsaXN0KHByZWRpY3Rvcl9uYW1lcywgY29uZGl0aW9ucykKICAgICAgICBuYW1lcyhmaXQkaW50ZXJjZXB0KSA8LSBjb25kaXRpb25zCiAgICAgICAgZml0JGJhY2tlbmQgPC0gJ2NwcF9laWdlbl9zcGFyc2VfZmlzdGEnCiAgICAgICAgZml0CiAgICB9KQogICAgYW5zd2VyCn0KCg==").decode()
-          text, count = pattern.subn(replacement, text, count=1)
-          if count != 1:
-              raise SystemExit("Failed to replace canonical solver dispatch")
-          path.write_text(text)
-      - name: Commit strict C++ solver dispatch
+          library(Matrix)
+          library(testthat)
+          eigen_include <- system.file("include", package = "RcppEigen")
+          stopifnot(nzchar(eigen_include))
+          old_flags <- Sys.getenv("PKG_CPPFLAGS", unset = "")
+          on.exit(Sys.setenv(PKG_CPPFLAGS = old_flags), add = TRUE)
+          Sys.setenv(
+            PKG_CPPFLAGS = paste(
+              old_flags,
+              paste0("-I", shQuote(eigen_include)),
+              "-DEIGEN_DONT_PARALLELIZE"
+            )
+          )
+          Rcpp::sourceCpp("src/condition_product.cpp")
+          source("R/condition_grn_crossfit.R")
+          source("R/condition_grn_fit.R")
+          .condition_product_matrix_cpp <- condition_product_matrix_cpp
+          .condition_model_name <- function(x) x
+          test_file("tests/testthat/test-condition-product-fixed.R")
+          test_file("tests/testthat/test-condition-product-random.R")
+          test_file("tests/testthat/test-condition-product-output.R")
+
+  installed-r45-matrix17:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.5.1'
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-pandoc@v2
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: |
+            any::testthat
+            any::remotes
+          needs: check
+      - name: Pin Matrix 1.7-4
+        shell: Rscript {0}
         run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add R/condition_grn_solver.R
-          git diff --cached --check
-          git commit -m "Enforce C++-only solver dispatch" || exit 0
-          git push origin HEAD:agent/fix-sparse-solver-step
+          remotes::install_version(
+            "Matrix", version = "1.7-4",
+            repos = "https://cloud.r-project.org",
+            upgrade = "never"
+          )
+          stopifnot(as.character(packageVersion("Matrix")) == "1.7.4")
+      - name: Install Pando and load registered DLL
+        run: R CMD INSTALL . --no-multiarch --with-keep.source
+      - name: Verify installed namespace and strict native sparse ABI
+        shell: Rscript {0}
+        run: |
+          library(Pando)
+          library(testthat)
+          stopifnot(as.character(packageVersion("Pando")) == "1.5.1")
+          stopifnot(as.character(packageVersion("Matrix")) == "1.7.4")
+          stopifnot(is.loaded(
+            "_Pando_condition_product_matrix_cpp", PACKAGE = "Pando"
+          ))
+          stopifnot(is.loaded(
+            "_Pando_condition_fit_multitask_path_cpp", PACKAGE = "Pando"
+          ))
+          test_file(
+            "tests/testthat/test-condition-sparse-runtime-regression.R"
+          )
+          sessionInfo()
