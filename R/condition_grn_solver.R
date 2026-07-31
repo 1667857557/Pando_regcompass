@@ -565,7 +565,11 @@
         tol_coef,
         keep_history
     )
+    predictor_names <- colnames(X_list[[1L]])
+    conditions <- names(X_list)
     answer$fits <- lapply(answer$fits, function(fit) {
+        dimnames(fit$beta) <- list(predictor_names, conditions)
+        names(fit$intercept) <- conditions
         fit$backend <- 'R_reference_fista'
         fit
     })
