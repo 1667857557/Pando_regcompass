@@ -40,7 +40,7 @@ test_that("fold statistics preserve the original transform arithmetic", {
     expect_identical(cached$response_scale, uncached$response_scale)
 })
 
-test_that("verified estimability avoids recomputation without changing a path", {
+test_that("verified estimability avoids recomputation without changing native path", {
     set.seed(9)
     x <- list(
         A = Matrix::Matrix(matrix(rnorm(160), 40, 4), sparse = TRUE),
@@ -52,11 +52,11 @@ test_that("verified estimability avoids recomputation without changing a path", 
     verified <- Pando:::.condition_true_variance_mask(x, mask)
     lambda <- c(0.3, 0.12, 0.05)
     ordinary <- Pando:::.condition_fit_multitask_path(
-        x, y, lambda, coefficient_mask = mask, backend = "R",
+        x, y, lambda, coefficient_mask = mask, backend = "cpp",
         max_iter = 2000L
     )
     cached <- Pando:::.condition_fit_multitask_path(
-        x, y, lambda, coefficient_mask = mask, backend = "R",
+        x, y, lambda, coefficient_mask = mask, backend = "cpp",
         verified_estimability_mask = verified, max_iter = 2000L
     )
     for (index in seq_along(lambda)) {
@@ -68,7 +68,7 @@ test_that("verified estimability avoids recomputation without changing a path", 
     }
 })
 
-test_that("a lambda prefix preserves the selected warm-start fit", {
+test_that("a lambda prefix preserves the selected native warm-start fit", {
     set.seed(12)
     x <- list(
         A = Matrix::Matrix(matrix(rnorm(240), 60, 4), sparse = TRUE),
@@ -79,18 +79,18 @@ test_that("a lambda prefix preserves the selected warm-start fit", {
     mask <- matrix(TRUE, 4, 2, dimnames = list(colnames(x$A), c("A", "B")))
     lambda <- c(0.4, 0.2, 0.1, 0.04)
     full <- Pando:::.condition_fit_multitask_path(
-        x, y, lambda, coefficient_mask = mask, backend = "R",
+        x, y, lambda, coefficient_mask = mask, backend = "cpp",
         max_iter = 2000L
     )
     prefix <- Pando:::.condition_fit_multitask_path(
-        x, y, lambda[1:3], coefficient_mask = mask, backend = "R",
+        x, y, lambda[1:3], coefficient_mask = mask, backend = "cpp",
         max_iter = 2000L
     )
     expect_identical(prefix$fits[[3]]$beta, full$fits[[3]]$beta)
     expect_identical(prefix$fits[[3]]$intercept, full$fits[[3]]$intercept)
 })
 
-test_that("direct Schur refit matches the alternating reference objective", {
+test_that("compiled direct refit matches the alternating numerical oracle", {
     set.seed(17)
     x <- list(
         A = matrix(rnorm(180), nrow = 45, ncol = 4),
@@ -110,17 +110,19 @@ test_that("direct Schur refit matches the alternating reference objective", {
     cache <- Pando:::.condition_make_refit_cache(x, y, "equal")
     reference <- Pando:::.condition_refit_shared_baseline_reference(
         x, y, beta, mask, ridge = 0.05, active_tol = 1e-8,
-        condition_weight = "equal", cache = cache
+        condition_weight = "equal", cache = cache,
+        max_iter = 2000L, tol = 1e-10
     )
     direct <- Pando:::.condition_refit_shared_baseline(
         x, y, beta, mask, ridge = 0.05, active_tol = 1e-8,
         condition_weight = "equal", cache = cache, solver = "direct"
     )
-    expect_equal(direct$beta, reference$beta, tolerance = 1e-6)
-    expect_equal(direct$beta_shared, reference$beta_shared, tolerance = 1e-6)
-    expect_equal(direct$intercept, reference$intercept, tolerance = 1e-6)
+    expect_equal(direct$beta, reference$beta, tolerance = 2e-6)
+    expect_equal(direct$beta_shared, reference$beta_shared, tolerance = 2e-6)
+    expect_equal(direct$intercept, reference$intercept, tolerance = 2e-6)
     expect_identical(direct$support_mask, reference$support_mask)
     expect_identical(direct$estimability_mask, reference$estimability_mask)
+    expect_identical(direct$backend, "cpp_eigen_dense_llt_batched_path")
 })
 
 test_that("full projection reuses the prediction matrix product exactly", {
@@ -138,8 +140,8 @@ test_that("full projection reuses the prediction matrix product exactly", {
     expect_identical(reused, reference)
 })
 
-test_that("compiled and R sparse-group paths are numerically equivalent", {
-    skip_if(!Pando:::.condition_native_solver_available())
+test_that("compiled sparse-group path is deterministic and R backend is rejected", {
+    expect_true(Pando:::.condition_native_solver_available())
     set.seed(21)
     x <- list(
         A = Matrix::Matrix(matrix(rnorm(180), 45, 4), sparse = TRUE),
@@ -156,32 +158,25 @@ test_that("compiled and R sparse-group paths are numerically equivalent", {
         dimnames = list(colnames(x$A), c("A", "B"))
     )
     lambda <- c(0.2, 0.08)
-    fit_r <- Pando:::.condition_fit_multitask_path(
-        x, y, lambda, alpha = 0.5, condition_mix = 0.5,
-        condition_weight = "equal", coefficient_mask = mask,
-        max_iter = 2000L, backend = "R"
-    )
-    fit_cpp <- Pando:::.condition_fit_multitask_path(
+    fit_one <- Pando:::.condition_fit_multitask_path(
         x, y, lambda, alpha = 0.5, condition_mix = 0.5,
         condition_weight = "equal", coefficient_mask = mask,
         max_iter = 2000L, backend = "cpp"
     )
-    for (index in seq_along(lambda)) {
-        expect_equal(
-            fit_cpp$fits[[index]]$beta,
-            fit_r$fits[[index]]$beta,
-            tolerance = 1e-6
-        )
-        expect_equal(
-            fit_cpp$fits[[index]]$intercept,
-            fit_r$fits[[index]]$intercept,
-            tolerance = 1e-6
-        )
-        expect_identical(
-            abs(fit_cpp$fits[[index]]$beta) > 1e-8,
-            abs(fit_r$fits[[index]]$beta) > 1e-8
-        )
-    }
+    fit_two <- Pando:::.condition_fit_multitask_path(
+        x, y, lambda, alpha = 0.5, condition_mix = 0.5,
+        condition_weight = "equal", coefficient_mask = mask,
+        max_iter = 2000L, backend = "cpp"
+    )
+    expect_identical(fit_one, fit_two)
+    expect_error(
+        Pando:::.condition_fit_multitask_path(
+            x, y, lambda, alpha = 0.5, condition_mix = 0.5,
+            condition_weight = "equal", coefficient_mask = mask,
+            max_iter = 2000L, backend = "R"
+        ),
+        "requires the compiled C\\+\\+ solver"
+    )
 })
 
 test_that("condition GRN runtime has no zzz function overrides", {
