@@ -17,7 +17,14 @@ test_that("compiled sparse product matches the original expression", {
     li <- c(1L, 2L, 1L, 2L, 1L, 3L)
     ri <- c(1L, 1L, 2L, 2L, 1L, 3L)
     reference <- left[, li, drop = FALSE] * right[, ri, drop = FALSE]
-    compiled <- Pando:::.condition_product_matrix_cpp(left, right, li, ri)
+    compiled_call <- if (exists(
+        "condition_product_matrix_cpp", inherits = TRUE
+    )) {
+        get("condition_product_matrix_cpp", inherits = TRUE)
+    } else {
+        Pando:::.condition_product_matrix_cpp
+    }
+    compiled <- compiled_call(left, right, li, ri)
     dimnames(compiled) <- dimnames(reference)
     expect_s4_class(compiled, "dgCMatrix")
     expect_identical(dimnames(compiled), dimnames(reference))
