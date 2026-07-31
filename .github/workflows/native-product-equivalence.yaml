@@ -20,16 +20,22 @@ jobs:
       - name: Install numerical test dependencies
         shell: Rscript {0}
         run: install.packages(c("Matrix", "Rcpp", "RcppEigen", "testthat"))
-      - name: Compile submitted C++17 kernels
-        shell: Rscript {0}
-        run: |
-          Rcpp::sourceCpp("src/condition_product.cpp")
-          Rcpp::sourceCpp("src/condition_solver.cpp")
-      - name: Run exact product checks
+      - name: Run exact source-kernel product checks
         shell: Rscript {0}
         run: |
           library(Matrix)
           library(testthat)
+          eigen_include <- system.file("include", package = "RcppEigen")
+          stopifnot(nzchar(eigen_include))
+          old_flags <- Sys.getenv("PKG_CPPFLAGS", unset = "")
+          on.exit(Sys.setenv(PKG_CPPFLAGS = old_flags), add = TRUE)
+          Sys.setenv(
+            PKG_CPPFLAGS = paste(
+              old_flags,
+              paste0("-I", shQuote(eigen_include)),
+              "-DEIGEN_DONT_PARALLELIZE"
+            )
+          )
           Rcpp::sourceCpp("src/condition_product.cpp")
           source("R/condition_grn_crossfit.R")
           source("R/condition_grn_fit.R")
