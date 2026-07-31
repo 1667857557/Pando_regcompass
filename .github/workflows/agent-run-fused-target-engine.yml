@@ -16,7 +16,7 @@ jobs:
         with:
           ref: agent/cpp-batched-condition-refit
           fetch-depth: 0
-      - name: Verify and apply reviewed bundle
+      - name: Verify and apply reviewed source bundle
         shell: bash
         run: |
           cat \
@@ -29,15 +29,23 @@ jobs:
             | sha256sum -c -
           tar -tzf /tmp/pando-changes.tar.gz
           tar -xzf /tmp/pando-changes.tar.gz -C .
-          rm -rf .agent-bundle
-          rm -f .github/workflows/agent-export-source.yml
-          rm -f .github/workflows/agent-apply-fused-target-engine.yml
-          rm -f .github/workflows/agent-run-fused-target-engine.yml
-          git diff --check
-      - name: Commit fused per-target engine
+          git checkout HEAD -- \
+            .github/workflows/native-condition-runtime.yaml \
+            .github/workflows/shared-design-checks.yaml
+          git diff --check -- \
+            src R tests DESCRIPTION NEWS.md
+      - name: Commit fused per-target engine source
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
+          git add \
+            src/condition_target_engine.cpp \
+            src/RcppExports.cpp \
+            R/RcppExports.R \
+            R/condition_grn_crossfit.R \
+            R/condition_grn_fit.R \
+            tests/testthat/test-condition-target-engine.R \
+            DESCRIPTION \
+            NEWS.md
           git commit -m "Fuse per-target nested CV into C++"
           git push origin HEAD:agent/cpp-batched-condition-refit
