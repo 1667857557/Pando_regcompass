@@ -41,9 +41,26 @@ BEGIN_RCPP
 END_RCPP
 }
 
+Rcpp::List condition_refit_path_cpp(Rcpp::List beta_path, Rcpp::LogicalMatrix estimability_mask, Rcpp::NumericVector ridge, double active_tol, Rcpp::List cache, double tolerance);
+RcppExport SEXP _Pando_condition_refit_path_cpp(SEXP beta_pathSEXP, SEXP estimability_maskSEXP, SEXP ridgeSEXP, SEXP active_tolSEXP, SEXP cacheSEXP, SEXP toleranceSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::List >::type beta_path(beta_pathSEXP);
+    Rcpp::traits::input_parameter< Rcpp::LogicalMatrix >::type estimability_mask(estimability_maskSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type ridge(ridgeSEXP);
+    Rcpp::traits::input_parameter< double >::type active_tol(active_tolSEXP);
+    Rcpp::traits::input_parameter< Rcpp::List >::type cache(cacheSEXP);
+    Rcpp::traits::input_parameter< double >::type tolerance(toleranceSEXP);
+    rcpp_result_gen = Rcpp::wrap(condition_refit_path_cpp(beta_path, estimability_mask, ridge, active_tol, cache, tolerance));
+    return rcpp_result_gen;
+END_RCPP
+}
+
 static const R_CallMethodDef CallEntries[] = {
     {"_Pando_condition_fit_multitask_path_cpp", (DL_FUNC) &_Pando_condition_fit_multitask_path_cpp, 11},
     {"_Pando_condition_product_matrix_cpp", (DL_FUNC) &_Pando_condition_product_matrix_cpp, 4},
+    {"_Pando_condition_refit_path_cpp", (DL_FUNC) &_Pando_condition_refit_path_cpp, 6},
     {NULL, NULL, 0}
 };
 
