@@ -17,14 +17,16 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     candidate supergraph and an equal-condition within-condition variance scale
     are used within each broad cell type. The condition engine uses nested
     condition-stratified cell cross-fitting, sparse-group shared-support
-    selection, and a support-constrained hierarchical-ridge refit. The primary
-    projection is condition-full outer-heldout support: jointly estimable edges
-    form the common component, condition-specific estimable edges remain in the
-    focal condition, and every non-estimable edge contributes a projectable
-    structural zero in that condition. Exact-zero predictors remain represented
-    in the shared candidate supergraph without being assigned fitted
-    coefficients. Canonical behavior is implemented directly in the defining
-    functions; version-suffixed fit schemas are not used.
+    selection, and a support-constrained hierarchical-ridge refit. The numerical
+    core keeps TF-by-ATAC designs sparse, caches fold-level sufficient statistics
+    and uses a compiled Eigen proximal-gradient path solver with an R reference
+    fallback. Bootstrap stability, ridge-grid sensitivity and related sensitivity
+    refits are excluded from the canonical workflow. The primary projection is
+    condition-full outer-heldout support: jointly estimable edges form the common
+    component, condition-specific estimable edges remain in the focal condition,
+    and every non-estimable edge contributes a projectable structural zero in
+    that condition. Exact-zero predictors remain represented in the shared
+    candidate supergraph without being assigned fitted coefficients.
 License: MIT
 Encoding: UTF-8
 LazyData: true
@@ -41,6 +43,7 @@ Imports:
     Signac (>= 1.11.0),
     Matrix (>= 1.5-0),
     MatrixGenerics (>= 1.10.0),
+    Rcpp,
     ggplot2,
     IRanges (>= 2.32.0),
     GenomicRanges,
@@ -57,6 +60,10 @@ Imports:
     sparseMatrixStats (>= 1.10.0),
     irlba,
     uwot
+LinkingTo:
+    Rcpp,
+    RcppEigen
+SystemRequirements: C++17
 Suggests: 
     knitr,
     rmarkdown,
