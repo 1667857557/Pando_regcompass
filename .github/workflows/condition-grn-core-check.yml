@@ -2,12 +2,9 @@ name: condition-grn-core-check
 
 on:
   push:
-    branches:
-      - main
-      - agent/shared-design-independent-v2
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 permissions:
