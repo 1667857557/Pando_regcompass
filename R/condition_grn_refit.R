@@ -247,7 +247,8 @@
     estimability_mask,
     ridge,
     active_tol,
-    cache
+    cache,
+    tol = 1e-8
 ) {
     p <- nrow(beta_selection)
     n_tasks <- ncol(beta_selection)
@@ -346,8 +347,11 @@
             )
     }
     coef_change <- max(
-        c(task_residual, sqrt(sum(shared_residual^2)) /
-            (sqrt(sum(shared_rhs^2)) + 1)),
+        c(
+            task_residual,
+            sqrt(sum(shared_residual^2)) /
+                (sqrt(sum(shared_rhs^2)) + 1)
+        ),
         na.rm = TRUE
     )
     list(
@@ -357,13 +361,19 @@
         support_mask = support_mask,
         iterations = 1L,
         coef_change = coef_change,
-        converged = is.finite(coef_change) && coef_change < 1e-6
+        converged = is.finite(coef_change) &&
+            coef_change < max(tol, 100 * .Machine$double.eps)
     )
 }
 
 .condition_finish_refit <- function(
-    core, estimability_mask, ridge, predictor_names, conditions,
-    common_metric_label
+    core,
+    estimability_mask,
+    ridge,
+    predictor_names,
+    conditions,
+    common_metric_label,
+    active_tol
 ) {
     beta <- core$beta
     dimnames(beta) <- list(predictor_names, conditions)
@@ -371,7 +381,7 @@
     beta_condition <- beta
     beta_condition[!estimability_mask] <- NA_real_
     delta_condition <- sweep(beta_condition, 1L, shared, '-')
-    active_mask <- estimability_mask & abs(beta) > 1e-8
+    active_mask <- estimability_mask & abs(beta) > active_tol
     list(
         beta = beta,
         beta_condition = beta_condition,
@@ -387,6 +397,72 @@
         coef_change = core$coef_change,
         converged = core$converged
     )
+}
+
+.condition_empty_refit <- function(
+    y_list, predictor_names, conditions, estimability_mask, ridge
+) {
+    beta <- matrix(
+        0, length(predictor_names), length(conditions),
+        dimnames = list(predictor_names, conditions)
+    )
+    unavailable <- beta
+    unavailable[,] <- NA_real_
+    list(
+        beta = beta,
+        beta_condition = unavailable,
+        beta_shared = stats::setNames(
+            rep(0, length(predictor_names)), predictor_names
+        ),
+        delta_condition = unavailable,
+        support_mask = matrix(
+            FALSE, nrow(beta), ncol(beta), dimnames = dimnames(beta)
+        ),
+        active_mask = matrix(
+            FALSE, nrow(beta), ncol(beta), dimnames = dimnames(beta)
+        ),
+        estimability_mask = estimability_mask,
+        intercept = stats::setNames(
+            vapply(y_list, mean, numeric(1)), conditions
+        ),
+        ridge = ridge,
+        common_metric = 'pooled_weighted_predictor_gram_direct_schur',
+        iterations = 0L,
+        coef_change = 0,
+        converged = TRUE
+    )
+}
+
+.condition_expand_refit <- function(
+    fitted, keep, predictor_names, conditions, estimability_mask
+) {
+    beta <- matrix(
+        0, length(predictor_names), length(conditions),
+        dimnames = list(predictor_names, conditions)
+    )
+    beta_condition <- delta_condition <- beta
+    beta_condition[,] <- delta_condition[,] <- NA_real_
+    support_mask <- active_mask <- matrix(
+        FALSE, length(predictor_names), length(conditions),
+        dimnames = dimnames(beta)
+    )
+    beta_shared <- stats::setNames(
+        rep(0, length(predictor_names)), predictor_names
+    )
+    beta[keep, ] <- fitted$beta
+    beta_condition[keep, ] <- fitted$beta_condition
+    delta_condition[keep, ] <- fitted$delta_condition
+    support_mask[keep, ] <- fitted$support_mask
+    active_mask[keep, ] <- fitted$active_mask
+    beta_shared[keep] <- fitted$beta_shared
+    fitted$beta <- beta
+    fitted$beta_condition <- beta_condition
+    fitted$beta_shared <- beta_shared
+    fitted$delta_condition <- delta_condition
+    fitted$support_mask <- support_mask
+    fitted$active_mask <- active_mask
+    fitted$estimability_mask <- estimability_mask
+    fitted
 }
 
 .condition_refit_shared_baseline_reference <- function(
@@ -440,65 +516,10 @@
         ridge,
         predictor_names[keep],
         conditions,
-        'pooled_weighted_predictor_gram_alternating_reference'
+        'pooled_weighted_predictor_gram_alternating_reference',
+        active_tol
     )
     .condition_expand_refit(fitted, keep, predictor_names, conditions, actual)
-}
-
-.condition_empty_refit <- function(
-    y_list, predictor_names, conditions, estimability_mask, ridge
-) {
-    beta <- matrix(
-        0, length(predictor_names), length(conditions),
-        dimnames = list(predictor_names, conditions)
-    )
-    unavailable <- beta
-    unavailable[,] <- NA_real_
-    list(
-        beta = beta,
-        beta_condition = unavailable,
-        beta_shared = stats::setNames(rep(0, length(predictor_names)), predictor_names),
-        delta_condition = unavailable,
-        support_mask = matrix(FALSE, nrow(beta), ncol(beta), dimnames = dimnames(beta)),
-        active_mask = matrix(FALSE, nrow(beta), ncol(beta), dimnames = dimnames(beta)),
-        estimability_mask = estimability_mask,
-        intercept = stats::setNames(vapply(y_list, mean, numeric(1)), conditions),
-        ridge = ridge,
-        common_metric = 'pooled_weighted_predictor_gram_direct_schur',
-        iterations = 0L,
-        coef_change = 0,
-        converged = TRUE
-    )
-}
-
-.condition_expand_refit <- function(
-    fitted, keep, predictor_names, conditions, estimability_mask
-) {
-    beta <- matrix(
-        0, length(predictor_names), length(conditions),
-        dimnames = list(predictor_names, conditions)
-    )
-    beta_condition <- delta_condition <- beta
-    beta_condition[,] <- delta_condition[,] <- NA_real_
-    support_mask <- active_mask <- matrix(
-        FALSE, length(predictor_names), length(conditions),
-        dimnames = dimnames(beta)
-    )
-    beta_shared <- stats::setNames(rep(0, length(predictor_names)), predictor_names)
-    beta[keep, ] <- fitted$beta
-    beta_condition[keep, ] <- fitted$beta_condition
-    delta_condition[keep, ] <- fitted$delta_condition
-    support_mask[keep, ] <- fitted$support_mask
-    active_mask[keep, ] <- fitted$active_mask
-    beta_shared[keep] <- fitted$beta_shared
-    fitted$beta <- beta
-    fitted$beta_condition <- beta_condition
-    fitted$beta_shared <- beta_shared
-    fitted$delta_condition <- delta_condition
-    fitted$support_mask <- support_mask
-    fitted$active_mask <- active_mask
-    fitted$estimability_mask <- estimability_mask
-    fitted
 }
 
 .condition_refit_shared_baseline <- function(
@@ -529,6 +550,10 @@
         !is.finite(ridge) || ridge <= 0) {
         stop('ridge must be one finite positive value.')
     }
+    if (!is.numeric(active_tol) || length(active_tol) != 1L ||
+        !is.finite(active_tol) || active_tol < 0) {
+        stop('active_tol must be finite and non-negative.')
+    }
     actual <- if (isTRUE(estimability_verified)) {
         estimability_mask
     } else {
@@ -557,7 +582,8 @@
             actual[keep, , drop = FALSE],
             ridge,
             active_tol,
-            subset_cache
+            subset_cache,
+            tol
         )
     } else {
         .condition_refit_core_alternating(
@@ -580,7 +606,8 @@
             'pooled_weighted_predictor_gram_direct_schur'
         } else {
             'pooled_weighted_predictor_gram_alternating'
-        }
+        },
+        active_tol
     )
     .condition_expand_refit(fitted, keep, predictor_names, conditions, actual)
 }
