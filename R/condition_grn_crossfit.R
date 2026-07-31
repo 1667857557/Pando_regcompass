@@ -25,6 +25,27 @@
 ) {
     p <- ncol(X_list[[1L]])
     k <- length(X_list)
+    if (!is.list(X_list) || !length(X_list) ||
+        !is.list(y_list) || length(X_list) != length(y_list)) {
+        stop('Fold statistics require aligned non-empty condition lists.')
+    }
+    if (any(vapply(X_list, ncol, integer(1)) != p) ||
+        any(vapply(seq_along(X_list), function(index) {
+            nrow(X_list[[index]]) != length(y_list[[index]])
+        }, logical(1)))) {
+        stop('Fold statistics inputs are not aligned.')
+    }
+    if (is.null(coefficient_mask)) {
+        coefficient_mask <- matrix(
+            TRUE, p, k,
+            dimnames = list(colnames(X_list[[1L]]), names(X_list))
+        )
+    }
+    coefficient_mask <- as.matrix(coefficient_mask)
+    if (!is.logical(coefficient_mask) || anyNA(coefficient_mask) ||
+        !identical(dim(coefficient_mask), c(p, k))) {
+        stop('coefficient_mask must be a logical predictors-by-conditions matrix.')
+    }
     task <- lapply(seq_along(X_list), function(index) {
         X <- X_list[[index]]
         y <- as.numeric(y_list[[index]])
@@ -37,13 +58,6 @@
             y_variance = mean((y - y_mean)^2)
         )
     })
-    if (is.null(coefficient_mask)) {
-        coefficient_mask <- matrix(
-            TRUE, p, k,
-            dimnames = list(colnames(X_list[[1L]]), names(X_list))
-        )
-    }
-    coefficient_mask <- as.matrix(coefficient_mask)
     variance_mask <- vapply(task, function(value) {
         is.finite(value$x_variance) &
             value$x_variance > .Machine$double.eps
@@ -512,7 +526,7 @@
                 alpha = alpha,
                 condition_mix = condition_mix,
                 condition_weight = 'equal',
-                coefficient_mask = scaled_mask,
+                coefficient_mask = raw_mask,
                 nlambda = nlambda,
                 lambda_min_ratio = lambda_min_ratio
             )
