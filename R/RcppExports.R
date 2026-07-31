@@ -7,3 +7,7 @@
 .condition_product_matrix_cpp <- function(left_matrix, right_matrix, left_index, right_index) {
     .Call(`_Pando_condition_product_matrix_cpp`, left_matrix, right_matrix, left_index, right_index)
 }
+
+.condition_refit_path_cpp <- function(beta_path, estimability_mask, ridge, active_tol, cache, tolerance) {
+    .Call(`_Pando_condition_refit_path_cpp`, beta_path, estimability_mask, ridge, active_tol, cache, tolerance)
+}
