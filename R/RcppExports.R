@@ -5,6 +5,6 @@
     .Call(`_Pando_condition_fit_multitask_path_cpp`, X_list, y_list, lambda, alpha, condition_mix, condition_weight, coefficient_mask, max_iter, tol_objective, tol_coef, keep_history)
 }
 
-.condition_interaction_design_cpp <- function(tf_matrix, peak_matrix, tf_index, peak_index) {
-    .Call(`_Pando_condition_interaction_design_cpp`, tf_matrix, peak_matrix, tf_index, peak_index)
+.condition_product_matrix_cpp <- function(left_matrix, right_matrix, left_index, right_index) {
+    .Call(`_Pando_condition_product_matrix_cpp`, left_matrix, right_matrix, left_index, right_index)
 }
