@@ -85,3 +85,18 @@ test_that("strict native kernels reject unsupported or invalid sparse layouts", 
         "non-increasing row indices"
     )
 })
+
+test_that("strict native product indices and arithmetic fail fast", {
+    X <- methods::as(Matrix::Diagonal(2), "dgCMatrix")
+    expect_error(
+        Pando:::.condition_product_matrix_cpp(X, X, NA_integer_, 1L),
+        "must not contain missing values"
+    )
+    huge <- methods::as(Matrix::sparseMatrix(
+        i = 1L, j = 1L, x = .Machine$double.xmax, dims = c(1L, 1L)
+    ), "dgCMatrix")
+    expect_error(
+        Pando:::.condition_product_matrix_cpp(huge, huge, 1L, 1L),
+        "produced a non-finite value"
+    )
+})
