@@ -53,13 +53,12 @@ jobs:
         with:
           r-version: '4.5.1'
           use-public-rspm: true
-      - uses: r-lib/actions/setup-pandoc@v2
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           extra-packages: |
             any::testthat
             any::remotes
-          needs: check
+          dependencies: '"hard"'
       - name: Pin Matrix 1.7-4
         shell: Rscript {0}
         run: |
