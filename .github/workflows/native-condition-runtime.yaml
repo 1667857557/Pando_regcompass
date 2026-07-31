@@ -77,7 +77,7 @@ jobs:
         run: |
           library(Pando)
           library(testthat)
-          stopifnot(as.character(packageVersion("Pando")) == "1.5.2")
+          stopifnot(as.character(packageVersion("Pando")) == "1.6.0")
           stopifnot(as.character(packageVersion("Matrix")) == "1.7.4")
           stopifnot(is.loaded(
             "_Pando_condition_product_matrix_cpp", PACKAGE = "Pando"
@@ -88,10 +88,16 @@ jobs:
           stopifnot(is.loaded(
             "_Pando_condition_refit_path_cpp", PACKAGE = "Pando"
           ))
+          stopifnot(is.loaded(
+            "_Pando_condition_fit_target_engine_cpp", PACKAGE = "Pando"
+          ))
           test_file(
             "tests/testthat/test-condition-sparse-runtime-regression.R"
           )
           test_file(
             "tests/testthat/test-condition-refit-native.R"
+          )
+          test_file(
+            "tests/testthat/test-condition-target-engine.R"
           )
           sessionInfo()
