@@ -1,6 +1,13 @@
 test_that("compiled sparse products match 64 randomized designs", {
     vl <- c(-3, -1, 0.5, 2, 4)
     vr <- c(-2, -0.5, 1, 3, 5)
+    compiled_call <- if (exists(
+        "condition_product_matrix_cpp", inherits = TRUE
+    )) {
+        get("condition_product_matrix_cpp", inherits = TRUE)
+    } else {
+        Pando:::.condition_product_matrix_cpp
+    }
     for (seed in seq_len(64L)) {
         set.seed(seed)
         nr <- sample(9:41, 1L)
@@ -21,7 +28,7 @@ test_that("compiled sparse products match 64 randomized designs", {
         li <- sample(seq_len(nl), ne, replace = TRUE)
         ri <- sample(seq_len(nc), ne, replace = TRUE)
         reference <- left[, li, drop = FALSE] * right[, ri, drop = FALSE]
-        compiled <- Pando:::.condition_product_matrix_cpp(
+        compiled <- compiled_call(
             left, right, as.integer(li), as.integer(ri)
         )
         dimnames(compiled) <- dimnames(reference)
