@@ -74,7 +74,7 @@ projection <- project_condition_grn_primary_cells(
 
 The primary route is `condition-full OOF`:
 
-- an edge estimable in the focal condition contributes its outerheldout
+- an edge estimable in the focal condition contributes its outer-heldout
   condition coefficient;
 - jointly estimable edges form the common-support component;
 - an edge non-estimable in one or both conditions contributes exactly zero in
