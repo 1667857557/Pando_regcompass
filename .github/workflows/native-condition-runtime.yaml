@@ -55,6 +55,17 @@ jobs:
         with:
           r-version: '4.5.1'
           use-public-rspm: true
+      - name: Install Bioconductor system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libbz2-dev \
+            libcurl4-openssl-dev \
+            libdeflate-dev \
+            liblzma-dev \
+            libssl-dev \
+            libxml2-dev \
+            zlib1g-dev
       - name: Install a coherent Bioconductor runtime
         shell: Rscript {0}
         run: |
