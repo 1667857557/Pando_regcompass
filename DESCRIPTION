@@ -1,5 +1,5 @@
 Package: Pando
-Version: 1.6.1
+Version: 1.6.2
 Type: Package
 Title: Inferring regulomes from multi-modal single-cell genomics data
 Authors@R: person(given = "Jonas Simon",
@@ -27,12 +27,15 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     product, sparse-group solver, refit kernel and fused target engine are all
     C++-only; missing registration, invalid dimensions, failed Cholesky systems,
     non-finite arithmetic, incomplete OOF assignment or residual-check failures
-    terminate the analysis. The primary projection is condition-full
-    outer-heldout support: jointly estimable edges form the common component,
-    condition-specific estimable edges remain in the focal condition, and every
-    non-estimable edge contributes a projectable structural zero in that
-    condition. Exact-zero predictors remain represented in the shared candidate
-    supergraph without being assigned fitted coefficients.
+    terminate the analysis. Registered native routines are resolved explicitly
+    in each R process so PSOCK and forked BiocParallel workers do not depend on
+    transient Rcpp native-symbol bindings in their namespace. The primary
+    projection is condition-full outer-heldout support: jointly estimable edges
+    form the common component, condition-specific estimable edges remain in the
+    focal condition, and every non-estimable edge contributes a projectable
+    structural zero in that condition. Exact-zero predictors remain represented
+    in the shared candidate supergraph without being assigned fitted
+    coefficients.
 License: MIT
 Encoding: UTF-8
 LazyData: true
@@ -81,6 +84,7 @@ Suggests:
 Remotes: 
     github::immunogenomics/presto
 Config/Pando/NativeSparseABI: 5
+Config/Pando/NativeCallBinding: registered-symbol-lookup-worker-safe-v1
 Config/Pando/ConditionProductBackend: cpp-only-fail-fast
 Config/Pando/ConditionSolverBackend: cpp-only-fail-fast
 Config/Pando/ConditionRefitBackend: cpp-eigen-direct-path-fail-fast
