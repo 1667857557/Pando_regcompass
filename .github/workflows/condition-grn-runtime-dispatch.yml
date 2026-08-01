@@ -19,19 +19,30 @@ jobs:
         with:
           use-public-rspm: true
 
-      - name: Install numerical dependency
+      - name: Install numerical dependencies
         shell: Rscript {0}
-        run: install.packages("Matrix")
+        run: install.packages(c("Matrix", "Rcpp", "RcppEigen"))
 
       - name: Exercise package-order condition-GRN dispatch
         shell: Rscript {0}
         run: |
           library(Matrix)
+          eigen_include <- system.file("include", package = "RcppEigen")
+          stopifnot(nzchar(eigen_include))
+          old_flags <- Sys.getenv("PKG_CPPFLAGS", unset = "")
+          Sys.setenv(PKG_CPPFLAGS = paste(
+            old_flags,
+            paste0("-I", shQuote(eigen_include)),
+            "-DEIGEN_DONT_PARALLELIZE"
+          ))
+          Rcpp::sourceCpp("src/condition_refit.cpp")
           source("R/condition_grn_crossfit.R")
           source("R/condition_grn_output.R")
           source("R/condition_grn_refit.R")
           source("R/condition_grn_solver.R")
           source("R/condition_grn_structural_zero.R")
+          .condition_refit_path_cpp <- condition_refit_path_cpp
+          .condition_native_refit_available <- function() TRUE
 
           stopifnot(all(
             c("backend", "verified_estimability_mask") %in%
@@ -115,5 +126,9 @@ jobs:
           )
           stopifnot(identical(
             refit$common_metric,
-            "pooled_weighted_predictor_gram_direct_schur"
+            "pooled_weighted_predictor_gram_cpp_direct_schur"
+          ))
+          stopifnot(identical(
+            refit$backend,
+            "cpp_eigen_dense_llt_batched_path"
           ))

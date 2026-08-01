@@ -7,3 +7,11 @@
 .condition_product_matrix_cpp <- function(left_matrix, right_matrix, left_index, right_index) {
     .Call(`_Pando_condition_product_matrix_cpp`, left_matrix, right_matrix, left_index, right_index)
 }
+
+.condition_refit_path_cpp <- function(beta_path, estimability_mask, ridge, active_tol, cache, tolerance) {
+    .Call(`_Pando_condition_refit_path_cpp`, beta_path, estimability_mask, ridge, active_tol, cache, tolerance)
+}
+
+.condition_fit_target_engine_cpp <- function(X_list, y_list, coefficient_mask, comparison_index, lambda, lambda_auto, nlambda, lambda_min_ratio, alpha, condition_mix, active_tol, fold_plan, lambda_selection, max_iter, tol_objective, tol_coef) {
+    .Call(`_Pando_condition_fit_target_engine_cpp`, X_list, y_list, coefficient_mask, comparison_index, lambda, lambda_auto, nlambda, lambda_min_ratio, alpha, condition_mix, active_tol, fold_plan, lambda_selection, max_iter, tol_objective, tol_coef)
+}

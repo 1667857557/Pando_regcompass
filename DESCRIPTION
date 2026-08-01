@@ -1,5 +1,5 @@
 Package: Pando
-Version: 1.5.1
+Version: 1.6.0
 Type: Package
 Title: Inferring regulomes from multi-modal single-cell genomics data
 Authors@R: person(given = "Jonas Simon",
@@ -15,21 +15,24 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     than two condition levels are observed; that route creates no condition
     coefficients. With two or more conditions, one exact TF-peak-target
     candidate supergraph and an equal-condition within-condition variance scale
-    are used within each broad cell type. The condition engine uses nested
-    condition-stratified cell cross-fitting, sparse-group shared-support
-    selection, and a support-constrained hierarchical-ridge refit. The numerical
-    core keeps TF-by-ATAC designs sparse, reads canonical dgCMatrix slots without
-    S4-to-dense coercion, initializes FISTA from centered spectral estimates and
-    uses only the compiled Eigen proximal-gradient path solver. The TF-by-ATAC
-    product kernel is also C++-only; missing registration, unsupported sparse
-    classes and native execution errors terminate the analysis. Bootstrap
-    stability, ridge-grid sensitivity and related sensitivity refits are
-    excluded from the canonical workflow. The primary projection is
-    condition-full outer-heldout support: jointly estimable edges form the common
-    component, condition-specific estimable edges remain in the focal condition,
-    and every non-estimable edge contributes a projectable structural zero in
-    that condition. Exact-zero predictors remain represented in the shared
-    candidate supergraph without being assigned fitted coefficients.
+    are used within each broad cell type. For each target, R constructs only the
+    candidate sparse TF-by-ATAC design and deterministic condition-stratified
+    fold labels. One registered C++17/RcppEigen target engine then performs the
+    complete outer/inner nested cross-validation, fold-local transforms,
+    automatic or supplied lambda paths, sparse-group warm-start fitting,
+    support-constrained direct-Schur refits, held-out prediction and projection,
+    final full-data lambda selection, final refit, and OOF validation. The
+    engine reuses fold-local sufficient statistics and batches every inner-fold
+    refit path without returning through the R interpreter. The TF-by-ATAC
+    product, sparse-group solver, refit kernel and fused target engine are all
+    C++-only; missing registration, invalid dimensions, failed Cholesky systems,
+    non-finite arithmetic, incomplete OOF assignment or residual-check failures
+    terminate the analysis. The primary projection is condition-full
+    outer-heldout support: jointly estimable edges form the common component,
+    condition-specific estimable edges remain in the focal condition, and every
+    non-estimable edge contributes a projectable structural zero in that
+    condition. Exact-zero predictors remain represented in the shared candidate
+    supergraph without being assigned fitted coefficients.
 License: MIT
 Encoding: UTF-8
 LazyData: true
@@ -77,7 +80,9 @@ Suggests:
     brms
 Remotes: 
     github::immunogenomics/presto
-Config/Pando/NativeSparseABI: 2
+Config/Pando/NativeSparseABI: 4
 Config/Pando/ConditionProductBackend: cpp-only-fail-fast
 Config/Pando/ConditionSolverBackend: cpp-only-fail-fast
+Config/Pando/ConditionRefitBackend: cpp-eigen-direct-path-fail-fast
+Config/Pando/ConditionTargetEngineBackend: cpp-eigen-fused-nested-cv-path-refit-validation-fail-fast
 Config/Pando/InstalledRuntimeCI: R-4.5.1-Matrix-1.7.4

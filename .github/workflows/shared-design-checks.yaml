@@ -140,4 +140,17 @@ jobs:
           stopifnot(!any(file.exists(removed)))
 
           description <- read.dcf("DESCRIPTION")
-          stopifnot(identical(unname(description[1, "Version"]), "1.5.1"))
+          stopifnot(
+            identical(unname(description[1, "Version"]), "1.6.0"),
+            identical(
+              unname(description[1, "Config/Pando/NativeSparseABI"]), "4"
+            ),
+            identical(
+              unname(description[1, "Config/Pando/ConditionRefitBackend"]),
+              "cpp-eigen-direct-path-fail-fast"
+            ),
+            identical(
+              unname(description[1, "Config/Pando/ConditionTargetEngineBackend"]),
+              "cpp-eigen-fused-nested-cv-path-refit-validation-fail-fast"
+            )
+          )

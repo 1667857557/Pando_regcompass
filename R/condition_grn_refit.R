@@ -23,42 +23,7 @@
     )
     answer <- if (is.matrix(rhs)) as.matrix(answer) else as.numeric(answer)
     if (any(!is.finite(answer))) {
-        stop('Common-scale refit produced non-finite coefficients.')
-    }
-    answer
-}
-
-.condition_factorize_system <- function(lhs) {
-    lhs <- as.matrix(lhs)
-    if (!nrow(lhs)) {
-        return(list(method = 'empty', factor = lhs, lhs = lhs))
-    }
-    diag(lhs) <- diag(lhs) + sqrt(.Machine$double.eps)
-    factor <- tryCatch(chol(lhs), error = function(error) NULL)
-    if (!is.null(factor)) {
-        return(list(method = 'chol', factor = factor, lhs = lhs))
-    }
-    list(method = 'solve', factor = NULL, lhs = lhs)
-}
-
-.condition_factor_solve <- function(factorization, rhs) {
-    if (!length(rhs)) {
-        return(if (is.matrix(rhs)) rhs else numeric())
-    }
-    if (identical(factorization$method, 'chol')) {
-        answer <- backsolve(
-            factorization$factor,
-            forwardsolve(t(factorization$factor), rhs)
-        )
-    } else {
-        answer <- tryCatch(
-            solve(factorization$lhs, rhs),
-            error = function(error) qr.solve(factorization$lhs, rhs)
-        )
-    }
-    answer <- if (is.matrix(rhs)) as.matrix(answer) else as.numeric(answer)
-    if (any(!is.finite(answer))) {
-        stop('Common-scale refit produced non-finite coefficients.')
+        stop('Common-scale reference refit produced non-finite coefficients.')
     }
     answer
 }
@@ -242,130 +207,6 @@
     )
 }
 
-.condition_refit_core_direct <- function(
-    beta_selection,
-    estimability_mask,
-    ridge,
-    active_tol,
-    cache,
-    tol = 1e-8
-) {
-    p <- nrow(beta_selection)
-    n_tasks <- ncol(beta_selection)
-    support_mask <- estimability_mask & abs(beta_selection) > active_tol
-    shared_lhs <- matrix(0, p, p)
-    task_plan <- vector('list', n_tasks)
-
-    for (task in seq_len(n_tasks)) {
-        estimable <- estimability_mask[, task]
-        if (any(estimable)) {
-            task_metric <- cache$common_metric[
-                estimable, estimable, drop = FALSE
-            ]
-            shared_lhs[estimable, estimable] <-
-                shared_lhs[estimable, estimable, drop = FALSE] +
-                cache$average_weights[[task]] * task_metric
-        }
-        active <- support_mask[, task]
-        if (!any(active)) {
-            next
-        }
-        lhs <- cache$loss_weights[[task]] *
-            cache$task[[task]]$gram[active, active, drop = FALSE] +
-            ridge * cache$average_weights[[task]] *
-            cache$common_metric[active, active, drop = FALSE]
-        cross <- cache$common_metric[active, estimable, drop = FALSE]
-        data_rhs <- cache$loss_weights[[task]] *
-            cache$task[[task]]$rhs[active]
-        factor <- .condition_factorize_system(lhs)
-        task_plan[[task]] <- list(
-            active = active,
-            estimable = estimable,
-            cross = cross,
-            data_solution = .condition_factor_solve(factor, data_rhs),
-            cross_solution = .condition_factor_solve(factor, cross),
-            factor = factor,
-            data_rhs = data_rhs
-        )
-    }
-
-    schur <- shared_lhs
-    shared_rhs <- numeric(p)
-    for (task in seq_len(n_tasks)) {
-        plan <- task_plan[[task]]
-        if (is.null(plan)) {
-            next
-        }
-        estimable <- plan$estimable
-        weight <- cache$average_weights[[task]]
-        shared_rhs[estimable] <- shared_rhs[estimable] +
-            weight * as.numeric(crossprod(plan$cross, plan$data_solution))
-        schur[estimable, estimable] <-
-            schur[estimable, estimable, drop = FALSE] -
-            ridge * weight^2 *
-            crossprod(plan$cross, plan$cross_solution)
-    }
-    schur <- 0.5 * (schur + t(schur))
-    shared <- .condition_factor_solve(
-        .condition_factorize_system(schur), shared_rhs
-    )
-
-    beta <- matrix(0, p, n_tasks, dimnames = dimnames(beta_selection))
-    intercept <- numeric(n_tasks)
-    task_residual <- numeric(n_tasks)
-    for (task in seq_len(n_tasks)) {
-        plan <- task_plan[[task]]
-        if (is.null(plan)) {
-            intercept[[task]] <- cache$task[[task]]$y_mean
-            next
-        }
-        coefficient <- plan$data_solution +
-            ridge * cache$average_weights[[task]] * as.numeric(
-                plan$cross_solution %*% shared[plan$estimable]
-            )
-        beta[plan$active, task] <- coefficient
-        intercept[[task]] <- cache$task[[task]]$y_mean -
-            sum(cache$task[[task]]$x_mean[plan$active] * coefficient)
-        lhs_value <- plan$factor$lhs %*% coefficient
-        rhs_value <- plan$data_rhs +
-            ridge * cache$average_weights[[task]] * as.numeric(
-                plan$cross %*% shared[plan$estimable]
-            )
-        task_residual[[task]] <- sqrt(sum((lhs_value - rhs_value)^2)) /
-            (sqrt(sum(rhs_value^2)) + 1)
-    }
-    shared_residual <- shared_lhs %*% shared
-    for (task in seq_len(n_tasks)) {
-        estimable <- estimability_mask[, task]
-        if (!any(estimable)) {
-            next
-        }
-        shared_residual[estimable] <- shared_residual[estimable] -
-            cache$average_weights[[task]] * as.numeric(
-                cache$common_metric[estimable, , drop = FALSE] %*%
-                    beta[, task]
-            )
-    }
-    coef_change <- max(
-        c(
-            task_residual,
-            sqrt(sum(shared_residual^2)) /
-                (sqrt(sum(shared_rhs^2)) + 1)
-        ),
-        na.rm = TRUE
-    )
-    list(
-        beta = beta,
-        shared = shared,
-        intercept = intercept,
-        support_mask = support_mask,
-        iterations = 1L,
-        coef_change = coef_change,
-        converged = is.finite(coef_change) &&
-            coef_change < max(tol, 100 * .Machine$double.eps)
-    )
-}
-
 .condition_finish_refit <- function(
     core,
     estimability_mask,
@@ -375,27 +216,31 @@
     common_metric_label,
     active_tol
 ) {
-    beta <- core$beta
+    beta <- as.matrix(core$beta)
     dimnames(beta) <- list(predictor_names, conditions)
     shared <- stats::setNames(as.numeric(core$shared), predictor_names)
     beta_condition <- beta
     beta_condition[!estimability_mask] <- NA_real_
     delta_condition <- sweep(beta_condition, 1L, shared, '-')
+    support_mask <- as.matrix(core$support_mask)
+    storage.mode(support_mask) <- 'logical'
+    dimnames(support_mask) <- list(predictor_names, conditions)
     active_mask <- estimability_mask & abs(beta) > active_tol
     list(
         beta = beta,
         beta_condition = beta_condition,
         beta_shared = shared,
         delta_condition = delta_condition,
-        support_mask = core$support_mask,
+        support_mask = support_mask,
         active_mask = active_mask,
         estimability_mask = estimability_mask,
-        intercept = stats::setNames(core$intercept, conditions),
+        intercept = stats::setNames(as.numeric(core$intercept), conditions),
         ridge = ridge,
         common_metric = common_metric_label,
-        iterations = core$iterations,
-        coef_change = core$coef_change,
-        converged = core$converged
+        iterations = as.integer(core$iterations),
+        coef_change = as.numeric(core$coef_change),
+        converged = isTRUE(core$converged),
+        backend = if (is.null(core$backend)) 'unknown' else as.character(core$backend)
     )
 }
 
@@ -426,10 +271,11 @@
             vapply(y_list, mean, numeric(1)), conditions
         ),
         ridge = ridge,
-        common_metric = 'pooled_weighted_predictor_gram_direct_schur',
+        common_metric = 'pooled_weighted_predictor_gram_cpp_direct_schur',
         iterations = 0L,
         coef_change = 0,
-        converged = TRUE
+        converged = TRUE,
+        backend = 'intercept_only'
     )
 }
 
@@ -465,6 +311,8 @@
     fitted
 }
 
+# Numerical oracle retained only for equivalence tests; it is never a runtime
+# fallback for the canonical condition-GRN workflow.
 .condition_refit_shared_baseline_reference <- function(
     X_list,
     y_list,
@@ -510,6 +358,7 @@
         max_iter,
         tol
     )
+    core$backend <- 'R_alternating_reference'
     fitted <- .condition_finish_refit(
         core,
         actual[keep, , drop = FALSE],
@@ -520,6 +369,141 @@
         active_tol
     )
     .condition_expand_refit(fitted, keep, predictor_names, conditions, actual)
+}
+
+.condition_native_refit_available <- function() {
+    is.loaded('_Pando_condition_refit_path_cpp', PACKAGE = 'Pando')
+}
+
+.condition_refit_shared_baseline_path <- function(
+    X_list,
+    y_list,
+    beta_path,
+    estimability_mask,
+    ridge,
+    active_tol = 1e-8,
+    condition_weight = c('equal', 'cell_count'),
+    tol = 1e-8,
+    cache = NULL,
+    estimability_verified = FALSE
+) {
+    condition_weight <- match.arg(condition_weight)
+    if (is.matrix(beta_path)) beta_path <- list(beta_path)
+    if (!is.list(beta_path) || !length(beta_path)) {
+        stop('beta_path must contain one or more coefficient matrices.')
+    }
+    beta_path <- lapply(beta_path, as.matrix)
+    first <- beta_path[[1L]]
+    p <- nrow(first)
+    n_tasks <- ncol(first)
+    predictor_names <- rownames(first)
+    conditions <- colnames(first)
+    if (is.null(predictor_names) || is.null(conditions) ||
+        anyNA(predictor_names) || anyNA(conditions) ||
+        any(!nzchar(predictor_names)) || any(!nzchar(conditions)) ||
+        anyDuplicated(predictor_names) || anyDuplicated(conditions)) {
+        stop('beta_path matrices require unique predictor and condition names.')
+    }
+    aligned <- vapply(beta_path, function(value) {
+        identical(dim(value), c(p, n_tasks)) &&
+            identical(rownames(value), predictor_names) &&
+            identical(colnames(value), conditions) &&
+            all(is.finite(value))
+    }, logical(1))
+    if (!all(aligned)) {
+        stop('All beta_path matrices must be finite and identically aligned.')
+    }
+    estimability_mask <- as.matrix(estimability_mask)
+    if (!is.logical(estimability_mask) || anyNA(estimability_mask) ||
+        !identical(dim(estimability_mask), c(p, n_tasks))) {
+        stop('estimability_mask must be logical and aligned to beta_path.')
+    }
+    dimnames(estimability_mask) <- list(predictor_names, conditions)
+    ridge <- as.numeric(ridge)
+    if (length(ridge) != length(beta_path) ||
+        any(!is.finite(ridge)) || any(ridge <= 0)) {
+        stop('ridge must contain one finite positive value per refit.')
+    }
+    if (!is.numeric(active_tol) || length(active_tol) != 1L ||
+        !is.finite(active_tol) || active_tol < 0) {
+        stop('active_tol must be finite and non-negative.')
+    }
+    if (!is.numeric(tol) || length(tol) != 1L ||
+        !is.finite(tol) || tol <= 0) {
+        stop('tol must be one finite positive value.')
+    }
+    actual <- if (isTRUE(estimability_verified)) {
+        estimability_mask
+    } else {
+        .condition_true_variance_mask(X_list, estimability_mask)
+    }
+    keep <- rowSums(actual) > 0L
+    if (!any(keep)) {
+        return(lapply(ridge, function(value) {
+            .condition_empty_refit(
+                y_list, predictor_names, conditions, actual, value
+            )
+        }))
+    }
+    subset_X <- if (all(keep)) X_list else {
+        lapply(X_list, function(x) x[, keep, drop = FALSE])
+    }
+    subset_cache <- .condition_subset_refit_cache(cache, keep)
+    if (is.null(subset_cache)) {
+        subset_cache <- .condition_make_refit_cache(
+            subset_X, y_list, condition_weight
+        )
+    }
+    if (!.condition_native_refit_available()) {
+        stop(
+            'The compiled condition-GRN refit kernel is not loaded or registered.',
+            call. = FALSE
+        )
+    }
+    beta_subset <- lapply(beta_path, function(value) {
+        value[keep, , drop = FALSE]
+    })
+    core_path <- .condition_refit_path_cpp(
+        beta_subset,
+        actual[keep, , drop = FALSE],
+        ridge,
+        active_tol,
+        subset_cache,
+        tol
+    )
+    if (!is.list(core_path) || length(core_path) != length(beta_path)) {
+        stop('Compiled condition-GRN refit returned an invalid path length.')
+    }
+    lapply(seq_along(core_path), function(index) {
+        core <- core_path[[index]]
+        required <- c(
+            'beta', 'shared', 'intercept', 'support_mask',
+            'iterations', 'coef_change', 'converged', 'backend'
+        )
+        if (!is.list(core) || !all(required %in% names(core))) {
+            stop('Compiled condition-GRN refit returned an invalid result.')
+        }
+        if (!isTRUE(core$converged)) {
+            stop(
+                'Compiled condition-GRN refit failed its residual check at ',
+                'path index ', index, ' (relative residual ',
+                format(core$coef_change, digits = 8L), ').',
+                call. = FALSE
+            )
+        }
+        fitted <- .condition_finish_refit(
+            core,
+            actual[keep, , drop = FALSE],
+            ridge[[index]],
+            predictor_names[keep],
+            conditions,
+            'pooled_weighted_predictor_gram_cpp_direct_schur',
+            active_tol
+        )
+        .condition_expand_refit(
+            fitted, keep, predictor_names, conditions, actual
+        )
+    })
 }
 
 .condition_refit_shared_baseline <- function(
@@ -536,78 +520,26 @@
     estimability_verified = FALSE,
     solver = getOption('Pando.condition_refit_solver', 'direct')
 ) {
-    condition_weight <- match.arg(condition_weight)
     solver <- match.arg(solver, c('direct', 'alternating'))
-    beta_selection <- as.matrix(beta_selection)
-    estimability_mask <- as.matrix(estimability_mask)
-    if (!identical(dim(beta_selection), dim(estimability_mask))) {
-        stop('beta_selection and estimability_mask must have identical dimensions.')
-    }
-    if (!is.logical(estimability_mask) || anyNA(estimability_mask)) {
-        stop('estimability_mask must be logical without NA values.')
-    }
-    if (!is.numeric(ridge) || length(ridge) != 1L ||
-        !is.finite(ridge) || ridge <= 0) {
-        stop('ridge must be one finite positive value.')
-    }
-    if (!is.numeric(active_tol) || length(active_tol) != 1L ||
-        !is.finite(active_tol) || active_tol < 0) {
-        stop('active_tol must be finite and non-negative.')
-    }
-    actual <- if (isTRUE(estimability_verified)) {
-        estimability_mask
-    } else {
-        .condition_true_variance_mask(X_list, estimability_mask)
-    }
-    predictor_names <- rownames(beta_selection)
-    conditions <- colnames(beta_selection)
-    keep <- rowSums(actual) > 0L
-    if (!any(keep)) {
-        return(.condition_empty_refit(
-            y_list, predictor_names, conditions, actual, ridge
-        ))
-    }
-    subset_X <- if (all(keep)) X_list else {
-        lapply(X_list, function(x) x[, keep, drop = FALSE])
-    }
-    subset_cache <- .condition_subset_refit_cache(cache, keep)
-    if (is.null(subset_cache)) {
-        subset_cache <- .condition_make_refit_cache(
-            subset_X, y_list, condition_weight
+    if (!identical(solver, 'direct')) {
+        stop(
+            'The alternating runtime refit is not available; ',
+            'Pando requires the compiled C++ direct refit kernel. ',
+            'Use .condition_refit_shared_baseline_reference() only as a ',
+            'numerical test oracle.',
+            call. = FALSE
         )
     }
-    core <- if (solver == 'direct') {
-        .condition_refit_core_direct(
-            beta_selection[keep, , drop = FALSE],
-            actual[keep, , drop = FALSE],
-            ridge,
-            active_tol,
-            subset_cache,
-            tol
-        )
-    } else {
-        .condition_refit_core_alternating(
-            beta_selection[keep, , drop = FALSE],
-            actual[keep, , drop = FALSE],
-            ridge,
-            active_tol,
-            subset_cache,
-            max_iter,
-            tol
-        )
-    }
-    fitted <- .condition_finish_refit(
-        core,
-        actual[keep, , drop = FALSE],
-        ridge,
-        predictor_names[keep],
-        conditions,
-        if (solver == 'direct') {
-            'pooled_weighted_predictor_gram_direct_schur'
-        } else {
-            'pooled_weighted_predictor_gram_alternating'
-        },
-        active_tol
-    )
-    .condition_expand_refit(fitted, keep, predictor_names, conditions, actual)
+    .condition_refit_shared_baseline_path(
+        X_list = X_list,
+        y_list = y_list,
+        beta_path = list(as.matrix(beta_selection)),
+        estimability_mask = estimability_mask,
+        ridge = ridge,
+        active_tol = active_tol,
+        condition_weight = condition_weight,
+        tol = tol,
+        cache = cache,
+        estimability_verified = estimability_verified
+    )[[1L]]
 }

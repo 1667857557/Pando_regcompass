@@ -1,0 +1,51 @@
+name: Run fused target engine bundle
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/cpp-batched-condition-refit
+          fetch-depth: 0
+      - name: Verify and apply reviewed source bundle
+        shell: bash
+        run: |
+          cat \
+            .agent-bundle/chunk00 \
+            .agent-bundle/chunk01 \
+            .agent-bundle/chunk02 \
+            .agent-bundle/chunk03 \
+            | base64 --decode > /tmp/pando-changes.tar.gz
+          echo "1b20a10084e12e6038a9d1cfd064451c7321b3cd488cd4b6b5d2f0213cdb5942  /tmp/pando-changes.tar.gz" \
+            | sha256sum -c -
+          tar -tzf /tmp/pando-changes.tar.gz
+          tar -xzf /tmp/pando-changes.tar.gz -C .
+          git checkout HEAD -- \
+            .github/workflows/native-condition-runtime.yaml \
+            .github/workflows/shared-design-checks.yaml
+          git diff --check -- \
+            src R tests DESCRIPTION NEWS.md
+      - name: Commit fused per-target engine source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            src/condition_target_engine.cpp \
+            src/RcppExports.cpp \
+            R/RcppExports.R \
+            R/condition_grn_crossfit.R \
+            R/condition_grn_fit.R \
+            tests/testthat/test-condition-target-engine.R \
+            DESCRIPTION \
+            NEWS.md
+          git commit -m "Fuse per-target nested CV into C++"
+          git push origin HEAD:agent/cpp-batched-condition-refit

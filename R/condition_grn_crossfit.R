@@ -658,3 +658,286 @@
             'nested_selection_cached_refit_heldout_condition_full_projection'
     )
 }
+
+.condition_make_target_fold_plan <- function(
+    y_list, outer_nfolds, inner_nfolds, seed
+) {
+    outer <- .condition_make_within_cell_type_folds(
+        y_list, nfolds = outer_nfolds, seed = seed
+    )
+    outer_inner <- lapply(seq_len(outer$effective_nfolds), function(fold) {
+        training <- lapply(seq_along(y_list), function(task) {
+            y_list[[task]][outer$folds[[task]] != fold]
+        })
+        names(training) <- names(y_list)
+        effective <- min(
+            as.integer(inner_nfolds),
+            min(vapply(training, length, integer(1)))
+        )
+        if (effective < 2L) {
+            stop('Inner cross-validation requires at least two cells per condition.')
+        }
+        .condition_make_within_cell_type_folds(
+            training,
+            nfolds = effective,
+            seed = .condition_seed_for(paste0('inner-', fold), seed)
+        )$folds
+    })
+    full_effective <- min(
+        as.integer(inner_nfolds),
+        min(vapply(y_list, length, integer(1)))
+    )
+    if (full_effective < 2L) {
+        stop('Full-data inner cross-validation requires at least two cells per condition.')
+    }
+    full_inner <- .condition_make_within_cell_type_folds(
+        y_list,
+        nfolds = full_effective,
+        seed = .condition_seed_for('full-inner', seed)
+    )$folds
+    list(
+        outer = outer$folds,
+        outer_inner = outer_inner,
+        full_inner = full_inner
+    )
+}
+
+.condition_finalize_native_transform <- function(
+    transform, predictor_names = NULL, condition_names = NULL
+) {
+    if (is.null(transform)) return(NULL)
+    if (!is.null(predictor_names) &&
+        length(transform$predictor_center) == length(predictor_names)) {
+        names(transform$predictor_center) <- predictor_names
+        names(transform$predictor_scale) <- predictor_names
+        names(transform$predictor_estimable) <- predictor_names
+        if (!is.null(transform$task)) {
+            transform$task <- lapply(transform$task, function(task) {
+                names(task$x_mean) <- predictor_names
+                names(task$x_variance) <- predictor_names
+                task
+            })
+        }
+    }
+    if (!is.null(condition_names) &&
+        length(transform$condition_weights) == length(condition_names)) {
+        names(transform$condition_weights) <- condition_names
+        if (!is.null(transform$task) &&
+            length(transform$task) == length(condition_names)) {
+            names(transform$task) <- condition_names
+        }
+    }
+    transform$predictor_center_hash <- .condition_stable_hash(
+        unname(transform$predictor_center)
+    )
+    transform$predictor_scale_hash <- .condition_stable_hash(
+        unname(transform$predictor_scale)
+    )
+    class(transform) <- c('ConditionBalancedTransform', 'list')
+    transform
+}
+
+.condition_finalize_target_engine <- function(
+    engine,
+    predictor_names,
+    condition_names,
+    comparison_conditions,
+    inner_nfolds
+) {
+    required <- c(
+        'lambda_path', 'cv', 'full_cv', 'selected', 'beta_selection',
+        'refit', 'full_transform', 'condition_rsq_oof',
+        'condition_rmse_oof', 'target_rsq_oof_pooled', 'backend'
+    )
+    if (!is.list(engine) || !all(required %in% names(engine))) {
+        stop('Compiled target engine returned an incomplete result.', call. = FALSE)
+    }
+    if (!identical(
+        engine$backend,
+        'cpp_eigen_fused_target_nested_cv_lambda_refit_validation'
+    )) {
+        stop('Compiled target engine returned an incompatible backend.', call. = FALSE)
+    }
+    p <- length(predictor_names)
+    k <- length(condition_names)
+    matrix_fields <- c('beta', 'beta_condition', 'delta_condition')
+    for (field in matrix_fields) {
+        value <- as.matrix(engine$refit[[field]])
+        if (!identical(dim(value), c(p, k))) {
+            stop('Compiled target refit matrix is not aligned: ', field, '.')
+        }
+        dimnames(value) <- list(predictor_names, condition_names)
+        engine$refit[[field]] <- value
+    }
+    for (field in c('support_mask', 'active_mask', 'estimability_mask')) {
+        value <- as.matrix(engine$refit[[field]])
+        storage.mode(value) <- 'logical'
+        if (!identical(dim(value), c(p, k)) || anyNA(value)) {
+            stop('Compiled target refit mask is not aligned: ', field, '.')
+        }
+        dimnames(value) <- list(predictor_names, condition_names)
+        engine$refit[[field]] <- value
+    }
+    engine$refit$beta_shared <- stats::setNames(
+        as.numeric(engine$refit$beta_shared), predictor_names
+    )
+    engine$refit$intercept <- stats::setNames(
+        as.numeric(engine$refit$intercept), condition_names
+    )
+    engine$beta_selection <- as.matrix(engine$beta_selection)
+    dimnames(engine$beta_selection) <- list(predictor_names, condition_names)
+    engine$selected$beta <- engine$beta_selection
+    engine$selected$intercept <- stats::setNames(
+        as.numeric(engine$selected$intercept), condition_names
+    )
+    engine$full_transform <- .condition_finalize_native_transform(
+        engine$full_transform, predictor_names, condition_names
+    )
+
+    cv <- engine$cv
+    list_fields <- c(
+        'oof_prediction', 'projection_condition_full_oof',
+        'projection_common_oof', 'projection_global_common_oof',
+        'oof_fold', 'oof_assignment_count'
+    )
+    for (field in list_fields) {
+        if (!is.list(cv[[field]]) || length(cv[[field]]) != k) {
+            stop('Compiled target CV field is not condition-aligned: ', field, '.')
+        }
+        names(cv[[field]]) <- condition_names
+    }
+    names(cv$oof_cell_coverage) <- condition_names
+    names(cv$oof_projection_available_fraction) <- condition_names
+    cv$fold_transform <- lapply(cv$fold_transform, function(transform) {
+        .condition_finalize_native_transform(
+            transform, predictor_names, condition_names
+        )
+    })
+    cv$fold_support <- lapply(cv$fold_support, function(support) {
+        if (is.null(support)) return(NULL)
+        for (field in c(
+            'coefficient_estimable_mask',
+            'projectable_structural_zero_mask',
+            'projection_support_mask'
+        )) {
+            value <- as.matrix(support[[field]])
+            storage.mode(value) <- 'logical'
+            if (!identical(dim(value), c(p, k)) || anyNA(value)) {
+                stop('Compiled target fold support is not aligned: ', field, '.')
+            }
+            dimnames(value) <- list(predictor_names, condition_names)
+            support[[field]] <- value
+        }
+        names(support$pairwise_or_requested_common) <- predictor_names
+        names(support$global_common) <- predictor_names
+        support$comparison_conditions <- comparison_conditions
+        support
+    })
+    cv$fold_inner_cv <- lapply(cv$fold_inner_cv, function(inner) {
+        if (is.null(inner)) return(NULL)
+        inner_predictors <- predictor_names[as.integer(inner$predictor_index)]
+        if (anyNA(inner_predictors)) {
+            stop('Compiled inner-CV predictor coordinate is invalid.')
+        }
+        inner$fold_transform <- lapply(inner$fold_transform, function(transform) {
+            .condition_finalize_native_transform(
+                transform,
+                predictor_names = inner_predictors,
+                condition_names = condition_names
+            )
+        })
+        inner$predictor_index <- NULL
+        inner
+    })
+    cv$inner_nfolds <- as.integer(inner_nfolds)
+    cv$comparison_conditions <- comparison_conditions
+    cv$cv_method <- 'nested_outer_condition_stratified_cell_oof'
+    engine$cv <- cv
+
+    full_predictors <- predictor_names[as.integer(engine$full_cv$predictor_index)]
+    if (anyNA(full_predictors)) {
+        stop('Compiled full inner-CV predictor coordinate is invalid.')
+    }
+    engine$full_cv$fold_transform <- lapply(
+        engine$full_cv$fold_transform,
+        function(transform) .condition_finalize_native_transform(
+            transform, full_predictors, condition_names
+        )
+    )
+    engine$full_cv$predictor_index <- NULL
+    engine$condition_rsq_oof <- stats::setNames(
+        as.numeric(engine$condition_rsq_oof), condition_names
+    )
+    engine$condition_rmse_oof <- stats::setNames(
+        as.numeric(engine$condition_rmse_oof), condition_names
+    )
+    engine
+}
+
+.condition_fit_target_native_engine <- function(
+    X_raw_list,
+    y_raw_list,
+    coefficient_mask,
+    comparison_conditions,
+    lambda,
+    nlambda,
+    lambda_min_ratio,
+    alpha,
+    condition_mix,
+    active_tol,
+    outer_nfolds,
+    inner_nfolds,
+    lambda_selection,
+    seed,
+    max_iter,
+    tol_objective,
+    tol_coef
+) {
+    if (!is.loaded('_Pando_condition_fit_target_engine_cpp', PACKAGE = 'Pando')) {
+        stop(
+            'The compiled per-target nested-CV engine is not loaded or registered.',
+            call. = FALSE
+        )
+    }
+    condition_names <- names(X_raw_list)
+    predictor_names <- colnames(X_raw_list[[1L]])
+    X_native <- lapply(X_raw_list, function(value) {
+        methods::as(value, 'dgCMatrix')
+    })
+    fold_plan <- .condition_make_target_fold_plan(
+        y_raw_list, outer_nfolds, inner_nfolds, seed
+    )
+    comparison_index <- match(comparison_conditions, condition_names) - 1L
+    if (anyNA(comparison_index)) {
+        stop('comparison_conditions are not aligned to target conditions.')
+    }
+    engine <- .condition_fit_target_engine_cpp(
+        X_list = X_native,
+        y_list = lapply(y_raw_list, as.numeric),
+        coefficient_mask = coefficient_mask,
+        comparison_index = as.integer(comparison_index),
+        lambda = if (is.null(lambda)) NULL else as.numeric(lambda),
+        lambda_auto = is.null(lambda),
+        nlambda = as.integer(nlambda),
+        lambda_min_ratio = if (is.null(lambda_min_ratio)) {
+            NA_real_
+        } else {
+            as.numeric(lambda_min_ratio)
+        },
+        alpha = alpha,
+        condition_mix = condition_mix,
+        active_tol = active_tol,
+        fold_plan = fold_plan,
+        lambda_selection = lambda_selection,
+        max_iter = as.integer(max_iter),
+        tol_objective = tol_objective,
+        tol_coef = tol_coef
+    )
+    .condition_finalize_target_engine(
+        engine,
+        predictor_names = predictor_names,
+        condition_names = condition_names,
+        comparison_conditions = comparison_conditions,
+        inner_nfolds = inner_nfolds
+    )
+}

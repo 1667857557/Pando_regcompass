@@ -312,123 +312,65 @@
     names(X_list) <- names(y_list) <- condition_levels
     names(X_raw_list) <- names(y_raw_list) <- condition_levels
     names(cell_id_list) <- condition_levels
-    lambda_path <- if (is.null(lambda)) {
-        .condition_make_lambda_path(
-            X_list = X_list,
-            y_list = y_list,
-            alpha = alpha,
-            condition_mix = condition_mix,
-            condition_weight = condition_weight,
-            coefficient_mask = edge_mask,
-            nlambda = nlambda,
-            lambda_min_ratio = lambda_min_ratio
-        )
-    } else {
-        sort(unique(as.numeric(lambda)), decreasing = TRUE)
-    }
-    cv <- .condition_nested_crossfit_within_cell_type(
-        X_list = X_raw_list,
-        y_list = y_raw_list,
-        lambda = lambda_path,
-        lambda_auto = is.null(lambda),
+    engine <- .condition_fit_target_native_engine(
+        X_raw_list = X_raw_list,
+        y_raw_list = y_raw_list,
+        coefficient_mask = edge_mask,
+        comparison_conditions = comparison_conditions,
+        lambda = lambda,
         nlambda = nlambda,
         lambda_min_ratio = lambda_min_ratio,
         alpha = alpha,
         condition_mix = condition_mix,
-        condition_weight = condition_weight,
-        coefficient_mask = edge_mask,
+        active_tol = active_tol,
         outer_nfolds = outer_nfolds,
         inner_nfolds = inner_nfolds,
-        active_tol = active_tol,
         lambda_selection = lambda_selection,
-        comparison_conditions = comparison_conditions,
         seed = seed,
         max_iter = max_iter,
         tol_objective = tol_objective,
         tol_coef = tol_coef
     )
-    cv$cv_method <- 'nested_outer_condition_stratified_cell_oof'
-    if (!is.null(cv$oof_fold)) {
-        cv$oof_fold <- lapply(seq_along(cv$oof_fold), function(task) {
-            stats::setNames(
-                as.integer(cv$oof_fold[[task]]), cell_id_list[[task]]
-            )
-        })
-        names(cv$oof_fold) <- condition_levels
-    }
-    if (!is.null(cv$oof_prediction)) {
-        cv$oof_prediction <- lapply(
-            seq_along(cv$oof_prediction), function(task) {
-                stats::setNames(
-                    as.numeric(cv$oof_prediction[[task]]),
-                    cell_id_list[[task]]
-                )
-            }
+    lambda_path <- engine$lambda_path
+    cv <- engine$cv
+    full_cv <- engine$full_cv
+    selected <- engine$selected
+    beta_selection <- engine$beta_selection
+    refit <- engine$refit
+    native_transform <- engine$full_transform
+    transform_checks <- list(
+        predictor_center = all.equal(
+            unname(native_transform$predictor_center),
+            unname(prepared_design$predictor_center),
+            tolerance = 1e-12,
+            check.attributes = FALSE
+        ),
+        predictor_scale = all.equal(
+            unname(native_transform$predictor_scale),
+            unname(prepared_design$predictor_scale),
+            tolerance = 1e-12,
+            check.attributes = FALSE
+        ),
+        response_center = all.equal(
+            native_transform$response_center,
+            prepared_design$response_center,
+            tolerance = 1e-12,
+            check.attributes = FALSE
+        ),
+        response_scale = all.equal(
+            native_transform$response_scale,
+            prepared_design$response_scale,
+            tolerance = 1e-12,
+            check.attributes = FALSE
         )
-        names(cv$oof_prediction) <- condition_levels
+    )
+    if (!all(vapply(transform_checks, isTRUE, logical(1)))) {
+        stop(
+            'Compiled target engine did not preserve the canonical full-data ',
+            'condition-balanced transform.',
+            call. = FALSE
+        )
     }
-    oof_projection_fields <- c(
-        'projection_condition_full_oof',
-        'projection_common_oof',
-        'projection_global_common_oof',
-        'oof_assignment_count'
-    )
-    for (field in oof_projection_fields) {
-        cv[[field]] <- lapply(seq_along(cv[[field]]), function(task) {
-            stats::setNames(cv[[field]][[task]], cell_id_list[[task]])
-        })
-        names(cv[[field]]) <- condition_levels
-    }
-    full_cv <- .condition_select_lambda_nested(
-        X_list = X_raw_list,
-        y_list = y_raw_list,
-        lambda = lambda_path,
-        alpha = alpha,
-        condition_mix = condition_mix,
-        condition_weight = condition_weight,
-        coefficient_mask = edge_mask,
-        nfolds = inner_nfolds,
-        active_tol = active_tol,
-        lambda_selection = lambda_selection,
-        seed = .condition_seed_for('full-inner', seed),
-        max_iter = max_iter,
-        tol_objective = tol_objective,
-        tol_coef = tol_coef
-    )
-    full_estimability <- .condition_true_variance_mask(X_list, edge_mask)
-    selected_index <- match(full_cv$selected_lambda, lambda_path)
-    required_lambda <- lambda_path[seq_len(selected_index)]
-    full_path <- .condition_fit_multitask_path(
-        X_list = X_list,
-        y_list = y_list,
-        lambda = required_lambda,
-        alpha = alpha,
-        condition_mix = condition_mix,
-        condition_weight = condition_weight,
-        coefficient_mask = edge_mask,
-        max_iter = max_iter,
-        tol_objective = tol_objective,
-        tol_coef = tol_coef,
-        verified_estimability_mask = full_estimability
-    )
-    selected <- full_path$fits[[length(full_path$fits)]]
-    beta_selection <- selected$beta
-    colnames(beta_selection) <- condition_levels
-    rownames(beta_selection) <- edges$edge_id
-    full_cache <- .condition_make_refit_cache(
-        X_list, y_list, condition_weight = condition_weight
-    )
-    refit <- .condition_refit_shared_baseline(
-        X_list = X_list,
-        y_list = y_list,
-        beta_selection = beta_selection,
-        estimability_mask = full_estimability,
-        ridge = max(selected$lambda * (1 - alpha), 1e-6),
-        active_tol = active_tol,
-        condition_weight = condition_weight,
-        cache = full_cache,
-        estimability_verified = TRUE
-    )
     beta <- refit$beta
     rownames(beta) <- edges$edge_id
     pooled_tf_corr <- .condition_named_cor(
@@ -536,21 +478,14 @@
             TRUE, nrow(edge_mask), ncol(edge_mask), dimnames = dimnames(edge_mask)
         ),
         screening_mask = screening_mask,
-        predictor_center = stats::setNames(
-            prepared_design$predictor_center, edges$edge_id
-        ),
-        predictor_scale = stats::setNames(
-            prepared_design$predictor_scale, edges$edge_id
-        ),
-        response_center = prepared_design$response_center,
-        response_scale = prepared_design$response_scale,
-        transform_policy = prepared_design$transform$transform_policy,
-        condition_transform_weights =
-            prepared_design$transform$condition_weights,
-        predictor_center_hash =
-            prepared_design$transform$predictor_center_hash,
-        predictor_scale_hash =
-            prepared_design$transform$predictor_scale_hash,
+        predictor_center = native_transform$predictor_center,
+        predictor_scale = native_transform$predictor_scale,
+        response_center = native_transform$response_center,
+        response_scale = native_transform$response_scale,
+        transform_policy = native_transform$transform_policy,
+        condition_transform_weights = native_transform$condition_weights,
+        predictor_center_hash = native_transform$predictor_center_hash,
+        predictor_scale_hash = native_transform$predictor_scale_hash,
         training_fold_only = TRUE,
         intercept = refit$intercept,
         condition_rsq = vapply(
@@ -559,25 +494,9 @@
         condition_rsq_train = vapply(
             condition_gof, function(x) x$rsq[[1L]], numeric(1)
         ),
-        condition_rsq_oof = if (is.null(cv$oof_prediction)) {
-            stats::setNames(rep(NA_real_, length(condition_levels)), condition_levels)
-        } else {
-            stats::setNames(vapply(seq_along(condition_levels), function(task) {
-                .condition_rsq(y_raw_list[[task]], cv$oof_prediction[[task]])
-            }, numeric(1)), condition_levels)
-        },
-        condition_rmse_oof = if (is.null(cv$oof_prediction)) {
-            stats::setNames(rep(NA_real_, length(condition_levels)), condition_levels)
-        } else {
-            stats::setNames(vapply(seq_along(condition_levels), function(task) {
-                sqrt(mean((y_raw_list[[task]] - cv$oof_prediction[[task]])^2))
-            }, numeric(1)), condition_levels)
-        },
-        target_rsq_oof_pooled = if (is.null(cv$oof_prediction)) {
-            NA_real_
-        } else {
-            .condition_pooled_task_rsq(y_raw_list, cv$oof_prediction)
-        },
+        condition_rsq_oof = engine$condition_rsq_oof,
+        condition_rmse_oof = engine$condition_rmse_oof,
+        target_rsq_oof_pooled = engine$target_rsq_oof_pooled,
         oof_fold = if (is.null(cv$oof_fold)) NULL else cv$oof_fold,
         cv_fold_transform = if (is.null(cv$fold_transform)) NULL else cv$fold_transform,
         outer_nfolds = cv$outer_nfolds,
@@ -623,6 +542,7 @@
         reference_condition = reference_condition,
         refit = list(
             method = 'support_constrained_common_metric_ridge_direct_schur',
+            numerical_backend = engine$backend,
             ridge = refit$ridge,
             common_metric = refit$common_metric,
             converged = refit$converged,
