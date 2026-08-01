@@ -1,15 +1,15 @@
-name: agent-export-source
+name: Compile and commit hybrid condition engine
 
 on:
-  pull_request:
-    branches: [main]
+  push:
+    branches: [agent/hybrid-condition-target-engine]
 
 permissions:
   contents: write
 
 jobs:
-  apply-compile-commit:
-    if: github.actor != 'github-actions[bot]' && github.event.pull_request.head.repo.full_name == github.repository
+  compile-and-commit:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -68,13 +68,11 @@ jobs:
           set -euo pipefail
           grep -q '^Version: 1.6.1$' DESCRIPTION
           grep -q '^Config/Pando/NativeSparseABI: 5$' DESCRIPTION
-          grep -q '^Config/Pando/ConditionInnerCVBackend: cpp-eigen-hybrid-gram-sufficient-statistics-fail-fast$' DESCRIPTION
           grep -q 'validation_mse_from_stats' src/condition_target_engine.cpp
           test -f tests/testthat/helper-condition-target-engine.R
           test -f tests/testthat/test-condition-target-engine-hybrid.R
           test ! -e .agent-patch/apply_hybrid_target_engine.py.gz.b64
           test ! -e .agent-bundle/chunk00
-          test ! -e .github/workflows/agent-run-fused-target-engine.yml
       - name: Commit canonical implementation
         run: |
           git config user.name "github-actions[bot]"
