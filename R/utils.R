@@ -456,6 +456,7 @@ aggregate_assay <- function(
 #'
 #' @return A list.
 #'
+#' @importFrom foreach %dopar%
 #' @export
 map_par <- function(x, fun, parallel=FALSE, verbose=TRUE){
     if (!parallel & (verbose==1)){
