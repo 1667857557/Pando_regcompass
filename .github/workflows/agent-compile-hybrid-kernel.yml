@@ -3,6 +3,8 @@ name: Compile hybrid condition kernel
 on:
   push:
     branches: [agent/hybrid-condition-target-engine]
+  pull_request:
+    branches: [main]
 
 jobs:
   compile-kernel:
@@ -16,9 +18,12 @@ jobs:
           r-version: '4.5.1'
           use-public-rspm: true
       - name: Install native compilation dependencies
-        shell: Rscript {0}
+        shell: bash
         run: |
+          set -o pipefail
+          Rscript - <<'RS' 2>&1 | tee /tmp/hybrid-kernel-deps.log
           install.packages(c("Rcpp", "RcppEigen", "Matrix"))
+          RS
       - name: Apply canonical source patch
         run: |
           base64 --decode .agent-patch/apply_hybrid_target_engine.py.gz.b64 | gzip -d > /tmp/apply_hybrid_target_engine.py
@@ -35,5 +40,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: hybrid-kernel-compile-log
-          path: /tmp/hybrid-kernel-compile.log
+          path: |
+            /tmp/hybrid-kernel-deps.log
+            /tmp/hybrid-kernel-compile.log
           if-no-files-found: ignore
