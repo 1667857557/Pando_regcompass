@@ -88,7 +88,12 @@ jobs:
             logical(1),
             quietly = TRUE
           ))
+      - name: Compile legacy C++11 dependencies with current Armadillo
+        run: |
+          printf '%s\n' 'CXX11STD = -std=gnu++14' > "$RUNNER_TEMP/Makevars"
       - uses: r-lib/actions/setup-r-dependencies@v2
+        env:
+          R_MAKEVARS_USER: ${{ runner.temp }}/Makevars
         with:
           extra-packages: |
             any::testthat
