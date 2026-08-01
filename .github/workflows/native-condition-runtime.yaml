@@ -59,14 +59,20 @@ jobs:
         shell: Rscript {0}
         run: |
           install.packages("BiocManager")
+          bioc_packages <- c(
+            "Rsamtools", "GenomicAlignments", "rtracklayer",
+            "GenomicFeatures", "biovizBase"
+          )
           BiocManager::install(
-            c("Rsamtools", "GenomicAlignments"),
+            bioc_packages,
             ask = FALSE, update = FALSE
           )
-          stopifnot(
-            requireNamespace("Rsamtools", quietly = TRUE),
-            requireNamespace("GenomicAlignments", quietly = TRUE)
-          )
+          stopifnot(vapply(
+            bioc_packages,
+            requireNamespace,
+            logical(1),
+            quietly = TRUE
+          ))
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           extra-packages: |
@@ -94,6 +100,10 @@ jobs:
           description <- utils::packageDescription("Pando")
           stopifnot(
             identical(description[["Config/Pando/NativeSparseABI"]], "5"),
+            identical(
+              description[["Config/Pando/ConditionTargetEngineBackend"]],
+              "cpp-eigen-fused-hybrid-gram-nested-cv-path-refit-validation-stats-fail-fast"
+            ),
             identical(
               description[["Config/Pando/ConditionInnerCVBackend"]],
               "cpp-eigen-hybrid-gram-sufficient-statistics-fail-fast"
