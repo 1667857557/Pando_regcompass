@@ -51,11 +51,16 @@ or failed residual verification stop the analysis immediately. There is no
 runtime R fallback.
 
 Predictor scaling remains sparse; equal-condition centering is handled
-algebraically by the condition intercept and the projection shift. Fold-level
-centered Gram matrices and response cross-products are cached. Each refit is
-sent to the native path-capable kernel with the cached sufficient statistics,
-preserving the original double-precision equations and output schema while
-removing R-level Schur construction and matrix slicing.
+algebraically by the condition intercept and the projection shift. For every
+inner training fold, one centered sufficient-statistic cache (`X' H X`,
+`X' H y`, means and response sum of squares) is shared by lambda-path fitting
+and the direct-Schur refit. A cost model selects the mathematically equivalent
+centered-Gram FISTA kernel when dense Gram multiplication is cheaper, otherwise
+the sparse matrix-free FISTA kernel is used. Validation MSE is evaluated from
+exact held-out sufficient statistics for every lambda; only the model selected
+inside each outer fold is projected across individual held-out cells. This
+preserves fold-local transforms, equal-condition weighting, structural zeros,
+condition-specific signs and the existing output schema without an R fallback.
 
 The alternating R refit remains available only as the internal numerical oracle
 `Pando:::.condition_refit_shared_baseline_reference()` for package regression

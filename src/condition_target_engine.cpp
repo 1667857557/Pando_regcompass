@@ -85,6 +85,7 @@ struct LambdaSelection {
     int one_se_index;
     std::vector<double> cv_mean;
     std::vector<double> cv_se;
+    std::vector<std::string> fold_backend;
     MatrixXd fold_loss;
     Rcpp::List fold_transform;
     int effective_folds;
@@ -742,6 +743,505 @@ Rcpp::List make_refit_cache(const ScaledData& data) {
     );
 }
 
+
+struct GramTaskProblem {
+    MatrixXd gram;
+    VectorXd rhs;
+    VectorXd x_mean;
+    double y_mean;
+    double response_ss;
+};
+
+struct GramProblem {
+    std::vector<GramTaskProblem> task;
+    VectorXd loss_weights;
+    int predictors;
+    int tasks;
+};
+
+struct GramSmoothResult {
+    double value;
+    MatrixXd gradient;
+    VectorXd intercept;
+};
+
+struct ValidationTaskStats {
+    int n;
+    VectorXd sum_x;
+    MatrixXd xtx;
+    VectorXd xty;
+    double sum_y;
+    double sum_y2;
+};
+
+double gram_sparse_group_penalty(
+    const MatrixXd& B,
+    double lambda,
+    double alpha,
+    double condition_mix
+) {
+    const double strength = lambda * alpha;
+    double group = 0.0;
+    for (int row = 0; row < B.rows(); ++row) {
+        group += B.row(row).norm();
+    }
+    return strength * (
+        (1.0 - condition_mix) * group +
+        condition_mix * B.cwiseAbs().sum()
+    );
+}
+
+MatrixXd gram_sparse_group_prox(
+    const MatrixXd& value,
+    const ArrayXXi& mask,
+    double step,
+    double lambda,
+    double alpha,
+    double condition_mix
+) {
+    MatrixXd out = MatrixXd::Zero(value.rows(), value.cols());
+    const double element_threshold =
+        step * lambda * alpha * condition_mix;
+    const double group_threshold =
+        step * lambda * alpha * (1.0 - condition_mix);
+    for (int row = 0; row < value.rows(); ++row) {
+        for (int task = 0; task < value.cols(); ++task) {
+            if (!mask(row, task)) continue;
+            const double current = value(row, task);
+            const double magnitude = std::max(
+                std::abs(current) - element_threshold, 0.0
+            );
+            out(row, task) = std::copysign(magnitude, current);
+        }
+        const double norm = out.row(row).norm();
+        if (norm > 0.0) {
+            out.row(row) *= std::max(
+                1.0 - group_threshold / norm, 0.0
+            );
+        }
+    }
+    return out;
+}
+
+GramProblem parse_gram_problem(
+    const Rcpp::List& cache,
+    const std::vector<VectorXd>& response
+) {
+    if (!cache.containsElementNamed("task") ||
+        !cache.containsElementNamed("loss_weights")) {
+        Rcpp::stop("Gram solver received an incomplete sufficient-statistic cache.");
+    }
+    Rcpp::List task_input(cache["task"]);
+    Rcpp::NumericVector weight_input(cache["loss_weights"]);
+    if (task_input.size() < 2 ||
+        task_input.size() != weight_input.size() ||
+        task_input.size() != static_cast<int>(response.size())) {
+        Rcpp::stop("Gram solver cache is not condition-aligned.");
+    }
+    GramProblem out;
+    out.tasks = task_input.size();
+    out.predictors = -1;
+    out.loss_weights = VectorXd(out.tasks);
+    out.task.reserve(out.tasks);
+    for (int task = 0; task < out.tasks; ++task) {
+        Rcpp::List current(task_input[task]);
+        GramTaskProblem value;
+        value.gram = Rcpp::as<MatrixXd>(current["gram"]);
+        value.rhs = Rcpp::as<VectorXd>(current["rhs"]);
+        value.x_mean = Rcpp::as<VectorXd>(current["x_mean"]);
+        value.y_mean = Rcpp::as<double>(current["y_mean"]);
+        if (out.predictors < 0) out.predictors = value.gram.rows();
+        if (value.gram.rows() != out.predictors ||
+            value.gram.cols() != out.predictors ||
+            value.rhs.size() != out.predictors ||
+            value.x_mean.size() != out.predictors ||
+            response[task].size() < 1) {
+            Rcpp::stop("Gram solver cache dimensions are invalid.");
+        }
+        value.gram = (
+            0.5 * (value.gram + value.gram.transpose())
+        ).eval();
+        value.response_ss = (
+            response[task].array() - value.y_mean
+        ).square().sum();
+        out.loss_weights[task] = weight_input[task];
+        if (!value.gram.allFinite() || !value.rhs.allFinite() ||
+            !value.x_mean.allFinite() || !std::isfinite(value.y_mean) ||
+            !std::isfinite(value.response_ss) ||
+            !std::isfinite(out.loss_weights[task]) ||
+            out.loss_weights[task] <= 0.0) {
+            Rcpp::stop("Gram solver cache contains non-finite values.");
+        }
+        out.task.emplace_back(std::move(value));
+    }
+    return out;
+}
+
+GramSmoothResult gram_profiled_smooth(
+    const MatrixXd& B,
+    const GramProblem& problem,
+    double ridge
+) {
+    GramSmoothResult out{
+        0.0,
+        MatrixXd::Zero(problem.predictors, problem.tasks),
+        VectorXd::Zero(problem.tasks)
+    };
+    for (int task = 0; task < problem.tasks; ++task) {
+        const GramTaskProblem& value = problem.task[task];
+        VectorXd gram_beta = value.gram * B.col(task);
+        const double quadratic =
+            B.col(task).dot(gram_beta) -
+            2.0 * value.rhs.dot(B.col(task)) +
+            value.response_ss;
+        out.value += 0.5 * problem.loss_weights[task] * quadratic;
+        out.gradient.col(task).noalias() =
+            problem.loss_weights[task] * (gram_beta - value.rhs);
+        out.intercept[task] =
+            value.y_mean - value.x_mean.dot(B.col(task));
+    }
+    if (ridge > 0.0) {
+        out.value += 0.5 * ridge * B.squaredNorm();
+        out.gradient.noalias() += ridge * B;
+    }
+    if (!std::isfinite(out.value) || !out.gradient.allFinite() ||
+        !out.intercept.allFinite()) {
+        Rcpp::stop("Gram solver produced non-finite smooth quantities.");
+    }
+    return out;
+}
+
+double gram_spectral_squared_norm(const MatrixXd& gram) {
+    if (gram.rows() == 0) return 0.0;
+    VectorXd direction(gram.cols());
+    for (int column = 0; column < gram.cols(); ++column) {
+        direction[column] = 1.0 + static_cast<double>(column % 7) / 7.0;
+    }
+    direction.normalize();
+    double previous = -1.0;
+    for (int iteration = 0; iteration < 30; ++iteration) {
+        VectorXd next = gram * direction;
+        const double estimate = direction.dot(next);
+        const double next_norm = next.norm();
+        if (!std::isfinite(estimate) || !std::isfinite(next_norm)) {
+            Rcpp::stop("Gram spectral-norm iteration became non-finite.");
+        }
+        if (next_norm <= kEps) return std::max(estimate, 0.0);
+        direction = next / next_norm;
+        if (previous >= 0.0 &&
+            std::abs(estimate - previous) <=
+                1e-8 * std::max(1.0, estimate)) {
+            break;
+        }
+        previous = estimate;
+    }
+    return std::max(direction.dot(gram * direction), 0.0);
+}
+
+double gram_initial_step(
+    const VectorXd& spectral,
+    const VectorXd& weights,
+    double ridge
+) {
+    double lipschitz = ridge;
+    for (int task = 0; task < spectral.size(); ++task) {
+        lipschitz = std::max(
+            lipschitz,
+            ridge + 1.05 * weights[task] * spectral[task]
+        );
+    }
+    return (!std::isfinite(lipschitz) || lipschitz <= 0.0) ?
+        1.0 : 1.0 / lipschitz;
+}
+
+Rcpp::List fit_one_lambda_gram(
+    const GramProblem& problem,
+    const ArrayXXi& mask,
+    double lambda,
+    double alpha,
+    double condition_mix,
+    const MatrixXd& initial_B,
+    double initial_step,
+    double default_step,
+    int max_iter,
+    double tol_objective,
+    double tol_coef
+) {
+    const double ridge = lambda * (1.0 - alpha);
+    MatrixXd B = initial_B;
+    for (int row = 0; row < B.rows(); ++row) {
+        for (int task = 0; task < B.cols(); ++task) {
+            if (!mask(row, task)) B(row, task) = 0.0;
+        }
+    }
+    MatrixXd Z = B;
+    double acceleration = 1.0;
+    double step = default_step;
+    if (std::isfinite(initial_step) && initial_step > 0.0) {
+        step = std::max(initial_step, default_step);
+    }
+    GramSmoothResult smooth_B = gram_profiled_smooth(B, problem, ridge);
+    double objective_previous = smooth_B.value + gram_sparse_group_penalty(
+        B, lambda, alpha, condition_mix
+    );
+    bool converged = false;
+    double coef_change = std::numeric_limits<double>::infinity();
+    double objective_change = std::numeric_limits<double>::infinity();
+    int iteration = 0;
+    const double backtrack = 0.5;
+    const double min_step = 1e-14;
+    for (iteration = 1; iteration <= max_iter; ++iteration) {
+        GramSmoothResult smooth_Z = Z.isApprox(B, 0.0) ?
+            smooth_B : gram_profiled_smooth(Z, problem, ridge);
+        MatrixXd candidate;
+        GramSmoothResult smooth_candidate;
+        while (true) {
+            candidate = gram_sparse_group_prox(
+                Z - step * smooth_Z.gradient,
+                mask,
+                step,
+                lambda,
+                alpha,
+                condition_mix
+            );
+            smooth_candidate = gram_profiled_smooth(
+                candidate, problem, ridge
+            );
+            MatrixXd difference = candidate - Z;
+            const double bound = smooth_Z.value +
+                (smooth_Z.gradient.array() * difference.array()).sum() +
+                difference.squaredNorm() / (2.0 * step);
+            if (smooth_candidate.value <= bound + 1e-10) break;
+            step *= backtrack;
+            if (step < min_step) {
+                Rcpp::stop("Gram backtracking line search reached min_step.");
+            }
+        }
+        double objective_candidate = smooth_candidate.value +
+            gram_sparse_group_penalty(
+                candidate, lambda, alpha, condition_mix
+            );
+        if (objective_candidate > objective_previous + 1e-10) {
+            acceleration = 1.0;
+            Z = B;
+            smooth_Z = smooth_B;
+            while (true) {
+                candidate = gram_sparse_group_prox(
+                    Z - step * smooth_Z.gradient,
+                    mask,
+                    step,
+                    lambda,
+                    alpha,
+                    condition_mix
+                );
+                smooth_candidate = gram_profiled_smooth(
+                    candidate, problem, ridge
+                );
+                MatrixXd difference = candidate - Z;
+                const double bound = smooth_Z.value +
+                    (smooth_Z.gradient.array() * difference.array()).sum() +
+                    difference.squaredNorm() / (2.0 * step);
+                if (smooth_candidate.value <= bound + 1e-10) break;
+                step *= backtrack;
+                if (step < min_step) {
+                    Rcpp::stop(
+                        "Gram backtracking reached min_step after restart."
+                    );
+                }
+            }
+            objective_candidate = smooth_candidate.value +
+                gram_sparse_group_penalty(
+                    candidate, lambda, alpha, condition_mix
+                );
+        }
+        coef_change = (candidate - B).norm() /
+            (B.norm() + kEps);
+        objective_change = std::abs(
+            objective_candidate - objective_previous
+        ) / (std::abs(objective_previous) + kEps);
+        MatrixXd B_previous = B;
+        B = candidate;
+        smooth_B = smooth_candidate;
+        objective_previous = objective_candidate;
+        if (objective_change < tol_objective && coef_change < tol_coef) {
+            converged = true;
+            break;
+        }
+        const double acceleration_new = (
+            1.0 + std::sqrt(1.0 + 4.0 * acceleration * acceleration)
+        ) / 2.0;
+        MatrixXd Z_new = B +
+            ((acceleration - 1.0) / acceleration_new) *
+            (B - B_previous);
+        const double restart =
+            ((Z - B).array() * (B - B_previous).array()).sum();
+        if (restart > 0.0) {
+            acceleration = 1.0;
+            Z = B;
+        } else {
+            acceleration = acceleration_new;
+            Z = Z_new;
+        }
+    }
+    if (iteration > max_iter) iteration = max_iter;
+    return Rcpp::List::create(
+        Rcpp::Named("beta") = B,
+        Rcpp::Named("intercept") = smooth_B.intercept,
+        Rcpp::Named("lambda") = lambda,
+        Rcpp::Named("objective") = objective_previous,
+        Rcpp::Named("objective_change") = objective_change,
+        Rcpp::Named("coef_change") = coef_change,
+        Rcpp::Named("iterations") = iteration,
+        Rcpp::Named("converged") = converged,
+        Rcpp::Named("step") = step,
+        Rcpp::Named("history") = R_NilValue,
+        Rcpp::Named("backend") = "cpp_eigen_centered_gram_fista"
+    );
+}
+
+Rcpp::List fit_multitask_path_gram(
+    const ScaledData& training,
+    const Rcpp::List& cache,
+    const ArrayXXi& mask,
+    const std::vector<double>& lambda,
+    double alpha,
+    double condition_mix,
+    int max_iter,
+    double tol_objective,
+    double tol_coef
+) {
+    GramProblem problem = parse_gram_problem(cache, training.y);
+    if (mask.rows() != problem.predictors || mask.cols() != problem.tasks) {
+        Rcpp::stop("Gram solver coefficient mask is not aligned.");
+    }
+    VectorXd spectral(problem.tasks);
+    for (int task = 0; task < problem.tasks; ++task) {
+        spectral[task] = gram_spectral_squared_norm(
+            problem.task[task].gram
+        );
+    }
+    MatrixXd B = MatrixXd::Zero(problem.predictors, problem.tasks);
+    double step = std::numeric_limits<double>::quiet_NaN();
+    Rcpp::List fits(lambda.size());
+    for (int index = 0; index < static_cast<int>(lambda.size()); ++index) {
+        const double current = lambda[index];
+        if (!std::isfinite(current) || current < 0.0) {
+            Rcpp::stop("Gram solver lambda is invalid.");
+        }
+        const double default_step = gram_initial_step(
+            spectral,
+            problem.loss_weights,
+            current * (1.0 - alpha)
+        );
+        Rcpp::List fit = fit_one_lambda_gram(
+            problem,
+            mask,
+            current,
+            alpha,
+            condition_mix,
+            B,
+            step,
+            default_step,
+            max_iter,
+            tol_objective,
+            tol_coef
+        );
+        B = Rcpp::as<MatrixXd>(fit["beta"]);
+        step = Rcpp::as<double>(fit["step"]);
+        fits[index] = fit;
+    }
+    return Rcpp::List::create(
+        Rcpp::Named("lambda") = to_numeric(lambda),
+        Rcpp::Named("fits") = fits,
+        Rcpp::Named("backend") = "cpp_eigen_centered_gram_fista"
+    );
+}
+
+bool use_gram_solver(const ScaledData& training) {
+    const double p = static_cast<double>(training.X[0].cols());
+    const double tasks = static_cast<double>(training.X.size());
+    double nonzero = 0.0;
+    for (const auto& matrix : training.X) {
+        nonzero += static_cast<double>(matrix.nonZeros());
+    }
+    const double gram_work = tasks * p * p;
+    const double sparse_work = 2.0 * std::max(nonzero, 1.0);
+    const double gram_bytes = tasks * p * p * sizeof(double);
+    return p <= 2048.0 &&
+        gram_bytes <= 512.0 * 1024.0 * 1024.0 &&
+        gram_work <= 4.0 * sparse_work;
+}
+
+std::vector<ValidationTaskStats> make_validation_stats(
+    const ScaledData& validation
+) {
+    std::vector<ValidationTaskStats> out;
+    out.reserve(validation.X.size());
+    for (int task = 0; task < static_cast<int>(validation.X.size()); ++task) {
+        const ColSparse& X = validation.X[task];
+        const VectorXd& y = validation.y[task];
+        if (X.rows() != y.size() || X.rows() < 1) {
+            Rcpp::stop("Validation sufficient statistics are not aligned.");
+        }
+        ValidationTaskStats value;
+        value.n = X.rows();
+        value.sum_x = VectorXd::Zero(X.cols());
+        for (int column = 0; column < X.outerSize(); ++column) {
+            for (ColSparse::InnerIterator it(X, column); it; ++it) {
+                value.sum_x[column] += it.value();
+            }
+        }
+        value.xtx = MatrixXd(X.transpose() * X);
+        value.xty = X.transpose() * y;
+        value.sum_y = y.sum();
+        value.sum_y2 = y.squaredNorm();
+        if (!value.sum_x.allFinite() || !value.xtx.allFinite() ||
+            !value.xty.allFinite() || !std::isfinite(value.sum_y) ||
+            !std::isfinite(value.sum_y2)) {
+            Rcpp::stop("Validation sufficient statistics are non-finite.");
+        }
+        out.emplace_back(std::move(value));
+    }
+    return out;
+}
+
+double validation_mse_from_stats(
+    const ValidationTaskStats& stats,
+    const VectorXd& beta,
+    double intercept
+) {
+    if (beta.size() != stats.sum_x.size() || !beta.allFinite() ||
+        !std::isfinite(intercept)) {
+        Rcpp::stop("Validation coefficients are not aligned or finite.");
+    }
+    const double intercept_response =
+        -2.0 * intercept * stats.sum_y;
+    const double coefficient_response =
+        -2.0 * beta.dot(stats.xty);
+    const double intercept_square =
+        static_cast<double>(stats.n) * intercept * intercept;
+    const double intercept_coefficient =
+        2.0 * intercept * beta.dot(stats.sum_x);
+    const double coefficient_square = beta.dot(stats.xtx * beta);
+    double sse = stats.sum_y2 + intercept_response +
+        coefficient_response + intercept_square +
+        intercept_coefficient + coefficient_square;
+    const double scale = std::max(
+        1.0,
+        std::abs(stats.sum_y2) +
+        std::abs(intercept_response) +
+        std::abs(coefficient_response) +
+        std::abs(intercept_square) +
+        std::abs(intercept_coefficient) +
+        std::abs(coefficient_square)
+    );
+    if (sse < 0.0 && sse >= -1e-10 * scale) sse = 0.0;
+    if (!std::isfinite(sse) || sse < 0.0) {
+        Rcpp::stop("Validation sufficient-statistic SSE is invalid.");
+    }
+    return sse / static_cast<double>(stats.n);
+}
+
 PathBundle fit_and_refit_path(
     const RawTargetData& data,
     const std::vector<std::vector<int>>& training_rows,
@@ -785,19 +1285,36 @@ PathBundle fit_and_refit_path(
             initial.X[task], out.core_relative
         ));
     }
-    Rcpp::List solver = condition_fit_multitask_path_cpp(
-        to_matrix_list(out.training.X),
-        to_vector_list(out.training.y),
-        to_numeric(lambda),
-        alpha,
-        condition_mix,
-        "equal",
-        to_logical_matrix(out.estimability_core),
-        max_iter,
-        tol_objective,
-        tol_coef,
-        false
-    );
+    Rcpp::List cache = make_refit_cache(out.training);
+    Rcpp::List solver;
+    if (use_gram_solver(out.training)) {
+        solver = fit_multitask_path_gram(
+            out.training,
+            cache,
+            out.estimability_core,
+            lambda,
+            alpha,
+            condition_mix,
+            max_iter,
+            tol_objective,
+            tol_coef
+        );
+    } else {
+        solver = condition_fit_multitask_path_cpp(
+            to_matrix_list(out.training.X),
+            to_vector_list(out.training.y),
+            to_numeric(lambda),
+            alpha,
+            condition_mix,
+            "equal",
+            to_logical_matrix(out.estimability_core),
+            max_iter,
+            tol_objective,
+            tol_coef,
+            false
+        );
+        solver["backend"] = "cpp_eigen_sparse_matrix_free_fista";
+    }
     Rcpp::List fits = solver["fits"];
     Rcpp::List beta_path(fits.size());
     Rcpp::NumericVector ridge(fits.size());
@@ -812,7 +1329,7 @@ PathBundle fit_and_refit_path(
         to_logical_matrix(out.estimability_core),
         ridge,
         active_tol,
-        make_refit_cache(out.training),
+        cache,
         1e-8
     );
     for (int index = 0; index < refits.size(); ++index) {
@@ -946,6 +1463,7 @@ LambdaSelection select_lambda_nested(
         std::numeric_limits<double>::quiet_NaN()
     );
     out.fold_transform = Rcpp::List(out.effective_folds);
+    out.fold_backend.assign(out.effective_folds, "not_run");
     out.reason = "";
 
     ArrayXXi actual = raw_estimability_mask(
@@ -965,6 +1483,10 @@ LambdaSelection select_lambda_nested(
             lambda.size(), std::numeric_limits<double>::quiet_NaN()
         );
         out.cv_se = out.cv_mean;
+        std::fill(
+            out.fold_backend.begin(), out.fold_backend.end(),
+            "intercept_only_all_predictors_structural_zero"
+        );
         out.reason = "intercept_only_all_predictors_structural_zero";
         return out;
     }
@@ -981,7 +1503,10 @@ LambdaSelection select_lambda_nested(
         );
         out.fold_transform[fold - 1] = transform_to_list(transform);
         std::vector<int> keep = transform_keep(transform);
-        if (keep.empty()) continue;
+        if (keep.empty()) {
+            out.fold_backend[fold - 1] = "intercept_only";
+            continue;
+        }
         ArrayXXi raw_mask = subset_mask_rows(transform.estimability, keep);
         PathBundle path = fit_and_refit_path(
             data,
@@ -998,6 +1523,9 @@ LambdaSelection select_lambda_nested(
             tol_objective,
             tol_coef
         );
+        out.fold_backend[fold - 1] = path.intercept_only ?
+            "intercept_only" :
+            Rcpp::as<std::string>(path.solver["backend"]);
         std::vector<int> kept_global = map_columns(base_columns, keep);
         VectorXd kept_scale = subset_vector(transform.predictor_scale, keep);
         ScaledData validation = build_scaled_data(
@@ -1009,26 +1537,29 @@ LambdaSelection select_lambda_nested(
             transform.response_scale
         );
         if (path.intercept_only) {
+            double mean_mse = 0.0;
+            for (int task = 0; task < data.tasks; ++task) {
+                const double intercept = path.training.y[task].mean();
+                mean_mse += (
+                    validation.y[task].array() - intercept
+                ).square().mean() / static_cast<double>(data.tasks);
+            }
             for (int lambda_index = 0;
                  lambda_index < static_cast<int>(lambda.size()); ++lambda_index) {
-                double mean_mse = 0.0;
-                for (int task = 0; task < data.tasks; ++task) {
-                    const double intercept = path.training.y[task].mean();
-                    mean_mse += (
-                        validation.y[task].array() - intercept
-                    ).square().mean() / static_cast<double>(data.tasks);
-                }
                 out.fold_loss(fold - 1, lambda_index) = mean_mse;
             }
             continue;
         }
-        std::vector<ColSparse> validation_core;
-        validation_core.reserve(data.tasks);
+        ScaledData validation_core;
+        validation_core.y = validation.y;
+        validation_core.X.reserve(data.tasks);
         for (int task = 0; task < data.tasks; ++task) {
-            validation_core.emplace_back(subset_columns(
+            validation_core.X.emplace_back(subset_columns(
                 validation.X[task], path.core_relative
             ));
         }
+        std::vector<ValidationTaskStats> validation_stats =
+            make_validation_stats(validation_core);
         for (int lambda_index = 0;
              lambda_index < static_cast<int>(lambda.size()); ++lambda_index) {
             Rcpp::List refit = path.refits[lambda_index];
@@ -1036,13 +1567,14 @@ LambdaSelection select_lambda_nested(
             VectorXd intercept = Rcpp::as<VectorXd>(refit["intercept"]);
             double mean_mse = 0.0;
             for (int task = 0; task < data.tasks; ++task) {
-                VectorXd prediction = validation_core[task] * beta.col(task);
-                prediction.array() += intercept[task];
-                mean_mse += (
-                    validation.y[task] - prediction
-                ).squaredNorm() /
-                    static_cast<double>(validation.y[task].size()) /
-                    static_cast<double>(data.tasks);
+                mean_mse += validation_mse_from_stats(
+                    validation_stats[task],
+                    beta.col(task),
+                    intercept[task]
+                ) / static_cast<double>(data.tasks);
+            }
+            if (!std::isfinite(mean_mse)) {
+                Rcpp::stop("Inner validation loss is non-finite.");
             }
             out.fold_loss(fold - 1, lambda_index) = mean_mse;
         }
@@ -1128,6 +1660,7 @@ Rcpp::List selection_to_list(
         Rcpp::Named("cv_se") = to_numeric(selection.cv_se),
         Rcpp::Named("fold_loss") = selection.fold_loss,
         Rcpp::Named("fold_transform") = selection.fold_transform,
+        Rcpp::Named("solver_backend") = Rcpp::wrap(selection.fold_backend),
         Rcpp::Named("effective_nfolds") = selection.effective_folds
     );
     if (!selection.reason.empty()) {
@@ -1635,7 +2168,7 @@ Rcpp::List run_outer_cv(
         Rcpp::Named("oof_model") =
             "nested_selection_cached_refit_heldout_condition_full_projection",
         Rcpp::Named("engine_backend") =
-            "cpp_eigen_fused_target_nested_cv"
+            "cpp_eigen_fused_target_nested_cv_hybrid_gram_sufficient_statistics"
     );
 }
 
@@ -1871,7 +2404,9 @@ Rcpp::List condition_fit_target_engine_cpp(
         Rcpp::Named("condition_rsq_oof") = condition_rsq_oof,
         Rcpp::Named("condition_rmse_oof") = condition_rmse_oof,
         Rcpp::Named("target_rsq_oof_pooled") = pooled_rsq,
+        Rcpp::Named("inner_cv_backend") =
+            "hybrid_centered_gram_or_sparse_fista_with_validation_sufficient_statistics",
         Rcpp::Named("backend") =
-            "cpp_eigen_fused_target_nested_cv_lambda_refit_validation"
+            "cpp_eigen_fused_target_nested_cv_hybrid_gram_refit_validation_stats"
     );
 }

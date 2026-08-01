@@ -54,7 +54,8 @@ target/condition estimability status and an explicit aggregation contract.
 Projection is restricted to the exact paired cells, assays and condition labels
 stored by the fit.
 RegCompass should average these single-cell target scores within
-cell type × condition × sample/donor to form metacell evidence.
+condition × broad cell type to form metacell evidence. The sample field may
+be retained only as provenance; it is not a required stratum or CV block.
 
 RegCompass must not rebuild the interaction from aggregated TF and ATAC values,
 renormalize a condition, refit coefficients, use selection coefficients, or
