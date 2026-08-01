@@ -3,6 +3,8 @@ name: Apply hybrid condition target engine
 on:
   push:
     branches: [agent/hybrid-condition-target-engine]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
