@@ -1,3 +1,19 @@
+# Pando 1.6.1
+
+- Replaces repeated inner-fold sparse matrix prediction with exact validation
+  sufficient statistics. For each condition and lambda, validation SSE is
+  computed from `n`, column sums, `X'X`, `X'y`, response sum and response square
+  sum, giving the same intercept-aware MSE without a per-cell lambda loop.
+- Reuses the centered training Gram/RHS cache for both sparse-group selection and
+  fixed-support direct-Schur refitting. A deterministic cost model chooses a
+  centered-Gram FISTA path or the existing sparse matrix-free FISTA path.
+- Keeps the public `infer_condition_grn()` API, fold plans, training-fold-only
+  transforms, equal-condition weights, lambda rules, estimability masks,
+  structural zeros, OOF projections and `ConditionGRNFit` schema unchanged.
+- Raises the strict native condition ABI to 5 and stops on incompatible backend
+  metadata, non-finite sufficient statistics, invalid SSE, failed factorization
+  or incomplete OOF assignment. No R runtime fallback is introduced.
+
 # Pando 1.6.0
 
 - Moves the complete numerical workflow for each condition-aware target into one

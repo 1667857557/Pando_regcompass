@@ -60,6 +60,14 @@ Sparse multi-task selection may choose different active edges in each
 condition. The common-scale refit keeps an inactive but estimable edge at exact
 zero and an unavailable edge at `NA`.
 
+The public arguments are unchanged. Numerically, each target is processed by one
+fail-fast C++ engine. Inner-fold selection reuses exact centered training
+sufficient statistics and chooses between an algebraically equivalent dense-Gram
+FISTA path and the sparse matrix-free path. Every lambda is scored from exact
+held-out sufficient statistics. Individual held-out cells are traversed only
+after the inner fold selects the outer-fold model, when the OOF prediction and
+condition-full/common projections are generated.
+
 ## Standard Pando-compatible networks
 
 ```{r networks}

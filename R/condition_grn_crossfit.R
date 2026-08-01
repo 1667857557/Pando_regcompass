@@ -747,16 +747,24 @@
     required <- c(
         'lambda_path', 'cv', 'full_cv', 'selected', 'beta_selection',
         'refit', 'full_transform', 'condition_rsq_oof',
-        'condition_rmse_oof', 'target_rsq_oof_pooled', 'backend'
+        'condition_rmse_oof', 'target_rsq_oof_pooled',
+        'inner_cv_backend', 'backend'
     )
     if (!is.list(engine) || !all(required %in% names(engine))) {
         stop('Compiled target engine returned an incomplete result.', call. = FALSE)
     }
     if (!identical(
         engine$backend,
-        'cpp_eigen_fused_target_nested_cv_lambda_refit_validation'
+        'cpp_eigen_fused_target_nested_cv_hybrid_gram_refit_validation_stats'
     )) {
         stop('Compiled target engine returned an incompatible backend.', call. = FALSE)
+    }
+    if (!identical(
+        engine$inner_cv_backend,
+        'hybrid_centered_gram_or_sparse_fista_with_validation_sufficient_statistics'
+    )) {
+        stop('Compiled target engine did not use the required inner-CV backend.',
+             call. = FALSE)
     }
     p <- length(predictor_names)
     k <- length(condition_names)

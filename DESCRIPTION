@@ -1,5 +1,5 @@
 Package: Pando
-Version: 1.6.0
+Version: 1.6.1
 Type: Package
 Title: Inferring regulomes from multi-modal single-cell genomics data
 Authors@R: person(given = "Jonas Simon",
@@ -80,9 +80,10 @@ Suggests:
     brms
 Remotes: 
     github::immunogenomics/presto
-Config/Pando/NativeSparseABI: 4
+Config/Pando/NativeSparseABI: 5
 Config/Pando/ConditionProductBackend: cpp-only-fail-fast
 Config/Pando/ConditionSolverBackend: cpp-only-fail-fast
 Config/Pando/ConditionRefitBackend: cpp-eigen-direct-path-fail-fast
-Config/Pando/ConditionTargetEngineBackend: cpp-eigen-fused-nested-cv-path-refit-validation-fail-fast
+Config/Pando/ConditionTargetEngineBackend: cpp-eigen-fused-hybrid-gram-nested-cv-path-refit-validation-stats-fail-fast
+Config/Pando/ConditionInnerCVBackend: cpp-eigen-hybrid-gram-sufficient-statistics-fail-fast
 Config/Pando/InstalledRuntimeCI: R-4.5.1-Matrix-1.7.4
