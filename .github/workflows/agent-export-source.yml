@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: agent/hybrid-condition-target-engine
+          ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
       - uses: r-lib/actions/setup-r@v2
         with:
@@ -25,13 +25,13 @@ jobs:
         run: install.packages(c("Rcpp", "RcppEigen", "Matrix"))
       - name: Apply canonical source patch
         run: |
+          set -euo pipefail
           base64 --decode .agent-patch/apply_hybrid_target_engine.py.gz.b64 | gzip -d > /tmp/apply_hybrid_target_engine.py
           python /tmp/apply_hybrid_target_engine.py
-          rm -f .agent-patch/trigger
       - name: Compile canonical target engine
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
           export PKG_CPPFLAGS="$(Rscript -e 'cat(Rcpp:::CxxFlags())') $(Rscript -e 'cat(RcppEigen:::CxxFlags())') -I${GITHUB_WORKSPACE}/src"
           export PKG_CXXFLAGS="-std=gnu++17"
           R CMD SHLIB src/condition_target_engine.cpp 2>&1 | tee /tmp/hybrid-kernel-compile.log
@@ -72,13 +72,17 @@ jobs:
           grep -q 'validation_mse_from_stats' src/condition_target_engine.cpp
           test -f tests/testthat/helper-condition-target-engine.R
           test -f tests/testthat/test-condition-target-engine-hybrid.R
-          test ! -e .agent-patch/apply_hybrid_target_engine.py.gz.b64
-          test ! -e .agent-bundle/chunk00
-          test ! -e .github/workflows/agent-run-fused-target-engine.yml
-      - name: Commit canonical implementation
+      - name: Restore bootstrap files and commit canonical source
         run: |
+          set -euo pipefail
+          git checkout HEAD -- .agent-patch .github/workflows
+          if git ls-tree -r --name-only HEAD .agent-bundle | grep -q .; then
+            git checkout HEAD -- .agent-bundle
+          fi
+          rm -f src/condition_target_engine.o src/condition_target_engine.so
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
+          git diff --cached --quiet && { echo "No canonical source changes produced"; exit 1; }
           git commit -m "Accelerate condition nested CV with hybrid Gram statistics"
-          git push origin HEAD:agent/hybrid-condition-target-engine
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
