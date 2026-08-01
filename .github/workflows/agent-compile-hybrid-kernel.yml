@@ -1,0 +1,39 @@
+name: Compile hybrid condition kernel
+
+on:
+  push:
+    branches: [agent/hybrid-condition-target-engine]
+
+jobs:
+  compile-kernel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/hybrid-condition-target-engine
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.5.1'
+          use-public-rspm: true
+      - name: Install native compilation dependencies
+        shell: Rscript {0}
+        run: |
+          install.packages(c("Rcpp", "RcppEigen", "Matrix"))
+      - name: Apply canonical source patch
+        run: |
+          base64 --decode .agent-patch/apply_hybrid_target_engine.py.gz.b64 | gzip -d > /tmp/apply_hybrid_target_engine.py
+          python /tmp/apply_hybrid_target_engine.py
+      - name: Compile target engine translation unit
+        shell: bash
+        run: |
+          set -o pipefail
+          export PKG_CPPFLAGS="$(Rscript -e 'cat(Rcpp:::CxxFlags())') $(Rscript -e 'cat(RcppEigen:::CxxFlags())') -I${GITHUB_WORKSPACE}/src"
+          export PKG_CXXFLAGS="-std=gnu++17"
+          R CMD SHLIB src/condition_target_engine.cpp 2>&1 | tee /tmp/hybrid-kernel-compile.log
+      - name: Upload compiler log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hybrid-kernel-compile-log
+          path: /tmp/hybrid-kernel-compile.log
+          if-no-files-found: ignore
