@@ -148,6 +148,11 @@ initiate_grn.GRNData <- function(
 #' @param genome A \code{BSgenome} object with the genome of interest.
 #' @param motif_tfs A data frame matching motifs with TFs. The first column is assumed
 #' to be the name of the motif, the second the name of the TF.
+#' @param exact_positions Whether to retain the exact genomic positions of motif
+#' matches. The default, \code{FALSE}, stores only the sparse motif
+#' presence/absence matrix used to construct TF-peak-target candidates. Set to
+#' \code{TRUE} when exact match positions are needed, for example for TF
+#' footprinting.
 #' @param verbose Display messages.
 #'
 #' @return A GRNData object with updated motif info.
@@ -160,8 +165,13 @@ find_motifs.GRNData <- function(
     pfm,
     genome,
     motif_tfs = NULL,
-    verbose = TRUE
+    verbose = TRUE,
+    exact_positions = FALSE
 ){
+    if (!is.logical(exact_positions) || length(exact_positions) != 1L ||
+        is.na(exact_positions)){
+        stop("`exact_positions` must be either TRUE or FALSE.", call. = FALSE)
+    }
     params <- Params(object)
 
     # Add TF info for motifs
@@ -193,15 +203,31 @@ find_motifs.GRNData <- function(
     }
     object@grn@regions@tfs <- motif2tf[, tfs_use]
 
-    # Find motif positions with Signac/motifmatchr
+    # Find motif matches with Signac/motifmatchr. Exact positions are optional;
+    # Pando's candidate construction only requires the presence/absence matrix.
     cand_ranges <- object@grn@regions@ranges
-    motif_pos <- Signac::AddMotifs(
-        object = cand_ranges,
-        genome = genome,
-        pfm = pfm,
-        verbose= verbose
-    )
-    object@grn@regions@motifs <- motif_pos
+    if (exact_positions){
+        motif_object <- Signac::AddMotifs(
+            object = cand_ranges,
+            genome = genome,
+            pfm = pfm,
+            verbose = verbose
+        )
+    } else {
+        motif_matrix <- Signac::CreateMotifMatrix(
+            features = cand_ranges,
+            pwm = pfm,
+            genome = genome,
+            score = FALSE,
+            use.counts = FALSE
+        )
+        motif_object <- Signac::CreateMotifObject(
+            data = motif_matrix,
+            pwm = pfm,
+            positions = NULL
+        )
+    }
+    object@grn@regions@motifs <- motif_object
 
     return(object)
 }

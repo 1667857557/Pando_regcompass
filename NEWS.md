@@ -1,5 +1,10 @@
 # Pando 1.6.1
 
+- Adds an `exact_positions = FALSE` option to `find_motifs.GRNData()`. The
+  default uses Signac's sparse motif presence/absence matrix without retaining
+  genomic match positions, while `exact_positions = TRUE` preserves the
+  original `AddMotifs()` path for footprinting workflows.
+
 - Replaces repeated inner-fold sparse matrix prediction with exact validation
   sufficient statistics. For each condition and lambda, validation SSE is
   computed from `n`, column sums, `X'X`, `X'y`, response sum and response square
