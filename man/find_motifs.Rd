@@ -7,7 +7,14 @@
 \usage{
 find_motifs(object, ...)
 
-\method{find_motifs}{GRNData}(object, pfm, genome, motif_tfs = NULL, verbose = TRUE)
+\method{find_motifs}{GRNData}(
+  object,
+  pfm,
+  genome,
+  motif_tfs = NULL,
+  verbose = TRUE,
+  exact_positions = FALSE
+)
 }
 \arguments{
 \item{pfm}{A \code{PFMatrixList} object with position weight matrices.}
@@ -16,6 +23,12 @@ find_motifs(object, ...)
 
 \item{motif_tfs}{A data frame matching motifs with TFs. The first column is assumed
 to be the name of the motif, the second the name of the TF.}
+
+\item{exact_positions}{Whether to retain the exact genomic positions of motif
+matches. The default, \code{FALSE}, stores only the sparse motif
+presence/absence matrix used to construct TF-peak-target candidates. Set to
+\code{TRUE} when exact match positions are needed, for example for TF
+footprinting.}
 
 \item{verbose}{Display messages.}
 }
