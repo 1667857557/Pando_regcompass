@@ -31,7 +31,7 @@ test_that('edge union never pairs TF and peak retained in different conditions',
     expect_false(any(mask))
 })
 
-test_that('final TF by peak predictors use one pooled edge transform', {
+test_that('TF by peak design remains raw until the native fold transform', {
     gene_data <- Matrix::Matrix(
         cbind(TF1 = c(1, 2, 4, 8)), sparse = TRUE
     )
@@ -44,16 +44,15 @@ test_that('final TF by peak predictors use one pooled edge transform', {
         edge_id = 'TF1\001peak1\001GENE1'
     )
     design <- Pando:::.condition_build_design(
-        response, gene_data, peak_data, edges, scale = TRUE
+        response, gene_data, peak_data, edges,
+        condition = factor(c('A', 'A', 'B', 'B')), scale = TRUE
     )
     raw_edge <- as.numeric(gene_data[, 'TF1'] * peak_data[, 'peak1'])
-
-    expect_equal(design$predictor_center, mean(raw_edge))
-    expect_equal(design$predictor_scale, stats::sd(raw_edge))
-    expect_equal(as.numeric(Matrix::colMeans(design$X)), 0, tolerance = 1e-12)
-    expect_equal(
-        Pando:::.condition_column_variance(design$X), 1, tolerance = 1e-12
-    )
+    expect_equal(as.numeric(design$X_raw[, 1]), raw_edge)
+    expect_identical(colnames(design$X_raw), edges$edge_id)
+    expect_false(any(c(
+        'X', 'y', 'predictor_center', 'predictor_scale', 'transform'
+    ) %in% names(design)))
 })
 
 test_that('sparse-group proximal map supports group and element sparsity', {

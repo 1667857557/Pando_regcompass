@@ -1,10 +1,16 @@
 #include "condition_sparse_input.h"
+#include "condition_execution_plan.h"
+#include "condition_matrix_free_refit.h"
+#include "condition_solver_internal.h"
 #include <RcppEigen.h>
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <numeric>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 using Eigen::ArrayXXi;
@@ -15,21 +21,6 @@ using Eigen::VectorXd;
 
 using ColSparse = SparseMatrix<double, Eigen::ColMajor, int>;
 using RowSparse = SparseMatrix<double, Eigen::RowMajor, int>;
-
-// Native kernels implemented in the package's existing translation units.
-Rcpp::List condition_fit_multitask_path_cpp(
-    Rcpp::List X_list,
-    Rcpp::List y_list,
-    Rcpp::NumericVector lambda,
-    double alpha,
-    double condition_mix,
-    std::string condition_weight,
-    Rcpp::LogicalMatrix coefficient_mask,
-    int max_iter,
-    double tol_objective,
-    double tol_coef,
-    bool keep_history
-);
 
 Rcpp::List condition_refit_path_cpp(
     Rcpp::List beta_path,
@@ -72,11 +63,13 @@ struct ScaledData {
 
 struct PathBundle {
     bool intercept_only;
+    bool has_plan;
     std::vector<int> core_relative;
     ArrayXXi estimability_core;
     ScaledData training;
     Rcpp::List solver;
     Rcpp::List refits;
+    TargetExecutionPlan plan;
 };
 
 struct LambdaSelection {
@@ -87,10 +80,125 @@ struct LambdaSelection {
     std::vector<double> cv_se;
     std::vector<std::string> fold_backend;
     MatrixXd fold_loss;
+    MatrixXd fold_solver_iterations;
+    MatrixXd fold_refit_iterations;
+    MatrixXd fold_support_size;
     Rcpp::List fold_transform;
     int effective_folds;
     std::string reason;
 };
+
+using PathRefitVisitor = std::function<void(
+    int,
+    const Rcpp::List&,
+    const Rcpp::List&,
+    const PathBundle&
+)>;
+
+TargetEngineControl parse_engine_control(const Rcpp::List& input) {
+    TargetEngineControl out = default_target_engine_control();
+    SEXP memory_budget = R_NilValue;
+    if (input.containsElementNamed("memory_budget_mb")) {
+        memory_budget = input["memory_budget_mb"];
+    }
+    if (!Rf_isNull(memory_budget)) {
+        const double value = Rcpp::as<double>(memory_budget);
+        if (!std::isfinite(value) || value <= 0.0 ||
+            value > static_cast<double>(
+                std::numeric_limits<std::size_t>::max() / (1024 * 1024)
+            )) {
+            Rcpp::stop("engine_control memory_budget_mb is invalid.");
+        }
+        out.worker_budget_bytes = static_cast<std::size_t>(
+            value * 1024.0 * 1024.0
+        );
+    }
+    if (input.containsElementNamed("dense_max_p")) {
+        out.dense_max_p = Rcpp::as<int>(input["dense_max_p"]);
+    }
+    if (input.containsElementNamed("lambda_batch_size")) {
+        out.lambda_batch_size = Rcpp::as<int>(input["lambda_batch_size"]);
+    }
+    if (input.containsElementNamed("refit_pcg_tol")) {
+        out.refit_pcg_tolerance = Rcpp::as<double>(input["refit_pcg_tol"]);
+    }
+    if (input.containsElementNamed("refit_pcg_max_iter")) {
+        out.refit_pcg_max_iterations =
+            Rcpp::as<int>(input["refit_pcg_max_iter"]);
+    }
+    if (input.containsElementNamed("preconditioner")) {
+        out.preconditioner = Rcpp::as<std::string>(
+            input["preconditioner"]
+        );
+    }
+    if (input.containsElementNamed("diagnostics_level")) {
+        const std::string level = Rcpp::as<std::string>(
+            input["diagnostics_level"]
+        );
+        if (level != "full" && level != "compact") {
+            Rcpp::stop("engine_control diagnostics_level is invalid.");
+        }
+        out.compact_diagnostics = level == "compact";
+    }
+    if (out.dense_max_p < 1 || out.lambda_batch_size < 1 ||
+        !std::isfinite(out.refit_pcg_tolerance) ||
+        out.refit_pcg_tolerance <= 0.0 ||
+        out.refit_pcg_max_iterations < 1 ||
+        (out.preconditioner != "hybrid" &&
+         out.preconditioner != "diagonal")) {
+        Rcpp::stop("Invalid native target engine_control values.");
+    }
+    return out;
+}
+
+Rcpp::List plan_to_list(const TargetExecutionPlan& plan) {
+    return Rcpp::List::create(
+        Rcpp::Named("path_backend") = path_backend_name(plan.path),
+        Rcpp::Named("validation_backend") =
+            validation_backend_name(plan.validation),
+        Rcpp::Named("refit_backend") = refit_backend_name(plan.refit),
+        Rcpp::Named("predictors") = plan.predictors,
+        Rcpp::Named("tasks") = plan.tasks,
+        Rcpp::Named("lambda_batch_size") = plan.lambda_batch_size,
+        Rcpp::Named("lambda_streaming") =
+            plan.refit == RefitBackend::MatrixFreeSchurPCG,
+        Rcpp::Named("nonzeros") = static_cast<double>(plan.nonzeros),
+        Rcpp::Named("dense_path_bytes") =
+            static_cast<double>(plan.dense_path_bytes),
+        Rcpp::Named("dense_validation_bytes") =
+            static_cast<double>(plan.dense_validation_bytes),
+        Rcpp::Named("dense_refit_bytes") =
+            static_cast<double>(plan.dense_refit_bytes),
+        Rcpp::Named("matrix_free_bytes") =
+            static_cast<double>(plan.matrix_free_bytes),
+        Rcpp::Named("worker_budget_bytes") =
+            static_cast<double>(plan.worker_budget_bytes),
+        Rcpp::Named("full_predictor_square_allocated") =
+            plan.full_predictor_square_allocated,
+        Rcpp::Named("memory_contract") =
+            "no_full_p2_on_high_p_path_v1"
+    );
+}
+
+std::size_t total_nonzeros(const ScaledData& data) {
+    std::size_t out = 0;
+    for (const auto& matrix : data.X) {
+        const std::size_t current = static_cast<std::size_t>(
+            matrix.nonZeros()
+        );
+        if (out > std::numeric_limits<std::size_t>::max() - current) {
+            Rcpp::stop("Target sparse nonzero count overflowed size_t.");
+        }
+        out += current;
+    }
+    return out;
+}
+
+std::string plan_backend_label(const TargetExecutionPlan& plan) {
+    return std::string("path=") + path_backend_name(plan.path) +
+        ";validation=" + validation_backend_name(plan.validation) +
+        ";refit=" + refit_backend_name(plan.refit);
+}
 
 std::vector<int> sequence(int size) {
     std::vector<int> out(size);
@@ -1255,10 +1363,14 @@ PathBundle fit_and_refit_path(
     double active_tol,
     int max_iter,
     double tol_objective,
-    double tol_coef
+    double tol_coef,
+    const TargetEngineControl& engine_control,
+    const PathRefitVisitor& visitor = PathRefitVisitor(),
+    bool retain_path = true
 ) {
     PathBundle out;
     out.intercept_only = false;
+    out.has_plan = false;
     std::vector<int> kept_columns = map_columns(base_columns, initial_keep);
     VectorXd kept_scale = subset_vector(transform.predictor_scale, initial_keep);
     ScaledData initial = build_scaled_data(
@@ -1278,68 +1390,155 @@ PathBundle fit_and_refit_path(
         return out;
     }
     out.estimability_core = subset_mask_rows(actual, out.core_relative);
-    out.training.y = initial.y;
-    out.training.X.reserve(data.tasks);
-    for (int task = 0; task < data.tasks; ++task) {
-        out.training.X.emplace_back(subset_columns(
-            initial.X[task], out.core_relative
-        ));
+    out.training.y = std::move(initial.y);
+    bool core_is_identity = static_cast<int>(out.core_relative.size()) ==
+        initial.X[0].cols();
+    for (int predictor = 0;
+         core_is_identity &&
+             predictor < static_cast<int>(out.core_relative.size());
+         ++predictor) {
+        core_is_identity = out.core_relative[predictor] == predictor;
     }
-    Rcpp::List cache = make_refit_cache(out.training);
+    if (core_is_identity) {
+        out.training.X = std::move(initial.X);
+    } else {
+        out.training.X.reserve(data.tasks);
+        for (int task = 0; task < data.tasks; ++task) {
+            out.training.X.emplace_back(subset_columns(
+                initial.X[task], out.core_relative
+            ));
+        }
+    }
+    out.plan = plan_target_execution(
+        out.training.X[0].cols(),
+        data.tasks,
+        total_nonzeros(out.training),
+        engine_control
+    );
+    out.has_plan = true;
+    Rcpp::List cache;
+    const bool need_dense_cache =
+        out.plan.path == PathBackend::DenseCenteredGram ||
+        out.plan.refit == RefitBackend::DenseDirectSchur;
+    if (need_dense_cache) {
+        cache = make_refit_cache(out.training);
+    }
     Rcpp::List solver;
-    if (use_gram_solver(out.training)) {
-        solver = fit_multitask_path_gram(
-            out.training,
-            cache,
+    Rcpp::List refits;
+    if (out.plan.refit == RefitBackend::MatrixFreeSchurPCG) {
+        Rcpp::List retained_fits(retain_path ? lambda.size() : 0);
+        Rcpp::List retained_refits(retain_path ? lambda.size() : 0);
+        ConditionMatrixFreeRefitWorkspace refit_workspace(
+            out.training.X,
+            out.training.y,
             out.estimability_core,
+            active_tol,
+            engine_control
+        );
+        ConditionFitVisitor fit_visitor = [&](
+            int index, const Rcpp::List& fit
+        ) {
+            MatrixXd beta = Rcpp::as<MatrixXd>(fit["beta"]);
+            const double current_lambda = Rcpp::as<double>(fit["lambda"]);
+            const double ridge = std::max(
+                current_lambda * (1.0 - alpha), 1e-6
+            );
+            Rcpp::List refit = refit_workspace.refit(beta, ridge, index);
+            if (!Rcpp::as<bool>(refit["converged"])) {
+                Rcpp::stop(
+                    "Compiled target engine refit failed residual verification."
+                );
+            }
+            if (visitor) visitor(index, fit, refit, out);
+            if (retain_path) {
+                retained_fits[index] = fit;
+                retained_refits[index] = refit;
+            }
+        };
+        solver = condition_fit_multitask_path_visit_internal(
+            out.training.X,
+            out.training.y,
             lambda,
             alpha,
             condition_mix,
-            max_iter,
-            tol_objective,
-            tol_coef
-        );
-    } else {
-        solver = condition_fit_multitask_path_cpp(
-            to_matrix_list(out.training.X),
-            to_vector_list(out.training.y),
-            to_numeric(lambda),
-            alpha,
-            condition_mix,
             "equal",
-            to_logical_matrix(out.estimability_core),
+            out.estimability_core,
             max_iter,
             tol_objective,
             tol_coef,
+            false,
+            fit_visitor,
             false
         );
-        solver["backend"] = "cpp_eigen_sparse_matrix_free_fista";
-    }
-    Rcpp::List fits = solver["fits"];
-    Rcpp::List beta_path(fits.size());
-    Rcpp::NumericVector ridge(fits.size());
-    for (int index = 0; index < fits.size(); ++index) {
-        Rcpp::List fit = fits[index];
-        beta_path[index] = fit["beta"];
-        const double current_lambda = Rcpp::as<double>(fit["lambda"]);
-        ridge[index] = std::max(current_lambda * (1.0 - alpha), 1e-6);
-    }
-    Rcpp::List refits = condition_refit_path_cpp(
-        beta_path,
-        to_logical_matrix(out.estimability_core),
-        ridge,
-        active_tol,
-        cache,
-        1e-8
-    );
-    for (int index = 0; index < refits.size(); ++index) {
-        Rcpp::List refit = refits[index];
-        if (!Rcpp::as<bool>(refit["converged"])) {
-            Rcpp::stop(
-                "Compiled target engine refit failed residual verification."
+        solver["fits"] = retained_fits;
+        solver["streaming"] = true;
+        solver["lambda_batch_size"] = engine_control.lambda_batch_size;
+        refits = retained_refits;
+    } else {
+        if (out.plan.path == PathBackend::DenseCenteredGram) {
+            solver = fit_multitask_path_gram(
+                out.training,
+                cache,
+                out.estimability_core,
+                lambda,
+                alpha,
+                condition_mix,
+                max_iter,
+                tol_objective,
+                tol_coef
+            );
+        } else {
+            solver = condition_fit_multitask_path_internal(
+                out.training.X,
+                out.training.y,
+                lambda,
+                alpha,
+                condition_mix,
+                "equal",
+                out.estimability_core,
+                max_iter,
+                tol_objective,
+                tol_coef,
+                false
             );
         }
+        Rcpp::List fits = solver["fits"];
+        Rcpp::List beta_path(fits.size());
+        Rcpp::NumericVector ridge(fits.size());
+        for (int index = 0; index < fits.size(); ++index) {
+            Rcpp::List fit = fits[index];
+            beta_path[index] = fit["beta"];
+            const double current_lambda = Rcpp::as<double>(fit["lambda"]);
+            ridge[index] = std::max(
+                current_lambda * (1.0 - alpha), 1e-6
+            );
+        }
+        refits = condition_refit_path_cpp(
+            beta_path,
+            to_logical_matrix(out.estimability_core),
+            ridge,
+            active_tol,
+            cache,
+            1e-8
+        );
+        for (int index = 0; index < refits.size(); ++index) {
+            Rcpp::List fit = fits[index];
+            Rcpp::List refit = refits[index];
+            if (!Rcpp::as<bool>(refit["converged"])) {
+                Rcpp::stop(
+                    "Compiled target engine refit failed residual verification."
+                );
+            }
+            if (visitor) visitor(index, fit, refit, out);
+        }
+        if (!retain_path) {
+            solver["fits"] = Rcpp::List(0);
+            refits = Rcpp::List(0);
+        }
+        solver["streaming"] = false;
+        solver["lambda_batch_size"] = static_cast<int>(lambda.size());
     }
+    solver["execution_plan"] = plan_to_list(out.plan);
     out.solver = solver;
     out.refits = refits;
     return out;
@@ -1451,7 +1650,8 @@ LambdaSelection select_lambda_nested(
     const std::string& lambda_selection,
     int max_iter,
     double tol_objective,
-    double tol_coef
+    double tol_coef,
+    const TargetEngineControl& engine_control
 ) {
     LambdaSelection out;
     out.effective_folds = validate_fold_plan(
@@ -1462,7 +1662,12 @@ LambdaSelection select_lambda_nested(
         lambda.size(),
         std::numeric_limits<double>::quiet_NaN()
     );
-    out.fold_transform = Rcpp::List(out.effective_folds);
+    out.fold_solver_iterations = out.fold_loss;
+    out.fold_refit_iterations = out.fold_loss;
+    out.fold_support_size = out.fold_loss;
+    out.fold_transform = Rcpp::List(
+        engine_control.compact_diagnostics ? 0 : out.effective_folds
+    );
     out.fold_backend.assign(out.effective_folds, "not_run");
     out.reason = "";
 
@@ -1501,13 +1706,90 @@ LambdaSelection select_lambda_nested(
         Transform transform = compute_transform(
             data, train_rows, base_columns, coefficient_mask
         );
-        out.fold_transform[fold - 1] = transform_to_list(transform);
+        if (!engine_control.compact_diagnostics) {
+            out.fold_transform[fold - 1] = transform_to_list(transform);
+        }
         std::vector<int> keep = transform_keep(transform);
         if (keep.empty()) {
             out.fold_backend[fold - 1] = "intercept_only";
             continue;
         }
         ArrayXXi raw_mask = subset_mask_rows(transform.estimability, keep);
+        std::vector<int> kept_global = map_columns(base_columns, keep);
+        VectorXd kept_scale = subset_vector(transform.predictor_scale, keep);
+        ScaledData validation = build_scaled_data(
+            data,
+            valid_rows,
+            kept_global,
+            kept_scale,
+            transform.response_center,
+            transform.response_scale
+        );
+        ScaledData validation_core;
+        std::vector<ValidationTaskStats> validation_stats;
+        bool validation_prepared = false;
+        PathRefitVisitor validation_visitor = [&out, &validation,
+            &validation_core, &validation_stats, &validation_prepared,
+            fold, &data](
+            int lambda_index,
+            const Rcpp::List& fit,
+            const Rcpp::List& refit,
+            const PathBundle& current_path
+        ) {
+            if (!validation_prepared) {
+                validation_core.y = std::move(validation.y);
+                validation_core.X.reserve(data.tasks);
+                for (int task = 0; task < data.tasks; ++task) {
+                    validation_core.X.emplace_back(subset_columns(
+                        validation.X[task], current_path.core_relative
+                    ));
+                }
+                validation.X.clear();
+                if (current_path.plan.validation ==
+                    ValidationBackend::DenseSupportStats) {
+                    validation_stats = make_validation_stats(validation_core);
+                }
+                validation_prepared = true;
+            }
+            MatrixXd beta = Rcpp::as<MatrixXd>(refit["beta"]);
+            VectorXd intercept = Rcpp::as<VectorXd>(refit["intercept"]);
+            double mean_mse = 0.0;
+            for (int task = 0; task < data.tasks; ++task) {
+                const double task_mse = current_path.plan.validation ==
+                        ValidationBackend::DenseSupportStats ?
+                    validation_mse_from_stats(
+                        validation_stats[task],
+                        beta.col(task),
+                        intercept[task]
+                    ) :
+                    condition_validation_mse_sparse(
+                        validation_core.X[task],
+                        validation_core.y[task],
+                        beta.col(task),
+                        intercept[task]
+                    );
+                mean_mse += task_mse /
+                    static_cast<double>(data.tasks);
+            }
+            if (!std::isfinite(mean_mse)) {
+                Rcpp::stop("Inner validation loss is non-finite.");
+            }
+            out.fold_loss(fold - 1, lambda_index) = mean_mse;
+            out.fold_solver_iterations(fold - 1, lambda_index) =
+                Rcpp::as<int>(fit["iterations"]);
+            out.fold_refit_iterations(fold - 1, lambda_index) =
+                refit.containsElementNamed("pcg_iterations") ?
+                Rcpp::as<int>(refit["pcg_iterations"]) :
+                Rcpp::as<int>(refit["iterations"]);
+            Rcpp::LogicalMatrix support(refit["support_mask"]);
+            int support_size = 0;
+            for (int column = 0; column < support.ncol(); ++column) {
+                for (int row = 0; row < support.nrow(); ++row) {
+                    support_size += support(row, column) == TRUE;
+                }
+            }
+            out.fold_support_size(fold - 1, lambda_index) = support_size;
+        };
         PathBundle path = fit_and_refit_path(
             data,
             train_rows,
@@ -1521,21 +1803,14 @@ LambdaSelection select_lambda_nested(
             active_tol,
             max_iter,
             tol_objective,
-            tol_coef
+            tol_coef,
+            engine_control,
+            validation_visitor,
+            false
         );
         out.fold_backend[fold - 1] = path.intercept_only ?
             "intercept_only" :
-            Rcpp::as<std::string>(path.solver["backend"]);
-        std::vector<int> kept_global = map_columns(base_columns, keep);
-        VectorXd kept_scale = subset_vector(transform.predictor_scale, keep);
-        ScaledData validation = build_scaled_data(
-            data,
-            valid_rows,
-            kept_global,
-            kept_scale,
-            transform.response_center,
-            transform.response_scale
-        );
+            plan_backend_label(path.plan);
         if (path.intercept_only) {
             double mean_mse = 0.0;
             for (int task = 0; task < data.tasks; ++task) {
@@ -1549,34 +1824,6 @@ LambdaSelection select_lambda_nested(
                 out.fold_loss(fold - 1, lambda_index) = mean_mse;
             }
             continue;
-        }
-        ScaledData validation_core;
-        validation_core.y = validation.y;
-        validation_core.X.reserve(data.tasks);
-        for (int task = 0; task < data.tasks; ++task) {
-            validation_core.X.emplace_back(subset_columns(
-                validation.X[task], path.core_relative
-            ));
-        }
-        std::vector<ValidationTaskStats> validation_stats =
-            make_validation_stats(validation_core);
-        for (int lambda_index = 0;
-             lambda_index < static_cast<int>(lambda.size()); ++lambda_index) {
-            Rcpp::List refit = path.refits[lambda_index];
-            MatrixXd beta = Rcpp::as<MatrixXd>(refit["beta"]);
-            VectorXd intercept = Rcpp::as<VectorXd>(refit["intercept"]);
-            double mean_mse = 0.0;
-            for (int task = 0; task < data.tasks; ++task) {
-                mean_mse += validation_mse_from_stats(
-                    validation_stats[task],
-                    beta.col(task),
-                    intercept[task]
-                ) / static_cast<double>(data.tasks);
-            }
-            if (!std::isfinite(mean_mse)) {
-                Rcpp::stop("Inner validation loss is non-finite.");
-            }
-            out.fold_loss(fold - 1, lambda_index) = mean_mse;
         }
     }
 
@@ -1659,6 +1906,11 @@ Rcpp::List selection_to_list(
         Rcpp::Named("cv_mean") = to_numeric(selection.cv_mean),
         Rcpp::Named("cv_se") = to_numeric(selection.cv_se),
         Rcpp::Named("fold_loss") = selection.fold_loss,
+        Rcpp::Named("fold_solver_iterations") =
+            selection.fold_solver_iterations,
+        Rcpp::Named("fold_refit_iterations") =
+            selection.fold_refit_iterations,
+        Rcpp::Named("fold_support_size") = selection.fold_support_size,
         Rcpp::Named("fold_transform") = selection.fold_transform,
         Rcpp::Named("solver_backend") = Rcpp::wrap(selection.fold_backend),
         Rcpp::Named("effective_nfolds") = selection.effective_folds
@@ -1757,6 +2009,13 @@ Rcpp::List finish_full_refit(
     int iterations = 0;
     bool converged = true;
     std::string backend = "intercept_only";
+    int pcg_iterations = NA_INTEGER;
+    double pcg_relative_residual = NA_REAL;
+    std::string preconditioner = "not_applicable";
+    int preconditioner_active_size = 0;
+    double dense_workspace_peak_bytes = 0.0;
+    double estimated_peak_bytes = NA_REAL;
+    bool budget_guard_passed = true;
     if (path.intercept_only) {
         for (int task = 0; task < tasks; ++task) {
             intercept[task] = path.training.y[task].mean();
@@ -1788,6 +2047,43 @@ Rcpp::List finish_full_refit(
         iterations = Rcpp::as<int>(selected_refit["iterations"]);
         converged = Rcpp::as<bool>(selected_refit["converged"]);
         backend = Rcpp::as<std::string>(selected_refit["backend"]);
+        if (selected_refit.containsElementNamed("pcg_iterations")) {
+            pcg_iterations = Rcpp::as<int>(
+                selected_refit["pcg_iterations"]
+            );
+        }
+        if (selected_refit.containsElementNamed("pcg_relative_residual")) {
+            pcg_relative_residual = Rcpp::as<double>(
+                selected_refit["pcg_relative_residual"]
+            );
+        }
+        if (selected_refit.containsElementNamed("preconditioner")) {
+            preconditioner = Rcpp::as<std::string>(
+                selected_refit["preconditioner"]
+            );
+        }
+        if (selected_refit.containsElementNamed(
+                "preconditioner_active_size")) {
+            preconditioner_active_size = Rcpp::as<int>(
+                selected_refit["preconditioner_active_size"]
+            );
+        }
+        if (selected_refit.containsElementNamed(
+                "dense_workspace_peak_bytes")) {
+            dense_workspace_peak_bytes = Rcpp::as<double>(
+                selected_refit["dense_workspace_peak_bytes"]
+            );
+        }
+        if (selected_refit.containsElementNamed("estimated_peak_bytes")) {
+            estimated_peak_bytes = Rcpp::as<double>(
+                selected_refit["estimated_peak_bytes"]
+            );
+        }
+        if (selected_refit.containsElementNamed("budget_guard_passed")) {
+            budget_guard_passed = Rcpp::as<bool>(
+                selected_refit["budget_guard_passed"]
+            );
+        }
     }
     ArrayXXi estimability = ArrayXXi::Zero(full_predictors, tasks);
     if (!path.intercept_only) {
@@ -1824,11 +2120,20 @@ Rcpp::List finish_full_refit(
         Rcpp::Named("intercept") = intercept,
         Rcpp::Named("ridge") = ridge,
         Rcpp::Named("common_metric") =
-            "pooled_weighted_predictor_gram_cpp_direct_schur",
+            "pooled_weighted_predictor_gram_cpp_exact_schur",
         Rcpp::Named("iterations") = iterations,
         Rcpp::Named("coef_change") = coef_change,
         Rcpp::Named("converged") = converged,
-        Rcpp::Named("backend") = backend
+        Rcpp::Named("backend") = backend,
+        Rcpp::Named("pcg_iterations") = pcg_iterations,
+        Rcpp::Named("pcg_relative_residual") = pcg_relative_residual,
+        Rcpp::Named("preconditioner") = preconditioner,
+        Rcpp::Named("preconditioner_active_size") =
+            preconditioner_active_size,
+        Rcpp::Named("dense_workspace_peak_bytes") =
+            dense_workspace_peak_bytes,
+        Rcpp::Named("estimated_peak_bytes") = estimated_peak_bytes,
+        Rcpp::Named("budget_guard_passed") = budget_guard_passed
     );
 }
 
@@ -1857,7 +2162,8 @@ Rcpp::List run_outer_cv(
     const std::string& lambda_selection,
     int max_iter,
     double tol_objective,
-    double tol_coef
+    double tol_coef,
+    const TargetEngineControl& engine_control
 ) {
     std::vector<std::vector<int>> complete_rows = all_rows(data);
     const int outer_count = validate_fold_plan(
@@ -1881,12 +2187,18 @@ Rcpp::List run_outer_cv(
         projection_global[task] = prediction[task];
         assignment[task] = Eigen::VectorXi::Zero(data.y[task].size());
     }
-    Rcpp::List fold_transform(outer_count);
+    Rcpp::List fold_transform(
+        engine_control.compact_diagnostics ? 0 : outer_count
+    );
     Rcpp::NumericVector fold_selected_lambda(
         outer_count, NA_REAL
     );
-    Rcpp::List fold_inner_cv(outer_count);
-    Rcpp::List fold_support(outer_count);
+    Rcpp::List fold_inner_cv(
+        engine_control.compact_diagnostics ? 0 : outer_count
+    );
+    Rcpp::List fold_support(
+        engine_control.compact_diagnostics ? 0 : outer_count
+    );
 
     for (int fold = 1; fold <= outer_count; ++fold) {
         std::vector<std::vector<int>> train_rows(data.tasks);
@@ -1899,9 +2211,10 @@ Rcpp::List run_outer_cv(
         Transform transform = compute_transform(
             data, train_rows, full_columns, full_mask
         );
-        fold_transform[fold - 1] = transform_to_list(transform);
+        if (!engine_control.compact_diagnostics) {
+            fold_transform[fold - 1] = transform_to_list(transform);
+        }
         std::vector<int> keep = transform_keep(transform);
-        ArrayXXi structural = (transform.estimability == 0).cast<int>();
         Rcpp::LogicalVector common_pair(data.predictors);
         Rcpp::LogicalVector common_all(data.predictors);
         for (int predictor = 0; predictor < data.predictors; ++predictor) {
@@ -1916,24 +2229,31 @@ Rcpp::List run_outer_cv(
             common_pair[predictor] = pair;
             common_all[predictor] = global;
         }
-        ArrayXXi projection_support = ArrayXXi::Ones(
-            data.predictors, data.tasks
-        );
-        Rcpp::List support = Rcpp::List::create(
-            Rcpp::Named("coefficient_estimable_mask") =
-                to_logical_matrix(transform.estimability),
-            Rcpp::Named("projectable_structural_zero_mask") =
-                to_logical_matrix(structural),
-            Rcpp::Named("projection_support_mask") =
-                to_logical_matrix(projection_support),
-            Rcpp::Named("pairwise_or_requested_common") = common_pair,
-            Rcpp::Named("global_common") = common_all
-        );
-        fold_support[fold - 1] = support;
-        if (keep.empty()) {
-            support["projection_status"] =
-                "intercept_only_all_predictors_structural_zero";
+        Rcpp::List support;
+        if (!engine_control.compact_diagnostics) {
+            ArrayXXi structural =
+                (transform.estimability == 0).cast<int>();
+            ArrayXXi projection_support = ArrayXXi::Ones(
+                data.predictors, data.tasks
+            );
+            support = Rcpp::List::create(
+                Rcpp::Named("coefficient_estimable_mask") =
+                    to_logical_matrix(transform.estimability),
+                Rcpp::Named("projectable_structural_zero_mask") =
+                    to_logical_matrix(structural),
+                Rcpp::Named("projection_support_mask") =
+                    to_logical_matrix(projection_support),
+                Rcpp::Named("pairwise_or_requested_common") = common_pair,
+                Rcpp::Named("global_common") = common_all
+            );
             fold_support[fold - 1] = support;
+        }
+        if (keep.empty()) {
+            if (!engine_control.compact_diagnostics) {
+                support["projection_status"] =
+                    "intercept_only_all_predictors_structural_zero";
+                fold_support[fold - 1] = support;
+            }
             for (int task = 0; task < data.tasks; ++task) {
                 const double intercept_scaled =
                     (transform.y_mean[task] - transform.response_center) /
@@ -1954,23 +2274,25 @@ Rcpp::List run_outer_cv(
         std::vector<int> outer_columns = map_columns(full_columns, keep);
         ArrayXXi raw_mask = subset_mask_rows(transform.estimability, keep);
         VectorXd outer_scale = subset_vector(transform.predictor_scale, keep);
-        ScaledData outer_scaled = build_scaled_data(
-            data,
-            train_rows,
-            outer_columns,
-            outer_scale,
-            transform.response_center,
-            transform.response_scale
-        );
-        std::vector<double> fold_lambda = lambda_auto ?
-            make_lambda_path(
+        std::vector<double> fold_lambda = global_lambda;
+        if (lambda_auto) {
+            ScaledData outer_scaled = build_scaled_data(
+                data,
+                train_rows,
+                outer_columns,
+                outer_scale,
+                transform.response_center,
+                transform.response_scale
+            );
+            fold_lambda = make_lambda_path(
                 outer_scaled,
                 raw_mask,
                 alpha,
                 condition_mix,
                 nlambda,
                 lambda_min_ratio
-            ) : global_lambda;
+            );
+        }
         LambdaSelection inner = select_lambda_nested(
             data,
             train_rows,
@@ -1984,7 +2306,8 @@ Rcpp::List run_outer_cv(
             lambda_selection,
             max_iter,
             tol_objective,
-            tol_coef
+            tol_coef,
+            engine_control
         );
         fold_selected_lambda[fold - 1] =
             fold_lambda[inner.selected_index];
@@ -1994,7 +2317,9 @@ Rcpp::List run_outer_cv(
             inner_predictor_index[index] = outer_columns[index] + 1;
         }
         inner_output["predictor_index"] = inner_predictor_index;
-        fold_inner_cv[fold - 1] = inner_output;
+        if (!engine_control.compact_diagnostics) {
+            fold_inner_cv[fold - 1] = inner_output;
+        }
         std::vector<double> selected_lambda{
             fold_lambda[inner.selected_index]
         };
@@ -2011,7 +2336,8 @@ Rcpp::List run_outer_cv(
             active_tol,
             max_iter,
             tol_objective,
-            tol_coef
+            tol_coef,
+            engine_control
         );
         ScaledData test_scaled = build_scaled_data(
             data,
@@ -2191,7 +2517,8 @@ Rcpp::List condition_fit_target_engine_cpp(
     std::string lambda_selection,
     int max_iter,
     double tol_objective,
-    double tol_coef
+    double tol_coef,
+    Rcpp::List engine_control
 ) {
     if (!std::isfinite(alpha) || alpha < 0.0 || alpha > 1.0 ||
         !std::isfinite(condition_mix) || condition_mix < 0.0 ||
@@ -2206,6 +2533,7 @@ Rcpp::List condition_fit_target_engine_cpp(
         Rcpp::stop("Unsupported lambda selection rule.");
     }
     RawTargetData data = parse_raw_target(X_list, y_list);
+    TargetEngineControl native_control = parse_engine_control(engine_control);
     ArrayXXi mask = parse_mask(
         coefficient_mask, data.predictors, data.tasks
     );
@@ -2239,23 +2567,25 @@ Rcpp::List condition_fit_target_engine_cpp(
             "No target predictor remains estimable in the full condition design."
         );
     }
-    std::vector<int> full_kept_columns = map_columns(full_columns, full_keep);
-    VectorXd full_kept_scale = subset_vector(
-        full_transform.predictor_scale, full_keep
-    );
-    ScaledData full_scaled = build_scaled_data(
-        data,
-        complete_rows,
-        full_kept_columns,
-        full_kept_scale,
-        full_transform.response_center,
-        full_transform.response_scale
-    );
     ArrayXXi full_raw_mask = subset_mask_rows(
         full_transform.estimability, full_keep
     );
     std::vector<double> lambda_path = sorted_lambda(lambda);
     if (lambda_auto) {
+        std::vector<int> full_kept_columns = map_columns(
+            full_columns, full_keep
+        );
+        VectorXd full_kept_scale = subset_vector(
+            full_transform.predictor_scale, full_keep
+        );
+        ScaledData full_scaled = build_scaled_data(
+            data,
+            complete_rows,
+            full_kept_columns,
+            full_kept_scale,
+            full_transform.response_center,
+            full_transform.response_scale
+        );
         lambda_path = make_lambda_path(
             full_scaled,
             full_raw_mask,
@@ -2284,7 +2614,8 @@ Rcpp::List condition_fit_target_engine_cpp(
         lambda_selection,
         max_iter,
         tol_objective,
-        tol_coef
+        tol_coef,
+        native_control
     );
 
     LambdaSelection full_cv = select_lambda_nested(
@@ -2300,12 +2631,13 @@ Rcpp::List condition_fit_target_engine_cpp(
         lambda_selection,
         max_iter,
         tol_objective,
-        tol_coef
+        tol_coef,
+        native_control
     );
     const int selected_index = full_cv.selected_index;
-    std::vector<double> required_lambda(
-        lambda_path.begin(), lambda_path.begin() + selected_index + 1
-    );
+    std::vector<double> required_lambda{
+        lambda_path[selected_index]
+    };
     PathBundle final_path = fit_and_refit_path(
         data,
         complete_rows,
@@ -2319,7 +2651,8 @@ Rcpp::List condition_fit_target_engine_cpp(
         active_tol,
         max_iter,
         tol_objective,
-        tol_coef
+        tol_coef,
+        native_control
     );
     Rcpp::List selected_fit;
     Rcpp::List selected_refit;
@@ -2366,6 +2699,35 @@ Rcpp::List condition_fit_target_engine_cpp(
         selected_ridge
     );
 
+    MatrixXd beta_train = Rcpp::as<MatrixXd>(refit["beta"]);
+    VectorXd shared_train = Rcpp::as<VectorXd>(refit["beta_shared"]);
+    VectorXd intercept_train = Rcpp::as<VectorXd>(refit["intercept"]);
+    VectorXd inverse_scale = full_transform.predictor_scale.cwiseInverse();
+    Rcpp::NumericVector condition_rsq_train(data.tasks);
+    Rcpp::NumericVector universal_rsq_train(data.tasks);
+    for (int task = 0; task < data.tasks; ++task) {
+        VectorXd response_scaled = (
+            data.y[task].array() - full_transform.response_center
+        ) / full_transform.response_scale;
+        VectorXd condition_coefficient =
+            beta_train.col(task).array() * inverse_scale.array();
+        VectorXd condition_prediction = data.X[task] * condition_coefficient;
+        condition_prediction.array() += intercept_train[task];
+        condition_rsq_train[task] = rsq(
+            response_scaled, condition_prediction
+        );
+        VectorXd shared_coefficient =
+            shared_train.array() * inverse_scale.array();
+        VectorXd shared_linear = data.X[task] * shared_coefficient;
+        const double shared_intercept =
+            (response_scaled - shared_linear).mean();
+        VectorXd shared_prediction = shared_linear;
+        shared_prediction.array() += shared_intercept;
+        universal_rsq_train[task] = rsq(
+            response_scaled, shared_prediction
+        );
+    }
+
     Rcpp::List prediction = cv["oof_prediction"];
     Rcpp::NumericVector condition_rsq_oof(data.tasks);
     Rcpp::NumericVector condition_rmse_oof(data.tasks);
@@ -2401,12 +2763,58 @@ Rcpp::List condition_fit_target_engine_cpp(
         Rcpp::Named("beta_selection") = beta_selection,
         Rcpp::Named("refit") = refit,
         Rcpp::Named("full_transform") = transform_to_list(full_transform),
+        Rcpp::Named("condition_rsq_train") = condition_rsq_train,
+        Rcpp::Named("universal_rsq_train") = universal_rsq_train,
         Rcpp::Named("condition_rsq_oof") = condition_rsq_oof,
         Rcpp::Named("condition_rmse_oof") = condition_rmse_oof,
         Rcpp::Named("target_rsq_oof_pooled") = pooled_rsq,
+        Rcpp::Named("execution") = final_path.has_plan ?
+            plan_to_list(final_path.plan) : Rcpp::List::create(
+                Rcpp::Named("path_backend") = "intercept_only",
+                Rcpp::Named("validation_backend") = "intercept_only",
+                Rcpp::Named("refit_backend") = "intercept_only",
+                Rcpp::Named("full_predictor_square_allocated") = false,
+                Rcpp::Named("memory_contract") =
+                    "no_full_p2_on_high_p_path_v1"
+            ),
         Rcpp::Named("inner_cv_backend") =
-            "hybrid_centered_gram_or_sparse_fista_with_validation_sufficient_statistics",
+            "exact_refit_validation_dense_support_or_sparse_residual_v1",
         Rcpp::Named("backend") =
-            "cpp_eigen_fused_target_nested_cv_hybrid_gram_refit_validation_stats"
+            "cpp_eigen_memory_bounded_hybrid_target_v1"
+    );
+}
+
+// [[Rcpp::export]]
+Rcpp::List condition_native_self_test_cpp() {
+    TargetEngineControl control = default_target_engine_control();
+    control.worker_budget_bytes = 256ULL * 1024ULL * 1024ULL;
+    TargetExecutionPlan high = plan_target_execution(
+        20000, 3, 120000, control
+    );
+    if (high.path != PathBackend::SparseMatrixFree ||
+        high.validation != ValidationBackend::SparseResidual ||
+        high.refit != RefitBackend::MatrixFreeSchurPCG ||
+        high.full_predictor_square_allocated) {
+        Rcpp::stop("Native high-p execution-plan self-test failed.");
+    }
+    bool budget_guard_passed = false;
+    try {
+        TargetEngineControl tiny = control;
+        tiny.worker_budget_bytes = 1024;
+        plan_target_execution(20000, 3, 120000, tiny);
+    } catch (const std::invalid_argument&) {
+        budget_guard_passed = true;
+    }
+    if (!budget_guard_passed) {
+        Rcpp::stop("Native memory-budget guard self-test failed.");
+    }
+    Rcpp::List numerical = condition_matrix_free_refit_self_test();
+    return Rcpp::List::create(
+        Rcpp::Named("passed") = true,
+        Rcpp::Named("budget_guard_passed") = budget_guard_passed,
+        Rcpp::Named("execution_plan") = plan_to_list(high),
+        Rcpp::Named("numerical") = numerical,
+        Rcpp::Named("oof_assignment_contract") =
+            "exactly_once_checked_by_target_engine"
     );
 }

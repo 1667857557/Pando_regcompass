@@ -141,20 +141,24 @@ jobs:
 
           description <- read.dcf("DESCRIPTION")
           stopifnot(
-            identical(unname(description[1, "Version"]), "1.6.1"),
+            identical(unname(description[1, "Version"]), "1.6.3"),
             identical(
-              unname(description[1, "Config/Pando/NativeSparseABI"]), "5"
+              unname(description[1, "Config/Pando/NativeSparseABI"]), "6"
             ),
             identical(
               unname(description[1, "Config/Pando/ConditionRefitBackend"]),
-              "cpp-eigen-direct-path-fail-fast"
+              "dense-direct-or-matrix-free-schur-pcg-v1"
             ),
             identical(
               unname(description[1, "Config/Pando/ConditionTargetEngineBackend"]),
-              "cpp-eigen-fused-hybrid-gram-nested-cv-path-refit-validation-stats-fail-fast"
+              "cpp-eigen-memory-bounded-hybrid-target-v1"
             ),
             identical(
               unname(description[1, "Config/Pando/ConditionInnerCVBackend"]),
-              "cpp-eigen-hybrid-gram-sufficient-statistics-fail-fast"
+              "exact-refit-validation-sparse-residual-v1"
+            ),
+            identical(
+              unname(description[1, "Config/Pando/ConditionMemoryContract"]),
+              "no-full-p2-on-high-p-path-v1"
             )
           )

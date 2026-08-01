@@ -1,4 +1,5 @@
 #include "condition_sparse_input.h"
+#include "condition_solver_internal.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -338,6 +339,154 @@ Rcpp::List fit_one_lambda(
 
 } // namespace
 
+Rcpp::List condition_fit_multitask_path_visit_internal(
+    const std::vector<SparseMatrix<double>>& X,
+    const std::vector<VectorXd>& y,
+    const std::vector<double>& lambda,
+    double alpha,
+    double condition_mix,
+    const std::string& condition_weight,
+    const Eigen::ArrayXXi& coefficient_mask,
+    int max_iter,
+    double tol_objective,
+    double tol_coef,
+    bool keep_history,
+    const ConditionFitVisitor& visitor,
+    bool retain_fits
+) {
+    if (X.size() < 2 || X.size() != y.size()) {
+        Rcpp::stop(
+            "X and y must contain the same two or more conditions."
+        );
+    }
+    if (!std::isfinite(alpha) || alpha < 0.0 || alpha > 1.0 ||
+        !std::isfinite(condition_mix) ||
+        condition_mix < 0.0 || condition_mix > 1.0) {
+        Rcpp::stop(
+            "alpha and condition_mix must be finite values in [0, 1]."
+        );
+    }
+    if (max_iter < 1 || !std::isfinite(tol_objective) ||
+        tol_objective <= 0.0 || !std::isfinite(tol_coef) ||
+        tol_coef <= 0.0) {
+        Rcpp::stop("Invalid solver convergence controls.");
+    }
+    const int tasks = static_cast<int>(X.size());
+    const int p = X[0].cols();
+    if (coefficient_mask.rows() != p ||
+        coefficient_mask.cols() != tasks) {
+        Rcpp::stop(
+            "coefficient_mask dimensions do not match predictors and conditions."
+        );
+    }
+    for (int row = 0; row < p; ++row) {
+        int eligible = 0;
+        for (int task = 0; task < tasks; ++task) {
+            const int value = coefficient_mask(row, task);
+            if (value != 0 && value != 1) {
+                Rcpp::stop("coefficient_mask must contain only zero or one.");
+            }
+            eligible += value;
+        }
+        if (!eligible) {
+            Rcpp::stop("Every predictor requires an eligible condition.");
+        }
+    }
+    VectorXd loss_weights(tasks);
+    VectorXd centered_spectral_norm(tasks);
+    double total_n = 0.0;
+    for (int task = 0; task < tasks; ++task) {
+        if (X[task].cols() != p ||
+            X[task].rows() != y[task].size() || X[task].rows() < 1) {
+            Rcpp::stop("Condition matrices and responses are not aligned.");
+        }
+        if (!y[task].allFinite()) {
+            Rcpp::stop("Condition responses contain non-finite values.");
+        }
+        total_n += X[task].rows();
+        centered_spectral_norm[task] =
+            centered_spectral_squared_norm(X[task]);
+    }
+    if (condition_weight == "equal") {
+        for (int task = 0; task < tasks; ++task) {
+            loss_weights[task] = 1.0 / X[task].rows();
+        }
+    } else if (condition_weight == "cell_count") {
+        loss_weights.setConstant(1.0 / total_n);
+    } else {
+        Rcpp::stop("Unsupported condition_weight.");
+    }
+    MatrixXd B = MatrixXd::Zero(p, tasks);
+    double step = std::numeric_limits<double>::quiet_NaN();
+    Rcpp::List fits(retain_fits ? lambda.size() : 0);
+    for (int index = 0; index < static_cast<int>(lambda.size()); ++index) {
+        const double current_lambda = lambda[index];
+        if (!std::isfinite(current_lambda) || current_lambda < 0.0) {
+            Rcpp::stop("lambda must contain finite non-negative values.");
+        }
+        const double ridge = current_lambda * (1.0 - alpha);
+        const double default_step = initial_step_for_lambda(
+            centered_spectral_norm, loss_weights, ridge
+        );
+        Rcpp::List fit = fit_one_lambda(
+            X,
+            y,
+            loss_weights,
+            coefficient_mask,
+            current_lambda,
+            alpha,
+            condition_mix,
+            B,
+            step,
+            default_step,
+            max_iter,
+            tol_objective,
+            tol_coef,
+            keep_history
+        );
+        fit["backend"] = "cpp_eigen_sparse_matrix_free_fista";
+        B = Rcpp::as<MatrixXd>(fit["beta"]);
+        step = Rcpp::as<double>(fit["step"]);
+        if (visitor) visitor(index, fit);
+        if (retain_fits) fits[index] = fit;
+    }
+    return Rcpp::List::create(
+        Rcpp::Named("lambda") = Rcpp::wrap(lambda),
+        Rcpp::Named("fits") = fits,
+        Rcpp::Named("backend") = "cpp_eigen_sparse_matrix_free_fista"
+    );
+}
+
+Rcpp::List condition_fit_multitask_path_internal(
+    const std::vector<SparseMatrix<double>>& X,
+    const std::vector<VectorXd>& y,
+    const std::vector<double>& lambda,
+    double alpha,
+    double condition_mix,
+    const std::string& condition_weight,
+    const Eigen::ArrayXXi& coefficient_mask,
+    int max_iter,
+    double tol_objective,
+    double tol_coef,
+    bool keep_history
+) {
+    return condition_fit_multitask_path_visit_internal(
+        X,
+        y,
+        lambda,
+        alpha,
+        condition_mix,
+        condition_weight,
+        coefficient_mask,
+        max_iter,
+        tol_objective,
+        tol_coef,
+        keep_history,
+        ConditionFitVisitor(),
+        true
+    );
+}
+
 // [[Rcpp::export]]
 Rcpp::List condition_fit_multitask_path_cpp(
     Rcpp::List X_list,
@@ -394,65 +543,17 @@ Rcpp::List condition_fit_multitask_path_cpp(
             Rcpp::stop("Every predictor requires an eligible condition.");
         }
     }
-    VectorXd loss_weights(tasks);
-    VectorXd centered_spectral_norm(tasks);
-    double total_n = 0.0;
-    for (int task = 0; task < tasks; ++task) {
-        if (X[task].cols() != p ||
-            X[task].rows() != y[task].size() || X[task].rows() < 1) {
-            Rcpp::stop(
-                "Condition matrices and responses are not aligned."
-            );
-        }
-        total_n += X[task].rows();
-        centered_spectral_norm[task] =
-            centered_spectral_squared_norm(X[task]);
-    }
-    if (condition_weight == "equal") {
-        for (int task = 0; task < tasks; ++task) {
-            loss_weights[task] = 1.0 / X[task].rows();
-        }
-    } else if (condition_weight == "cell_count") {
-        loss_weights.setConstant(1.0 / total_n);
-    } else {
-        Rcpp::stop("Unsupported condition_weight.");
-    }
-    MatrixXd B = MatrixXd::Zero(p, tasks);
-    double step = std::numeric_limits<double>::quiet_NaN();
-    Rcpp::List fits(lambda.size());
-    for (R_xlen_t index = 0; index < lambda.size(); ++index) {
-        const double current_lambda = lambda[index];
-        if (!std::isfinite(current_lambda) || current_lambda < 0.0) {
-            Rcpp::stop(
-                "lambda must contain finite non-negative values."
-            );
-        }
-        const double ridge = current_lambda * (1.0 - alpha);
-        const double default_step = initial_step_for_lambda(
-            centered_spectral_norm, loss_weights, ridge
-        );
-        Rcpp::List fit = fit_one_lambda(
-            X,
-            y,
-            loss_weights,
-            mask,
-            current_lambda,
-            alpha,
-            condition_mix,
-            B,
-            step,
-            default_step,
-            max_iter,
-            tol_objective,
-            tol_coef,
-            keep_history
-        );
-        B = Rcpp::as<MatrixXd>(fit["beta"]);
-        step = Rcpp::as<double>(fit["step"]);
-        fits[index] = fit;
-    }
-    return Rcpp::List::create(
-        Rcpp::Named("lambda") = lambda,
-        Rcpp::Named("fits") = fits
+    return condition_fit_multitask_path_internal(
+        X,
+        y,
+        std::vector<double>(lambda.begin(), lambda.end()),
+        alpha,
+        condition_mix,
+        condition_weight,
+        mask,
+        max_iter,
+        tol_objective,
+        tol_coef,
+        keep_history
     );
 }

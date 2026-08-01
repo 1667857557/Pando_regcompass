@@ -39,7 +39,13 @@ condition_object <- infer_condition_grn(
   inner_nfolds = 5,
   lambda_selection = "lambda.1se",
   scale = TRUE,
-  seed = 12345
+  seed = 12345,
+  engine_control = list(
+    memory_budget_mb = 1024,
+    diagnostics_level = "compact",
+    checkpoint_dir = "condition_grn_checkpoints",
+    resume = TRUE
+  )
 )
 ```
 

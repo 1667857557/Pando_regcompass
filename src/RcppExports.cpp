@@ -58,8 +58,8 @@ END_RCPP
 }
 
 
-Rcpp::List condition_fit_target_engine_cpp(Rcpp::List X_list, Rcpp::List y_list, Rcpp::LogicalMatrix coefficient_mask, Rcpp::IntegerVector comparison_index, Rcpp::Nullable<Rcpp::NumericVector> lambda, bool lambda_auto, int nlambda, double lambda_min_ratio, double alpha, double condition_mix, double active_tol, Rcpp::List fold_plan, std::string lambda_selection, int max_iter, double tol_objective, double tol_coef);
-RcppExport SEXP _Pando_condition_fit_target_engine_cpp(SEXP X_listSEXP, SEXP y_listSEXP, SEXP coefficient_maskSEXP, SEXP comparison_indexSEXP, SEXP lambdaSEXP, SEXP lambda_autoSEXP, SEXP nlambdaSEXP, SEXP lambda_min_ratioSEXP, SEXP alphaSEXP, SEXP condition_mixSEXP, SEXP active_tolSEXP, SEXP fold_planSEXP, SEXP lambda_selectionSEXP, SEXP max_iterSEXP, SEXP tol_objectiveSEXP, SEXP tol_coefSEXP) {
+Rcpp::List condition_fit_target_engine_cpp(Rcpp::List X_list, Rcpp::List y_list, Rcpp::LogicalMatrix coefficient_mask, Rcpp::IntegerVector comparison_index, Rcpp::Nullable<Rcpp::NumericVector> lambda, bool lambda_auto, int nlambda, double lambda_min_ratio, double alpha, double condition_mix, double active_tol, Rcpp::List fold_plan, std::string lambda_selection, int max_iter, double tol_objective, double tol_coef, Rcpp::List engine_control);
+RcppExport SEXP _Pando_condition_fit_target_engine_cpp(SEXP X_listSEXP, SEXP y_listSEXP, SEXP coefficient_maskSEXP, SEXP comparison_indexSEXP, SEXP lambdaSEXP, SEXP lambda_autoSEXP, SEXP nlambdaSEXP, SEXP lambda_min_ratioSEXP, SEXP alphaSEXP, SEXP condition_mixSEXP, SEXP active_tolSEXP, SEXP fold_planSEXP, SEXP lambda_selectionSEXP, SEXP max_iterSEXP, SEXP tol_objectiveSEXP, SEXP tol_coefSEXP, SEXP engine_controlSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -79,7 +79,18 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type max_iter(max_iterSEXP);
     Rcpp::traits::input_parameter< double >::type tol_objective(tol_objectiveSEXP);
     Rcpp::traits::input_parameter< double >::type tol_coef(tol_coefSEXP);
-    rcpp_result_gen = Rcpp::wrap(condition_fit_target_engine_cpp(X_list, y_list, coefficient_mask, comparison_index, lambda, lambda_auto, nlambda, lambda_min_ratio, alpha, condition_mix, active_tol, fold_plan, lambda_selection, max_iter, tol_objective, tol_coef));
+    Rcpp::traits::input_parameter< Rcpp::List >::type engine_control(engine_controlSEXP);
+    rcpp_result_gen = Rcpp::wrap(condition_fit_target_engine_cpp(X_list, y_list, coefficient_mask, comparison_index, lambda, lambda_auto, nlambda, lambda_min_ratio, alpha, condition_mix, active_tol, fold_plan, lambda_selection, max_iter, tol_objective, tol_coef, engine_control));
+    return rcpp_result_gen;
+END_RCPP
+}
+
+Rcpp::List condition_native_self_test_cpp();
+RcppExport SEXP _Pando_condition_native_self_test_cpp() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(condition_native_self_test_cpp());
     return rcpp_result_gen;
 END_RCPP
 }
@@ -88,7 +99,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_Pando_condition_fit_multitask_path_cpp", (DL_FUNC) &_Pando_condition_fit_multitask_path_cpp, 11},
     {"_Pando_condition_product_matrix_cpp", (DL_FUNC) &_Pando_condition_product_matrix_cpp, 4},
     {"_Pando_condition_refit_path_cpp", (DL_FUNC) &_Pando_condition_refit_path_cpp, 6},
-    {"_Pando_condition_fit_target_engine_cpp", (DL_FUNC) &_Pando_condition_fit_target_engine_cpp, 16},
+    {"_Pando_condition_fit_target_engine_cpp", (DL_FUNC) &_Pando_condition_fit_target_engine_cpp, 17},
+    {"_Pando_condition_native_self_test_cpp", (DL_FUNC) &_Pando_condition_native_self_test_cpp, 0},
     {NULL, NULL, 0}
 };
 

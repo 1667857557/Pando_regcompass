@@ -40,6 +40,12 @@
 #' @param overwrite Replace generated condition networks with matching names.
 #' @param seed Random seed for condition-stratified folds.
 #' @param max_iter,tol_objective,tol_coef Solver controls.
+#' @param engine_control Named memory-bounded native-engine controls:
+#'   `memory_budget_mb`, `dense_max_p`, `lambda_batch_size`,
+#'   `refit_pcg_tol`, `refit_pcg_max_iter`, `preconditioner`,
+#'   `diagnostics_level`, `checkpoint_dir`, and `resume`. Unknown fields are
+#'   rejected. Diagnostic retention and checkpoints do not change fitting,
+#'   lambda selection, coefficients, or projections.
 #' @param fallback_args Named arguments passed only to [infer_grn()] in standard
 #'   fallback mode. Common managed fields cannot be overridden.
 #' @param verbose Display progress messages.
@@ -91,6 +97,7 @@ infer_condition_grn.GRNData <- function(
     max_iter = 5000L,
     tol_objective = 1e-7,
     tol_coef = 1e-6,
+    engine_control = list(),
     fallback_args = list(),
     verbose = TRUE,
     ...
@@ -105,6 +112,7 @@ infer_condition_grn.GRNData <- function(
     }
     if (!inherits(object, 'GRNData')) stop('object must be a GRNData object.')
     if (!is.list(fallback_args)) stop('fallback_args must be a list.')
+    engine_control <- .condition_normalize_engine_control(engine_control)
 
     peak_to_gene_method <- match.arg(peak_to_gene_method)
     metadata <- object@data@meta.data
@@ -215,11 +223,94 @@ infer_condition_grn.GRNData <- function(
         max_iter = max_iter,
         tol_objective = tol_objective,
         tol_coef = tol_coef,
+        engine_control = engine_control,
         verbose = verbose
     )
     value@grn@params$analysis_mode <- 'condition_grn'
     value@grn@params$condition_coefficients_calculated <- TRUE
     value
+}
+
+.condition_normalize_engine_control <- function(engine_control = list()) {
+    if (is.null(engine_control)) engine_control <- list()
+    if (!is.list(engine_control) || is.null(names(engine_control)) &&
+        length(engine_control)) {
+        stop('engine_control must be a named list.', call. = FALSE)
+    }
+    if (length(engine_control) &&
+        (anyNA(names(engine_control)) || any(!nzchar(names(engine_control))) ||
+         anyDuplicated(names(engine_control)))) {
+        stop(
+            'engine_control fields must have unique non-empty names.',
+            call. = FALSE
+        )
+    }
+    defaults <- list(
+        memory_budget_mb = NULL,
+        dense_max_p = 2048L,
+        lambda_batch_size = 1L,
+        refit_pcg_tol = 1e-8,
+        refit_pcg_max_iter = 2000L,
+        preconditioner = 'hybrid',
+        diagnostics_level = 'full',
+        checkpoint_dir = NULL,
+        resume = FALSE
+    )
+    unknown <- setdiff(names(engine_control), names(defaults))
+    if (length(unknown)) {
+        stop(
+            'Unknown engine_control field(s): ',
+            paste(unknown, collapse = ', '), '.', call. = FALSE
+        )
+    }
+    out <- utils::modifyList(defaults, engine_control, keep.null = TRUE)
+    scalar_integer <- function(value, label, minimum = 1L) {
+        if (!is.numeric(value) || length(value) != 1L || is.na(value) ||
+            !is.finite(value) || value < minimum ||
+            value > .Machine$integer.max || value != floor(value)) {
+            stop(label, ' must be one integer >= ', minimum, '.', call. = FALSE)
+        }
+        as.integer(value)
+    }
+    if (!is.null(out$memory_budget_mb) &&
+        (!is.numeric(out$memory_budget_mb) ||
+         length(out$memory_budget_mb) != 1L ||
+         !is.finite(out$memory_budget_mb) || out$memory_budget_mb <= 0)) {
+        stop('engine_control$memory_budget_mb must be NULL or positive.',
+             call. = FALSE)
+    }
+    out$dense_max_p <- scalar_integer(
+        out$dense_max_p, 'engine_control$dense_max_p'
+    )
+    out$lambda_batch_size <- scalar_integer(
+        out$lambda_batch_size, 'engine_control$lambda_batch_size'
+    )
+    out$refit_pcg_max_iter <- scalar_integer(
+        out$refit_pcg_max_iter, 'engine_control$refit_pcg_max_iter'
+    )
+    if (!is.numeric(out$refit_pcg_tol) ||
+        length(out$refit_pcg_tol) != 1L ||
+        !is.finite(out$refit_pcg_tol) || out$refit_pcg_tol <= 0) {
+        stop('engine_control$refit_pcg_tol must be positive.', call. = FALSE)
+    }
+    out$preconditioner <- match.arg(
+        out$preconditioner, c('hybrid', 'diagonal')
+    )
+    out$diagnostics_level <- match.arg(
+        out$diagnostics_level, c('full', 'compact')
+    )
+    if (!is.null(out$checkpoint_dir) &&
+        (!is.character(out$checkpoint_dir) ||
+         length(out$checkpoint_dir) != 1L || is.na(out$checkpoint_dir) ||
+         !nzchar(trimws(out$checkpoint_dir)))) {
+        stop('engine_control$checkpoint_dir must be NULL or one path.',
+             call. = FALSE)
+    }
+    if (length(out$resume) != 1L || is.na(out$resume) ||
+        !is.logical(out$resume)) {
+        stop('engine_control$resume must be TRUE or FALSE.', call. = FALSE)
+    }
+    out
 }
 
 .condition_resolve_levels <- function(metadata, condition_col) {

@@ -56,7 +56,8 @@
     only_tss,
     peak_to_gene_method,
     tf_cor,
-    peak_cor
+    peak_cor,
+    engine_control = NULL
 ) {
     list(
         method = 'glmnet',
@@ -88,6 +89,7 @@
         scale = scale,
         active_tol = active_tol,
         seed = seed,
+        engine_control = engine_control,
         coefficient_contract = 'absolute_condition_effects_only'
     )
 }
@@ -273,8 +275,30 @@
         ),
         stringsAsFactors = FALSE
     )
-    structure(
+    has_refit_stability <- all(vapply(
+        contracts, function(value) !is.null(value$refit_stability),
+        logical(1)
+    ))
+    stability_fields <- if (has_refit_stability) {
         list(
+            refit_stability = stats::setNames(
+                lapply(contracts, `[[`, 'refit_stability'),
+                response_transform$target
+            ),
+            refit_stability_edge = do.call(rbind, lapply(
+                contracts, function(value) {
+                    edge <- value$refit_stability$edge
+                    if (is.null(edge) || !nrow(edge)) return(edge)
+                    edge$target <- value$target
+                    edge
+                }
+            ))
+        )
+    } else {
+        list()
+    }
+    structure(
+        c(list(
             schema_version = .PANDO_CONDITION_GRN_FIT_SCHEMA,
             schema_policy = 'single_unversioned_schema',
             contract_version = 'condition_absolute_oof_v3',
@@ -388,16 +412,10 @@
             refit = stats::setNames(
                 lapply(contracts, `[[`, 'refit'), response_transform$target
             ),
-            refit_stability = stats::setNames(
-                lapply(contracts, `[[`, 'refit_stability'),
+            execution = stats::setNames(
+                lapply(contracts, `[[`, 'execution'),
                 response_transform$target
             ),
-            refit_stability_edge = do.call(rbind, lapply(contracts, function(x) {
-                value <- x$refit_stability$edge
-                if (!nrow(value)) return(value)
-                value$target <- x$target
-                value
-            })),
             condition_weight = contracts[[1L]]$condition_weight,
             active_tol = contracts[[1L]]$active_tol,
             universal_summary = 'estimability-aware shared baseline',
@@ -436,7 +454,7 @@
                     'mean of cell-first TF-times-ATAC projections',
                 refit_after_aggregation = FALSE
             )
-        ),
+        ), stability_fields),
         class = c('ConditionGRNFit', 'list')
     )
 }

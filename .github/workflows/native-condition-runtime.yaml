@@ -99,18 +99,26 @@ jobs:
         run: |
           library(Pando)
           library(testthat)
-          stopifnot(as.character(packageVersion("Pando")) == "1.6.1")
+          stopifnot(as.character(packageVersion("Pando")) == "1.6.3")
           stopifnot(as.character(packageVersion("Matrix")) == "1.7.4")
           description <- utils::packageDescription("Pando")
           stopifnot(
-            identical(description[["Config/Pando/NativeSparseABI"]], "5"),
+            identical(description[["Config/Pando/NativeSparseABI"]], "6"),
             identical(
               description[["Config/Pando/ConditionTargetEngineBackend"]],
-              "cpp-eigen-fused-hybrid-gram-nested-cv-path-refit-validation-stats-fail-fast"
+              "cpp-eigen-memory-bounded-hybrid-target-v1"
             ),
             identical(
               description[["Config/Pando/ConditionInnerCVBackend"]],
-              "cpp-eigen-hybrid-gram-sufficient-statistics-fail-fast"
+              "exact-refit-validation-sparse-residual-v1"
+            ),
+            identical(
+              description[["Config/Pando/ConditionRefitBackend"]],
+              "dense-direct-or-matrix-free-schur-pcg-v1"
+            ),
+            identical(
+              description[["Config/Pando/ConditionMemoryContract"]],
+              "no-full-p2-on-high-p-path-v1"
             )
           )
           stopifnot(is.loaded(
@@ -125,6 +133,9 @@ jobs:
           stopifnot(is.loaded(
             "_Pando_condition_fit_target_engine_cpp", PACKAGE = "Pando"
           ))
+          stopifnot(is.loaded(
+            "_Pando_condition_native_self_test_cpp", PACKAGE = "Pando"
+          ))
           test_file(
             "tests/testthat/test-condition-sparse-runtime-regression.R"
           )
@@ -136,5 +147,17 @@ jobs:
           )
           test_file(
             "tests/testthat/test-condition-target-engine-hybrid.R"
+          )
+          test_file(
+            "tests/testthat/test-condition-high-p-allocation.R"
+          )
+          test_file(
+            "tests/testthat/test-condition-matrix-free-refit.R"
+          )
+          test_file(
+            "tests/testthat/test-condition-compact-diagnostics.R"
+          )
+          test_file(
+            "tests/testthat/test-condition-target-checkpoint.R"
           )
           sessionInfo()

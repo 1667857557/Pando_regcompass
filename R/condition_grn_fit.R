@@ -7,6 +7,27 @@
     ))
 }
 
+.condition_no_progress_param <- function(BPPARAM) {
+    if (is.null(BPPARAM) ||
+        !requireNamespace('BiocParallel', quietly = TRUE)) {
+        return(BPPARAM)
+    }
+    setter <- get0(
+        'bpprogressbar<-',
+        envir = asNamespace('BiocParallel'),
+        mode = 'function'
+    )
+    if (is.null(setter)) return(BPPARAM)
+    tryCatch(setter(BPPARAM, FALSE), error = function(error) BPPARAM)
+}
+
+.condition_checkpoint_path <- function(directory, target, signature) {
+    safe <- .condition_safe_id(target)
+    file.path(directory, paste0(
+        safe, '__', substr(signature, 1L, 16L), '.rds'
+    ))
+}
+
 .condition_fit_targets <- function(
     features,
     gene_data,
@@ -35,13 +56,71 @@
     max_iter,
     tol_objective,
     tol_coef,
+    engine_control,
+    cell_type,
     parallel,
     BPPARAM,
     verbose
 ) {
     names(features) <- features
     condition_index <- split(seq_along(condition), condition, drop = TRUE)
+    checkpoint_dir <- engine_control$checkpoint_dir
+    if (!is.null(checkpoint_dir)) {
+        dir.create(checkpoint_dir, recursive = TRUE, showWarnings = FALSE)
+        if (!dir.exists(checkpoint_dir)) {
+            stop('Unable to create target checkpoint directory: ',
+                 checkpoint_dir, '.', call. = FALSE)
+        }
+    }
+    run_signature <- .condition_stable_hash(list(
+        abi = '6',
+        cells = rownames(gene_data),
+        gene_features = colnames(gene_data),
+        peak_features = colnames(peak_data),
+        condition = as.character(condition),
+        controls = list(
+            candidate_screen = candidate_screen,
+            tf_cor = tf_cor,
+            peak_cor = peak_cor,
+            alpha = alpha,
+            condition_mix = condition_mix,
+            active_tol = active_tol,
+            scale = scale,
+            reference_condition = reference_condition,
+            comparison_conditions = comparison_conditions,
+            condition_weight = condition_weight,
+            nlambda = nlambda,
+            lambda = lambda,
+            lambda_min_ratio = lambda_min_ratio,
+            outer_nfolds = outer_nfolds,
+            inner_nfolds = inner_nfolds,
+            lambda_selection = lambda_selection,
+            seed = seed,
+            max_iter = max_iter,
+            tol_objective = tol_objective,
+            tol_coef = tol_coef,
+            engine = engine_control[setdiff(
+                names(engine_control), c('checkpoint_dir', 'resume')
+            )]
+        )
+    ))
     fit_one <- function(gene) {
+        checkpoint <- if (is.null(checkpoint_dir)) NULL else
+            .condition_checkpoint_path(
+                checkpoint_dir, gene,
+                .condition_stable_hash(c(run_signature, gene))
+            )
+        if (isTRUE(engine_control$resume) && !is.null(checkpoint) &&
+            file.exists(checkpoint)) {
+            saved <- tryCatch(
+                readRDS(checkpoint),
+                error = function(error) NULL
+            )
+            if (is.list(saved) && identical(saved$run_signature, run_signature) &&
+                identical(saved$target, gene) && !is.null(saved$result)) {
+                return(saved$result)
+            }
+        }
         tryCatch(
             .condition_fit_target(
                 target = gene,
@@ -71,7 +150,8 @@
                 seed = .condition_seed_for(gene, seed),
                 max_iter = max_iter,
                 tol_objective = tol_objective,
-                tol_coef = tol_coef
+                tol_coef = tol_coef,
+                engine_control = engine_control
             ),
             condition_target_skip = function(error) {
                 list(
@@ -87,15 +167,77 @@
                         cv_mean = NA_real_,
                         cv_se = NA_real_,
                         error_message = conditionMessage(error),
+                        predictors = NA_integer_,
+                        nonzeros = NA_real_,
+                        path_backend = NA_character_,
+                        validation_backend = NA_character_,
+                        refit_backend = NA_character_,
+                        pcg_iterations = NA_integer_,
+                        pcg_residual = NA_real_,
+                        estimated_peak_bytes = NA_real_,
                         stringsAsFactors = FALSE
                     )
+                )
+            },
+            error = function(error) {
+                stop(
+                    'Condition target failure [target=', gene,
+                    ', cell_type=', cell_type,
+                    ', stage=fit, p=unknown, nnz=unknown]: ',
+                    conditionMessage(error), call. = FALSE
                 )
             }
         )
     }
-    results <- .condition_map(
-        features, fit_one, parallel = parallel, BPPARAM = BPPARAM, verbose = verbose
+    workers <- if (!is.null(BPPARAM) &&
+        requireNamespace('BiocParallel', quietly = TRUE)) {
+        max(1L, as.integer(BiocParallel::bpworkers(BPPARAM)))
+    } else {
+        1L
+    }
+    batch_size <- 2L * workers
+    batches <- split(
+        features,
+        ceiling(seq_along(features) / batch_size)
     )
+    results <- vector('list', length(features))
+    names(results) <- features
+    BPPARAM <- .condition_no_progress_param(BPPARAM)
+    for (batch in batches) {
+        current <- .condition_map(
+            batch, fit_one, parallel = parallel,
+            BPPARAM = BPPARAM, verbose = verbose
+        )
+        results[names(current)] <- current
+        if (!is.null(checkpoint_dir)) {
+            for (gene in names(current)) {
+                signature <- .condition_stable_hash(c(run_signature, gene))
+                destination <- .condition_checkpoint_path(
+                    checkpoint_dir, gene, signature
+                )
+                temporary <- paste0(destination, '.tmp-', Sys.getpid())
+                saveRDS(list(
+                    schema_version = 'pando_target_checkpoint_v1',
+                    run_signature = run_signature,
+                    target = gene,
+                    result = current[[gene]]
+                ), temporary, version = 3L)
+                if (file.exists(destination) &&
+                    unlink(destination, force = TRUE) != 0L) {
+                    unlink(temporary)
+                    stop('Unable to replace target checkpoint: ',
+                         destination, '.', call. = FALSE)
+                }
+                if (!file.rename(temporary, destination)) {
+                    unlink(temporary)
+                    stop('Unable to atomically write target checkpoint: ',
+                         destination, '.', call. = FALSE)
+                }
+            }
+        }
+        rm(current)
+        gc(verbose = FALSE)
+    }
     success <- vapply(results, function(x) is.null(x$error), logical(1))
     fits <- results[success]
     diagnostics <- do.call(rbind, lapply(results, function(x) x$diagnostics))
@@ -131,6 +273,7 @@
     max_iter,
     tol_objective,
     tol_coef,
+    engine_control,
     condition_index = NULL
 ) {
     if (!target %in% rownames(peaks2gene)) {
@@ -239,13 +382,11 @@
         condition_index = condition_index
     )
     edges <- prepared_design$edges
-    X <- prepared_design$X
-    y <- prepared_design$y
     X_raw <- prepared_design$X_raw
     y_raw <- prepared_design$y_raw
     edge_mask <- edge_mask[edges$edge_id, , drop = FALSE]
     screening_mask <- edge_mask
-    if (ncol(X) == 0L) {
+    if (ncol(X_raw) == 0L) {
         .condition_target_skip(
             'No non-constant interaction predictors remained.'
         )
@@ -253,22 +394,17 @@
     for (level in condition_levels) {
         index <- condition_index[[level]]
         variance <- .condition_population_variance(
-            X[index, , drop = FALSE]
+            X_raw[index, , drop = FALSE]
         )
         edge_mask[, level] <- edge_mask[, level] &
             is.finite(variance) & variance > .Machine$double.eps
     }
     keep_edge <- rowSums(edge_mask) > 0L
-    X <- X[, keep_edge, drop = FALSE]
     X_raw <- X_raw[, keep_edge, drop = FALSE]
     edges <- edges[keep_edge, , drop = FALSE]
     edge_mask <- edge_mask[keep_edge, , drop = FALSE]
     screening_mask <- screening_mask[keep_edge, , drop = FALSE]
-    prepared_design$predictor_center <-
-        prepared_design$predictor_center[keep_edge]
-    prepared_design$predictor_scale <-
-        prepared_design$predictor_scale[keep_edge]
-    if (!ncol(X)) {
+    if (!ncol(X_raw)) {
         .condition_target_skip(
             'No edge has a non-constant predictor in an eligible condition.'
         )
@@ -294,12 +430,6 @@
             'comparison_conditions were not found for target ', target, '.'
         )
     }
-    X_list <- lapply(condition_levels, function(level) {
-        X[condition_index[[level]], , drop = FALSE]
-    })
-    y_list <- lapply(condition_levels, function(level) {
-        y[condition_index[[level]]]
-    })
     X_raw_list <- lapply(condition_levels, function(level) {
         X_raw[condition_index[[level]], , drop = FALSE]
     })
@@ -309,7 +439,6 @@
     cell_id_list <- lapply(condition_levels, function(level) {
         rownames(gene_data)[condition_index[[level]]]
     })
-    names(X_list) <- names(y_list) <- condition_levels
     names(X_raw_list) <- names(y_raw_list) <- condition_levels
     names(cell_id_list) <- condition_levels
     engine <- .condition_fit_target_native_engine(
@@ -329,7 +458,8 @@
         seed = seed,
         max_iter = max_iter,
         tol_objective = tol_objective,
-        tol_coef = tol_coef
+        tol_coef = tol_coef,
+        engine_control = engine_control
     )
     lambda_path <- engine$lambda_path
     cv <- engine$cv
@@ -338,39 +468,6 @@
     beta_selection <- engine$beta_selection
     refit <- engine$refit
     native_transform <- engine$full_transform
-    transform_checks <- list(
-        predictor_center = all.equal(
-            unname(native_transform$predictor_center),
-            unname(prepared_design$predictor_center),
-            tolerance = 1e-12,
-            check.attributes = FALSE
-        ),
-        predictor_scale = all.equal(
-            unname(native_transform$predictor_scale),
-            unname(prepared_design$predictor_scale),
-            tolerance = 1e-12,
-            check.attributes = FALSE
-        ),
-        response_center = all.equal(
-            native_transform$response_center,
-            prepared_design$response_center,
-            tolerance = 1e-12,
-            check.attributes = FALSE
-        ),
-        response_scale = all.equal(
-            native_transform$response_scale,
-            prepared_design$response_scale,
-            tolerance = 1e-12,
-            check.attributes = FALSE
-        )
-    )
-    if (!all(vapply(transform_checks, isTRUE, logical(1)))) {
-        stop(
-            'Compiled target engine did not preserve the canonical full-data ',
-            'condition-balanced transform.',
-            call. = FALSE
-        )
-    }
     beta <- refit$beta
     rownames(beta) <- edges$edge_id
     pooled_tf_corr <- .condition_named_cor(
@@ -396,31 +493,18 @@
         )
     })
     names(condition_coefs) <- condition_levels
-    condition_gof <- stats::setNames(
-        vector('list', length(condition_levels)), condition_levels
-    )
-    universal_rsq <- numeric(length(condition_levels))
-    for (task in seq_along(condition_levels)) {
-        level <- condition_levels[[task]]
-        condition_prediction <- refit$intercept[[task]] + as.numeric(
-            X_list[[task]] %*% beta[, task]
-        )
-        condition_rsq <- .condition_rsq(y_list[[task]], condition_prediction)
-        condition_gof[[level]] <- data.frame(
+    condition_rsq_train <- engine$condition_rsq_train[condition_levels]
+    universal_rsq <- engine$universal_rsq_train[condition_levels]
+    condition_gof <- stats::setNames(lapply(condition_levels, function(level) {
+        data.frame(
             target = target,
             lambda = selected$lambda,
-            rsq = condition_rsq,
+            rsq = unname(condition_rsq_train[[level]]),
             alpha = alpha,
             nvariables = nrow(edges),
             stringsAsFactors = FALSE
         )
-        universal_linear <- as.numeric(X_list[[task]] %*% universal_beta)
-        universal_intercept <- mean(y_list[[task]] - universal_linear)
-        universal_prediction <- universal_intercept + universal_linear
-        universal_rsq[[task]] <- .condition_rsq(
-            y_list[[task]], universal_prediction
-        )
-    }
+    }), condition_levels)
     universal_gof <- data.frame(
         target = target,
         lambda = selected$lambda,
@@ -442,6 +526,44 @@
     } else {
         full_cv$cv_se[[full_cv$selected_index]]
     }
+    execution <- engine$execution
+    execution_value <- function(name, default = NA) {
+        value <- execution[[name]]
+        if (is.null(value) || length(value) != 1L) default else value
+    }
+    selected_byte_fields <- if (identical(
+        execution_value('refit_backend', NA_character_),
+        'matrix_free_schur_pcg'
+    )) {
+        'matrix_free_bytes'
+    } else {
+        c('dense_path_bytes', 'dense_validation_bytes', 'dense_refit_bytes')
+    }
+    byte_fields <- vapply(
+        selected_byte_fields,
+        function(name) as.numeric(execution_value(name, NA_real_)),
+        numeric(1)
+    )
+    matrix_free_peak <- if (
+        identical(
+            execution_value('refit_backend', NA_character_),
+            'matrix_free_schur_pcg'
+        ) &&
+        is.numeric(refit$estimated_peak_bytes) &&
+        length(refit$estimated_peak_bytes) == 1L &&
+        is.finite(refit$estimated_peak_bytes)
+    ) {
+        as.numeric(refit$estimated_peak_bytes)
+    } else {
+        NA_real_
+    }
+    estimated_peak_bytes <- if (is.finite(matrix_free_peak)) {
+        matrix_free_peak
+    } else if (any(is.finite(byte_fields))) {
+        max(byte_fields[is.finite(byte_fields)])
+    } else {
+        NA_real_
+    }
     diagnostics <- data.frame(
         target = target,
         stage = 'complete',
@@ -453,6 +575,28 @@
         cv_mean = selected_cv_mean,
         cv_se = selected_cv_se,
         error_message = NA_character_,
+        predictors = as.integer(execution_value('predictors', NA_integer_)),
+        nonzeros = as.numeric(execution_value('nonzeros', NA_real_)),
+        path_backend = as.character(execution_value(
+            'path_backend', NA_character_
+        )),
+        validation_backend = as.character(
+            execution_value('validation_backend', NA_character_)
+        ),
+        refit_backend = as.character(execution_value(
+            'refit_backend', NA_character_
+        )),
+        pcg_iterations = if (is.null(refit$pcg_iterations)) {
+            NA_integer_
+        } else {
+            as.integer(refit$pcg_iterations)
+        },
+        pcg_residual = if (is.null(refit$pcg_relative_residual)) {
+            NA_real_
+        } else {
+            as.numeric(refit$pcg_relative_residual)
+        },
+        estimated_peak_bytes = estimated_peak_bytes,
         stringsAsFactors = FALSE
     )
     reference_beta <- refit$beta_condition[, reference_condition]
@@ -539,15 +683,35 @@
         condition_weight = condition_weight,
         active_tol = active_tol,
         fit_engine = fit_engine,
+        execution = engine$execution,
         reference_condition = reference_condition,
         refit = list(
-            method = 'support_constrained_common_metric_ridge_direct_schur',
+            method = 'support_constrained_common_metric_ridge_exact_schur',
             numerical_backend = engine$backend,
             ridge = refit$ridge,
             common_metric = refit$common_metric,
             converged = refit$converged,
             iterations = refit$iterations,
             coef_change = refit$coef_change,
+            pcg_iterations = if (is.null(refit$pcg_iterations)) {
+                NA_integer_
+            } else {
+                refit$pcg_iterations
+            },
+            pcg_relative_residual = if (
+                is.null(refit$pcg_relative_residual)
+            ) {
+                NA_real_
+            } else {
+                refit$pcg_relative_residual
+            },
+            preconditioner = refit$preconditioner,
+            preconditioner_active_size =
+                refit$preconditioner_active_size,
+            dense_workspace_peak_bytes =
+                refit$dense_workspace_peak_bytes,
+            estimated_peak_bytes = refit$estimated_peak_bytes,
+            budget_guard_passed = refit$budget_guard_passed,
             support_source = 'condition_sparse_selection',
             inactive_semantics = 'estimable_zero',
             unavailable_semantics = 'NA'
@@ -596,42 +760,7 @@
     edges <- edges[keep, , drop = FALSE]
     X_raw <- X
     y_raw <- y
-    response_center <- 0
-    response_scale <- 1
-    predictor_center <- rep(0, ncol(X))
-    predictor_scale <- rep(1, ncol(X))
-    transform <- NULL
-    if (scale) {
-        levels_condition <- levels(condition)
-        if (is.null(condition_index)) {
-            condition_index <- split(seq_along(condition), condition, drop = TRUE)
-        }
-        X_list <- lapply(levels_condition, function(level) {
-            X_raw[condition_index[[level]], , drop = FALSE]
-        })
-        y_list <- lapply(levels_condition, function(level) {
-            y_raw[condition_index[[level]]]
-        })
-        names(X_list) <- names(y_list) <- levels_condition
-        fold_stats <- .condition_build_fold_statistics(X_list, y_list)
-        transform <- tryCatch(
-            .condition_build_balanced_transform(
-                X_list, y_list, fold_statistics = fold_stats
-            ),
-            error = function(error) {
-                .condition_target_skip(conditionMessage(error))
-            }
-        )
-        response_center <- transform$response_center
-        response_scale <- transform$response_scale
-        predictor_center <- transform$predictor_center
-        predictor_scale <- transform$predictor_scale
-        scaled <- .condition_apply_balanced_transform(
-            list(all = X_raw), list(all = y_raw), transform
-        )
-        X <- scaled$X[[1L]]
-        y <- scaled$y[[1L]]
-    } else {
+    if (!scale) {
         response_variance <- stats::var(y)
         if (!is.finite(response_variance) ||
             response_variance <= .Machine$double.eps) {
@@ -643,19 +772,11 @@
         .condition_model_name(edges$tf),
         sep = ':'
     )
-    colnames(X) <- edges$term
-    names(predictor_center) <- names(predictor_scale) <- edges$edge_id
+    colnames(X_raw) <- edges$edge_id
     list(
-        X = X,
-        y = y,
         X_raw = X_raw,
         y_raw = y_raw,
-        edges = edges,
-        predictor_center = predictor_center,
-        predictor_scale = predictor_scale,
-        response_center = response_center,
-        response_scale = response_scale,
-        transform = transform
+        edges = edges
     )
 }
 

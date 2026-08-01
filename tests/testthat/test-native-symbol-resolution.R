@@ -3,7 +3,8 @@ test_that("native wrappers resolve registered symbols explicitly", {
         ".condition_product_matrix_cpp",
         ".condition_fit_multitask_path_cpp",
         ".condition_refit_path_cpp",
-        ".condition_fit_target_engine_cpp"
+        ".condition_fit_target_engine_cpp",
+        ".condition_native_self_test_cpp"
     )
     namespace <- asNamespace("Pando")
     helper <- get(".pando_registered_symbol", namespace, inherits = FALSE)
@@ -11,7 +12,8 @@ test_that("native wrappers resolve registered symbols explicitly", {
         "_Pando_condition_product_matrix_cpp",
         "_Pando_condition_fit_multitask_path_cpp",
         "_Pando_condition_refit_path_cpp",
-        "_Pando_condition_fit_target_engine_cpp"
+        "_Pando_condition_fit_target_engine_cpp",
+        "_Pando_condition_native_self_test_cpp"
     )
 
     for (wrapper in wrappers) {
@@ -37,7 +39,8 @@ test_that("registered symbols resolve in a clean PSOCK worker", {
         "_Pando_condition_product_matrix_cpp",
         "_Pando_condition_fit_multitask_path_cpp",
         "_Pando_condition_refit_path_cpp",
-        "_Pando_condition_fit_target_engine_cpp"
+        "_Pando_condition_fit_target_engine_cpp",
+        "_Pando_condition_native_self_test_cpp"
     )
     result <- parallel::clusterCall(
         cluster,

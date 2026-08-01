@@ -24,11 +24,9 @@ test_that("canonical design preserves raw arithmetic and output fields", {
         gene[, "G", drop = FALSE], gene, peak, edges,
         factor(rep(c("A", "B"), each = 5L)), scale = FALSE
     )
+    colnames(reference) <- result$edges$edge_id
     expect_identical(as.matrix(result$X_raw), as.matrix(reference))
     expect_identical(dimnames(result$X_raw), dimnames(reference))
     expect_identical(result$y_raw, as.numeric(gene[, "G"]))
-    expect_identical(names(result), c(
-        "X", "y", "X_raw", "y_raw", "edges", "predictor_center",
-        "predictor_scale", "response_center", "response_scale", "transform"
-    ))
+    expect_identical(names(result), c("X_raw", "y_raw", "edges"))
 })

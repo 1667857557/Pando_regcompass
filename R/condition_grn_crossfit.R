@@ -15,8 +15,13 @@
 
 .condition_stable_hash <- function(x) {
     path <- tempfile('pando-condition-hash-')
-    on.exit(unlink(path), add = TRUE)
-    writeBin(serialize(x, NULL, version = 2L), path)
+    connection <- file(path, open = 'wb')
+    on.exit({
+        try(close(connection), silent = TRUE)
+        unlink(path)
+    }, add = TRUE)
+    serialize(x, connection, version = 2L)
+    close(connection)
     unname(tools::md5sum(path))
 }
 
@@ -747,7 +752,8 @@
     required <- c(
         'lambda_path', 'cv', 'full_cv', 'selected', 'beta_selection',
         'refit', 'full_transform', 'condition_rsq_oof',
-        'condition_rmse_oof', 'target_rsq_oof_pooled',
+        'condition_rmse_oof', 'condition_rsq_train',
+        'universal_rsq_train', 'target_rsq_oof_pooled', 'execution',
         'inner_cv_backend', 'backend'
     )
     if (!is.list(engine) || !all(required %in% names(engine))) {
@@ -755,19 +761,64 @@
     }
     if (!identical(
         engine$backend,
-        'cpp_eigen_fused_target_nested_cv_hybrid_gram_refit_validation_stats'
+        'cpp_eigen_memory_bounded_hybrid_target_v1'
     )) {
         stop('Compiled target engine returned an incompatible backend.', call. = FALSE)
     }
     if (!identical(
         engine$inner_cv_backend,
-        'hybrid_centered_gram_or_sparse_fista_with_validation_sufficient_statistics'
+        'exact_refit_validation_dense_support_or_sparse_residual_v1'
     )) {
         stop('Compiled target engine did not use the required inner-CV backend.',
              call. = FALSE)
     }
     p <- length(predictor_names)
     k <- length(condition_names)
+    execution <- engine$execution
+    required_execution <- c(
+        'path_backend', 'validation_backend', 'refit_backend',
+        'predictors', 'tasks', 'lambda_streaming',
+        'full_predictor_square_allocated', 'memory_contract'
+    )
+    if (!is.list(execution) ||
+        !all(required_execution %in% names(execution)) ||
+        !identical(
+            execution$memory_contract, 'no_full_p2_on_high_p_path_v1'
+        ) || length(execution$predictors) != 1L ||
+        !is.numeric(execution$predictors) ||
+        !is.finite(execution$predictors) ||
+        execution$predictors < 1 || execution$predictors > p ||
+        !identical(as.integer(execution$tasks), as.integer(k))) {
+        stop('Compiled target engine returned an invalid execution plan.',
+             call. = FALSE)
+    }
+    matrix_free_refit <- identical(
+        execution$refit_backend, 'matrix_free_schur_pcg'
+    )
+    if (matrix_free_refit &&
+        (!identical(execution$path_backend, 'sparse_matrix_free') ||
+         !identical(execution$validation_backend, 'sparse_residual') ||
+         !isTRUE(execution$lambda_streaming) ||
+         isTRUE(execution$full_predictor_square_allocated))) {
+        stop('Compiled high-p execution plan permits a full predictor square.',
+             call. = FALSE)
+    }
+    if (matrix_free_refit) {
+        byte_fields <- c('matrix_free_bytes', 'worker_budget_bytes')
+        bytes <- vapply(byte_fields, function(field) {
+            value <- execution[[field]]
+            if (!is.numeric(value) || length(value) != 1L ||
+                !is.finite(value) || value < 0) {
+                stop('Compiled high-p execution budget is invalid: ', field,
+                     '.', call. = FALSE)
+            }
+            as.numeric(value)
+        }, numeric(1))
+        if (bytes[['matrix_free_bytes']] > bytes[['worker_budget_bytes']]) {
+            stop('Compiled high-p execution plan exceeds its worker budget.',
+                 call. = FALSE)
+        }
+    }
     matrix_fields <- c('beta', 'beta_condition', 'delta_condition')
     for (field in matrix_fields) {
         value <- as.matrix(engine$refit[[field]])
@@ -776,6 +827,34 @@
         }
         dimnames(value) <- list(predictor_names, condition_names)
         engine$refit[[field]] <- value
+    }
+    if (matrix_free_refit &&
+        (!is.numeric(engine$refit$pcg_iterations) ||
+         length(engine$refit$pcg_iterations) != 1L ||
+         !is.finite(engine$refit$pcg_iterations) ||
+         engine$refit$pcg_iterations < 0 ||
+         !is.numeric(engine$refit$pcg_relative_residual) ||
+         length(engine$refit$pcg_relative_residual) != 1L ||
+         !is.finite(engine$refit$pcg_relative_residual) ||
+         engine$refit$pcg_relative_residual < 0)) {
+        stop('Compiled matrix-free refit diagnostics are invalid.',
+             call. = FALSE)
+    }
+    if (matrix_free_refit &&
+        (!isTRUE(engine$refit$budget_guard_passed) ||
+         !is.numeric(engine$refit$estimated_peak_bytes) ||
+         length(engine$refit$estimated_peak_bytes) != 1L ||
+         !is.finite(engine$refit$estimated_peak_bytes) ||
+         engine$refit$estimated_peak_bytes < 0 ||
+         engine$refit$estimated_peak_bytes >
+             execution$worker_budget_bytes ||
+         !is.character(engine$refit$preconditioner) ||
+         length(engine$refit$preconditioner) != 1L ||
+         !engine$refit$preconditioner %in% c(
+             'active_union_block_plus_diagonal', 'diagonal'
+         ))) {
+        stop('Compiled matrix-free refit memory diagnostics are invalid.',
+             call. = FALSE)
     }
     for (field in c('support_mask', 'active_mask', 'estimability_mask')) {
         value <- as.matrix(engine$refit[[field]])
@@ -899,7 +978,8 @@
     seed,
     max_iter,
     tol_objective,
-    tol_coef
+    tol_coef,
+    engine_control = .condition_normalize_engine_control()
 ) {
     if (!is.loaded('_Pando_condition_fit_target_engine_cpp', PACKAGE = 'Pando')) {
         stop(
@@ -939,13 +1019,25 @@
         lambda_selection = lambda_selection,
         max_iter = as.integer(max_iter),
         tol_objective = tol_objective,
-        tol_coef = tol_coef
+        tol_coef = tol_coef,
+        engine_control = engine_control[c(
+            'memory_budget_mb', 'dense_max_p', 'lambda_batch_size',
+            'refit_pcg_tol', 'refit_pcg_max_iter', 'preconditioner',
+            'diagnostics_level'
+        )]
     )
-    .condition_finalize_target_engine(
+    engine <- .condition_finalize_target_engine(
         engine,
         predictor_names = predictor_names,
         condition_names = condition_names,
         comparison_conditions = comparison_conditions,
         inner_nfolds = inner_nfolds
     )
+    engine$condition_rsq_train <- stats::setNames(
+        as.numeric(engine$condition_rsq_train), condition_names
+    )
+    engine$universal_rsq_train <- stats::setNames(
+        as.numeric(engine$universal_rsq_train), condition_names
+    )
+    engine
 }

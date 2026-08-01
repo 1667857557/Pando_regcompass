@@ -1,5 +1,17 @@
 # Independent broad-cell-type orchestration for condition-aware Pando.
 
+.condition_bind_schema_rows <- function(old, new) {
+    if (is.null(old) || !nrow(old)) return(new)
+    if (is.null(new) || !nrow(new)) return(old)
+    columns <- union(names(old), names(new))
+    add_missing <- function(value) {
+        missing <- setdiff(columns, names(value))
+        for (name in missing) value[[name]] <- NA
+        value[, columns, drop = FALSE]
+    }
+    rbind(add_missing(old), add_missing(new))
+}
+
 .condition_resolve_cell_types <- function(
     metadata, cell_type_col, cell_type = NULL
 ) {
@@ -64,6 +76,7 @@
     max_iter,
     tol_objective,
     tol_coef,
+    engine_control,
     verbose
 ) {
     cell_types <- .condition_resolve_cell_types(
@@ -114,6 +127,7 @@
             max_iter = max_iter,
             tol_objective = tol_objective,
             tol_coef = tol_coef,
+            engine_control = engine_control,
             verbose = verbose
         )
         object <- result$object
@@ -164,7 +178,9 @@
             old_diagnostics <- old_diagnostics[
                 !old_key %in% new_key, , drop = FALSE
             ]
-            diagnostics <- rbind(old_diagnostics, diagnostics)
+            diagnostics <- .condition_bind_schema_rows(
+                old_diagnostics, diagnostics
+            )
         }
         rownames(diagnostics) <- NULL
         object@grn@params$condition_fit_diagnostics <- diagnostics
@@ -212,6 +228,7 @@
     max_iter,
     tol_objective,
     tol_coef,
+    engine_control,
     verbose
 ) {
     cell_rows <- which(
@@ -331,6 +348,12 @@
     condition_factor <- factor(
         as.character(metadata[[condition_col]]), levels = condition_levels
     )
+    cell_engine_control <- engine_control
+    if (!is.null(cell_engine_control$checkpoint_dir)) {
+        cell_engine_control$checkpoint_dir <- file.path(
+            cell_engine_control$checkpoint_dir, safe_cell_type
+        )
+    }
     target_results <- .condition_fit_targets(
         features = prepared$features,
         gene_data = prepared$gene_data[cell_rows, , drop = FALSE],
@@ -359,6 +382,8 @@
         max_iter = max_iter,
         tol_objective = tol_objective,
         tol_coef = tol_coef,
+        engine_control = cell_engine_control,
+        cell_type = cell_type,
         parallel = parallel,
         BPPARAM = BPPARAM,
         verbose = verbose
@@ -369,7 +394,9 @@
     diagnostics <- diagnostics[, c(
         'network_name', 'cell_type', 'target', 'stage', 'converged',
         'iterations', 'objective', 'coef_change', 'selected_lambda',
-        'cv_mean', 'cv_se', 'error_message'
+        'cv_mean', 'cv_se', 'error_message', 'predictors', 'nonzeros',
+        'path_backend', 'validation_backend', 'refit_backend',
+        'pcg_iterations', 'pcg_residual', 'estimated_peak_bytes'
     ), drop = FALSE]
     successful <- target_results$fits
     if (!length(successful)) {
@@ -452,7 +479,8 @@
         only_tss = only_tss,
         peak_to_gene_method = peak_to_gene_method,
         tf_cor = tf_cor,
-        peak_cor = peak_cor
+        peak_cor = peak_cor,
+        engine_control = engine_control
     )
     successful_features <- names(successful)
     shared_coefs <- do.call(
@@ -550,6 +578,14 @@
         cv_mean = NA_real_,
         cv_se = NA_real_,
         error_message = message_text,
+        predictors = NA_integer_,
+        nonzeros = NA_real_,
+        path_backend = NA_character_,
+        validation_backend = NA_character_,
+        refit_backend = NA_character_,
+        pcg_iterations = NA_integer_,
+        pcg_residual = NA_real_,
+        estimated_peak_bytes = NA_real_,
         stringsAsFactors = FALSE
     )
 }

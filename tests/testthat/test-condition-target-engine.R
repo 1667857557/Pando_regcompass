@@ -135,7 +135,7 @@ test_that("fused target CV, lambda selection and refit match the R architecture"
     )
     expect_identical(
         native$backend,
-        "cpp_eigen_fused_target_nested_cv_hybrid_gram_refit_validation_stats"
+        "cpp_eigen_memory_bounded_hybrid_target_v1"
     )
 })
 
