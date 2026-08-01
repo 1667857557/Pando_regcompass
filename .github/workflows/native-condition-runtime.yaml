@@ -55,17 +55,21 @@ jobs:
         with:
           r-version: '4.5.1'
           use-public-rspm: true
-      - name: Install required Bioconductor infrastructure
+      - name: Install a coherent Bioconductor runtime
         shell: Rscript {0}
         run: |
           install.packages("BiocManager")
           bioc_packages <- c(
-            "Rsamtools", "GenomicAlignments", "rtracklayer",
-            "GenomicFeatures", "biovizBase"
+            "BiocGenerics", "S4Vectors", "IRanges", "GenomeInfoDb",
+            "XVector", "Biostrings", "Rsamtools", "GenomicAlignments",
+            "rtracklayer", "GenomicFeatures", "biovizBase"
           )
+          message("Using Bioconductor ", BiocManager::version())
           BiocManager::install(
             bioc_packages,
-            ask = FALSE, update = FALSE
+            ask = FALSE,
+            update = TRUE,
+            force = TRUE
           )
           stopifnot(vapply(
             bioc_packages,
