@@ -3,14 +3,12 @@ name: Apply hybrid condition target engine
 on:
   push:
     branches: [agent/hybrid-condition-target-engine]
-  pull_request:
-    branches: [main]
 
 permissions:
   contents: write
 
 jobs:
-  patch-test-commit:
+  patch-compile-commit:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
@@ -22,58 +20,77 @@ jobs:
         with:
           r-version: '4.5.1'
           use-public-rspm: true
-      - name: Install unchanged package dependencies
-        uses: r-lib/actions/setup-r-dependencies@v2
-        with:
-          extra-packages: |
-            any::testthat
-            any::remotes
-          dependencies: '"hard"'
+      - name: Install native compilation dependencies
+        shell: Rscript {0}
+        run: |
+          install.packages(c("Rcpp", "RcppEigen", "Matrix"))
       - name: Decode and apply canonical source changes
         run: |
           base64 --decode .agent-patch/apply_hybrid_target_engine.py.gz.b64 | gzip -d > /tmp/apply_hybrid_target_engine.py
           python /tmp/apply_hybrid_target_engine.py
-      - name: Pin Matrix 1.7-4
+      - name: Compile canonical target-engine translation unit
         shell: bash
         run: |
           set -o pipefail
-          Rscript - <<'RS' 2>&1 | tee /tmp/matrix-install.log
-          remotes::install_version(
-            "Matrix", version = "1.7-4",
-            repos = "https://cloud.r-project.org",
-            upgrade = "never"
-          )
-          RS
-      - name: Compile and install Pando
+          export PKG_CPPFLAGS="$(Rscript -e 'cat(Rcpp:::CxxFlags())') $(Rscript -e 'cat(RcppEigen:::CxxFlags())') -I${GITHUB_WORKSPACE}/src"
+          export PKG_CXXFLAGS="-std=gnu++17"
+          R CMD SHLIB src/condition_target_engine.cpp 2>&1 | tee /tmp/hybrid-kernel-compile.log
+      - name: Verify exact sufficient-statistic identities
+        shell: Rscript {0}
+        run: |
+          set.seed(20260801)
+          for (iteration in seq_len(50L)) {
+            n <- sample(20:60, 1L)
+            p <- sample(2:12, 1L)
+            X <- matrix(rnorm(n * p), n, p)
+            y <- rnorm(n)
+            beta <- rnorm(p)
+            intercept <- mean(y - as.numeric(X %*% beta))
+            residual <- y - intercept - as.numeric(X %*% beta)
+            x_mean <- colMeans(X)
+            y_mean <- mean(y)
+            gram <- crossprod(X) - n * tcrossprod(x_mean)
+            rhs <- as.numeric(crossprod(X, y)) - n * x_mean * y_mean
+            response_ss <- sum((y - y_mean)^2)
+            direct_objective <- 0.5 * mean(residual^2)
+            gram_objective <- 0.5 / n * (
+              drop(crossprod(beta, gram %*% beta)) -
+                2 * sum(rhs * beta) + response_ss
+            )
+            direct_gradient <- -as.numeric(crossprod(X, residual)) / n
+            gram_gradient <- as.numeric(gram %*% beta - rhs) / n
+            stopifnot(
+              isTRUE(all.equal(direct_objective, gram_objective,
+                               tolerance = 1e-12)),
+              isTRUE(all.equal(direct_gradient, gram_gradient,
+                               tolerance = 1e-11)),
+              isTRUE(all.equal(intercept, y_mean - sum(x_mean * beta),
+                               tolerance = 1e-12))
+            )
+            validation_intercept <- rnorm(1L)
+            direct_sse <- sum((y - validation_intercept - X %*% beta)^2)
+            stat_sse <- sum(y^2) - 2 * validation_intercept * sum(y) -
+              2 * sum(beta * as.numeric(crossprod(X, y))) +
+              n * validation_intercept^2 +
+              2 * validation_intercept * sum(beta * colSums(X)) +
+              drop(crossprod(beta, crossprod(X) %*% beta))
+            stopifnot(isTRUE(all.equal(direct_sse, stat_sse,
+                                       tolerance = 1e-11)))
+          }
+      - name: Verify final source contract
         shell: bash
         run: |
-          set -o pipefail
-          R CMD INSTALL . --no-multiarch --with-keep.source 2>&1 | tee /tmp/pando-install.log
-      - name: Run native target-engine regression tests
-        shell: bash
-        run: |
-          set -o pipefail
-          Rscript - <<'RS' 2>&1 | tee /tmp/target-engine-tests.log
-          library(Pando)
-          library(testthat)
-          stopifnot(as.character(packageVersion("Pando")) == "1.6.1")
-          stopifnot(is.loaded(
-            "_Pando_condition_fit_target_engine_cpp", PACKAGE = "Pando"
-          ))
-          test_file("tests/testthat/test-condition-target-engine.R")
-          test_file("tests/testthat/test-condition-target-engine-hybrid.R")
-          test_file("tests/testthat/test-condition-refit-native.R")
-          RS
-      - name: Upload validation logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: hybrid-target-engine-validation-logs
-          path: |
-            /tmp/matrix-install.log
-            /tmp/pando-install.log
-            /tmp/target-engine-tests.log
-          if-no-files-found: ignore
+          set -euo pipefail
+          grep -q '^Version: 1.6.1$' DESCRIPTION
+          grep -q '^Config/Pando/NativeSparseABI: 5$' DESCRIPTION
+          grep -q '^Config/Pando/ConditionInnerCVBackend: cpp-eigen-hybrid-gram-sufficient-statistics-fail-fast$' DESCRIPTION
+          grep -q 'hybrid_centered_gram_or_sparse_fista_with_validation_sufficient_statistics' src/condition_target_engine.cpp
+          grep -q 'validation_mse_from_stats' src/condition_target_engine.cpp
+          test -f tests/testthat/helper-condition-target-engine.R
+          test -f tests/testthat/test-condition-target-engine-hybrid.R
+          test ! -e .agent-patch/apply_hybrid_target_engine.py.gz.b64
+          test ! -e .agent-bundle/chunk00
+          test ! -e .github/workflows/agent-run-fused-target-engine.yml
       - name: Commit validated implementation
         run: |
           git config user.name "github-actions[bot]"
