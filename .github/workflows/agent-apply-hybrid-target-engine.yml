@@ -1,0 +1,61 @@
+name: Apply hybrid condition target engine
+
+on:
+  push:
+    branches: [agent/hybrid-condition-target-engine]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/hybrid-condition-target-engine
+          fetch-depth: 0
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.5.1'
+          use-public-rspm: true
+      - name: Decode and apply canonical source changes
+        run: |
+          base64 --decode .agent-patch/apply_hybrid_target_engine.py.gz.b64 | gzip -d > /tmp/apply_hybrid_target_engine.py
+          python /tmp/apply_hybrid_target_engine.py
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: |
+            any::testthat
+            any::remotes
+          dependencies: '"hard"'
+      - name: Pin Matrix 1.7-4
+        shell: Rscript {0}
+        run: |
+          remotes::install_version(
+            "Matrix", version = "1.7-4",
+            repos = "https://cloud.r-project.org",
+            upgrade = "never"
+          )
+      - name: Compile and install Pando
+        run: R CMD INSTALL . --no-multiarch --with-keep.source
+      - name: Run native target-engine regression tests
+        shell: Rscript {0}
+        run: |
+          library(Pando)
+          library(testthat)
+          stopifnot(as.character(packageVersion("Pando")) == "1.6.1")
+          stopifnot(is.loaded(
+            "_Pando_condition_fit_target_engine_cpp", PACKAGE = "Pando"
+          ))
+          test_file("tests/testthat/test-condition-target-engine.R")
+          test_file("tests/testthat/test-condition-target-engine-hybrid.R")
+          test_file("tests/testthat/test-condition-refit-native.R")
+      - name: Commit validated implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Accelerate condition nested CV with hybrid Gram statistics"
+          git push origin HEAD:agent/hybrid-condition-target-engine
