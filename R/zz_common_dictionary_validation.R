@@ -107,6 +107,22 @@
     result
 }
 
+.condition_fit_dictionary_prepared_common_dictionary_base <-
+    .condition_fit_dictionary_prepared
+
+.condition_fit_dictionary_prepared <- function(...) {
+    result <- .condition_fit_dictionary_prepared_common_dictionary_base(...)
+    if (!"nvariables" %in% colnames(result$fit)) {
+        result$fit$nvariables <- as.integer(
+            result$fit$nvariables_dictionary
+        )
+    }
+    result$network@fit <- result$fit
+    active <- result$object@grn@active_network
+    result$object@grn@networks[[active]]@fit <- result$fit
+    result
+}
+
 .find_modules_network_common_dictionary_base <- find_modules.Network
 
 find_modules.Network <- function(
@@ -123,9 +139,16 @@ find_modules.Network <- function(
         "fixed_edge_dictionary"
     )
     original_coefs <- if (fixed_dictionary) object@coefs else NULL
+    original_fit <- if (fixed_dictionary) object@fit else NULL
     if (fixed_dictionary) {
-        excluded <- as.character(object@coefs$term) == "(Intercept)" |
-            (!is.na(object@coefs$estimable) & !object@coefs$estimable) |
+        if (!"nvariables" %in% colnames(object@fit) &&
+            "nvariables_dictionary" %in% colnames(object@fit)) {
+            object@fit$nvariables <- as.integer(
+                object@fit$nvariables_dictionary
+            )
+        }
+        excluded <- (!is.na(object@coefs$estimable) &
+                     !object@coefs$estimable) |
             !is.finite(object@coefs$estimate)
         object@coefs$padj[excluded] <- 1
     }
@@ -139,6 +162,15 @@ find_modules.Network <- function(
         xgb_top = xgb_top,
         verbose = verbose
     )
-    if (fixed_dictionary) answer@coefs <- original_coefs
+    if (fixed_dictionary) {
+        answer@coefs <- original_coefs
+        answer@fit <- original_fit
+        if (!"nvariables" %in% colnames(answer@fit) &&
+            "nvariables_dictionary" %in% colnames(answer@fit)) {
+            answer@fit$nvariables <- as.integer(
+                answer@fit$nvariables_dictionary
+            )
+        }
+    }
     answer
 }
