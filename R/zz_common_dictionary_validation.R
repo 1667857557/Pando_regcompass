@@ -106,3 +106,19 @@
     }
     result
 }
+
+.condition_make_network_common_dictionary_base <- .condition_make_network
+
+.condition_make_network <- function(
+    coefficients, fit, dictionary, condition_label, params) {
+    network <- .condition_make_network_common_dictionary_base(
+        coefficients = coefficients,
+        fit = fit,
+        dictionary = dictionary,
+        condition_label = condition_label,
+        params = params
+    )
+    intercept <- as.character(network@coefs$term) == "(Intercept)"
+    network@coefs$padj[intercept] <- 1
+    network
+}
