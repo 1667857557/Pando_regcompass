@@ -11,7 +11,8 @@ namespace_references <- function(files) {
     }
     walk <- function(value, file) {
         if (is.call(value)) {
-            operator <- as.character(value[[1L]])
+            head <- value[[1L]]
+            operator <- if (is.symbol(head)) as.character(head) else ""
             if (operator %in% c("::", ":::") && length(value) >= 3L) {
                 add_reference(
                     operator,
