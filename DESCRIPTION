@@ -1,5 +1,5 @@
 Package: Pando
-Version: 1.6.3
+Version: 1.6.4
 Type: Package
 Title: Inferring regulomes from multi-modal single-cell genomics data
 Authors@R: person(given = "Jonas Simon",
@@ -48,43 +48,52 @@ VignetteBuilder: knitr
 biocViews:
 Depends:
     R (>= 4.0.0)
-Imports: 
-    tidyverse (>= 2.0.0),
-    Seurat (>= 4.4.0),
-    SeuratObject (>= 4.1.4),
-    Signac (>= 1.11.0),
+Imports:
+    bayestestR,
+    dplyr,
+    foreach,
+    GenomicRanges,
+    ggplot2,
+    ggpointdensity,
+    ggraph,
+    glmnetUtils,
+    IRanges (>= 2.32.0),
+    irlba,
     Matrix (>= 1.5-0),
     MatrixGenerics (>= 1.10.0),
-    Rcpp,
-    ggplot2,
-    IRanges (>= 2.32.0),
-    GenomicRanges,
+    methods,
     motifmatchr,
-    glmnetUtils,
-    bayestestR,
-    ggpointdensity,
-    TFBSTools,
-    ggraph,
-    tidygraph,
     pals,
     patchwork,
-    foreach,
+    purrr,
+    Rcpp,
+    Seurat (>= 4.4.0),
+    SeuratObject (>= 4.1.4),
+    S4Vectors,
+    Signac (>= 1.11.0),
     sparseMatrixStats (>= 1.10.0),
-    irlba,
+    stats,
+    stringr,
+    tibble,
+    tidyr,
+    TFBSTools,
+    tidygraph,
+    tools,
+    utils,
     uwot
 LinkingTo:
     Rcpp,
     RcppEigen
 SystemRequirements: C++17
-Suggests: 
+Suggests:
+    BiocParallel,
+    brms,
     knitr,
+    reticulate,
     rmarkdown,
     testthat,
-    BiocParallel,
-    reticulate,
-    xgboost,
-    brms
-Remotes: 
+    xgboost
+Remotes:
     github::immunogenomics/presto
 Config/Pando/NativeSparseABI: 6
 Config/Pando/NativeCallBinding: registered-symbol-lookup-worker-safe-v1
