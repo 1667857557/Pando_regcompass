@@ -1,190 +1,131 @@
 ---
-title: "Condition-specific sub-GRNs and RegCompass handoff"
+title: "Condition-comparable Pando GRNs"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Condition-specific sub-GRNs and RegCompass handoff}
+  %\VignetteIndexEntry{Condition-comparable Pando GRNs}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = FALSE)
+knitr::opts_chunk$set(eval = FALSE, collapse = TRUE, comment = "#>")
 ```
 
-## Two Pando workflows
+# Model contract
 
-Pando retains its original `infer_grn()` workflow unchanged. Use
-`infer_condition_grn()` when conditions of the same cell type must be compared
-directly. The condition workflow still writes standard Pando `Network` objects,
-so `coef()`, `gof()` and `NetworkParams()` continue to work. Its
-`ConditionGRNFit` and projection objects add the lossless information required
-by RegCompass.
+For one broad cell type, candidate discovery is run globally and independently
+in every condition. For target `g`, the exact edge union is
 
-## Fit one shared candidate graph
+\[
+E_g^\cup = E_g^{global} \cup \bigcup_c E_g^{(c)}.
+\]
 
-```{r fit}
-condition_object <- infer_condition_grn(
+Every condition then fits the same model:
+
+\[
+Y_{igc}=\alpha_{gc}+\sum_{r\in E_g^\cup}\beta_{rgc}
+E_{i,t(r),c}A_{i,p(r),c}+\varepsilon_{igc}.
+\]
+
+RNA and ATAC layers must be preprocessed before condition splitting. The final
+fit uses Gaussian identity GLM, `interaction = ":"` and `scale = FALSE`. Thus
+all conditions share predictor definitions, units and conditioning covariates.
+No global-coefficient calibration is applied.
+
+# Automatic route
+
+```r
+fit_object <- infer_condition_grn(
   grn_object,
   cell_type_col = "cell_type",
   condition_col = "condition",
   genes = metabolic_genes,
-  network_name = "condition_grn",
-  candidate_screen = "motif_domain",
-  alpha = 0.5,
-  condition_mix = 0.5,
-  condition_weight = "equal",
-  reference_condition = "Control",
-  comparison_conditions = c("Control", "Drug"),
-  outer_nfolds = 5,
-  inner_nfolds = 5,
-  lambda_selection = "lambda.1se",
-  scale = TRUE,
-  seed = 12345,
-  engine_control = list(
-    memory_budget_mb = 1024,
-    diagnostics_level = "compact",
-    checkpoint_dir = "condition_grn_checkpoints",
-    resume = TRUE
-  )
+  tf_cor = 0.1,
+  peak_cor = 0,
+  min_cells_per_condition = 300L,
+  small_condition_action = "error",
+  adjust_method = "BH",
+  padj_threshold = 0.05,
+  rank_action = "mark",
+  min_residual_df = 1L,
+  parallel = TRUE
 )
 ```
 
-Pando forms each candidate interaction on paired single cells:
-
-\[
-x_{i,e}=\mathrm{RNA}_{i,TF(e)}\mathrm{ATAC}_{i,peak(e)}.
-\]
-
-Every condition uses the same motif/domain edge dictionary. Within each outer
-fold, centers are the mean of condition means and scales are the square root of
-the mean condition-specific population variances. These parameters and lambda
-selection are learned only from outer-training cells. The response-dependent
-`pooled_within_condition` screen is retained only as a sensitivity mode and its
-projection is not eligible for RegCompass penalties.
-
-Sparse multi-task selection may choose different active edges in each
-condition. The common-scale refit keeps an inactive but estimable edge at exact
-zero and an unavailable edge at `NA`.
-
-The public arguments are unchanged. Numerically, each target is processed by one
-fail-fast C++ engine. Inner-fold selection reuses exact centered training
-sufficient statistics and chooses between an algebraically equivalent dense-Gram
-FISTA path and the sparse matrix-free path. Every lambda is scored from exact
-held-out sufficient statistics. Individual held-out cells are traversed only
-after the inner fold selects the outer-fold model, when the OOF prediction and
-condition-full/common projections are generated.
-
-## Standard Pando-compatible networks
-
-```{r networks}
-Params(condition_object)$condition_network_index
-
-control_network <- GetNetwork(
-  condition_object,
-  network = "condition_grn__Tumor_cell__condition__Control"
-)
-coef(control_network)
-gof(control_network)
-NetworkParams(control_network)
-```
-
-The shared network is
-`condition_grn__<cell_type>__shared`; condition networks are
-`condition_grn__<cell_type>__condition__<condition>`. Their coefficient tables
-retain the original Pando columns:
+The resulting condition networks are ordinary Pando `Network` objects. Their
+coefficient tables include:
 
 ```text
-tf  target  region  term  estimate  corr
+tf target region edge_id estimate std_err statistic pval padj
+significant penalty_effect direction estimable zero_variance aliased
 ```
 
-`estimate` is the absolute refitted condition coefficient, not a reference
-contrast. An unavailable edge has `estimate = NA`; an estimable inactive edge
-has `estimate = 0`.
+`estimate` is the complete fitted condition effect. `penalty_effect` equals
+`estimate` only where `padj < 0.05`; otherwise it is zero. An unavailable
+coefficient remains `NA` and is not treated as an estimated zero.
 
-## Lossless v5 contract
+# Manual two-stage route
 
-```{r contract}
-fit <- condition_grn_fit(
-  condition_object,
-  network_name = "condition_grn",
-  cell_type = "Tumor_cell"
+```r
+edges_global <- discover_grn_edges(
+  grn_object,
+  genes = metabolic_genes,
+  cells = cells_cell_type,
+  source_label = "global",
+  source_type = "global"
 )
 
-fit$beta_condition_std
-fit$beta_shared_std
-fit$delta_condition_std
-fit$active_mask
-fit$estimability_mask
-fit$absolute_direction
+edges_condition <- setNames(lapply(condition_levels, function(level) {
+  discover_grn_edges(
+    grn_object,
+    genes = metabolic_genes,
+    cells = cells_by_condition[[level]],
+    source_label = level,
+    source_type = "condition"
+  )
+}), condition_levels)
+
+edge_dictionary <- union_grn_edges(edges_global, edges_condition)
+
+for (level in condition_levels) {
+  grn_object <- fit_grn_from_edges(
+    grn_object,
+    edge_dictionary = edge_dictionary,
+    cells = cells_by_condition[[level]],
+    condition_label = level,
+    network_name = paste0("condition_grn__", level),
+    adjust_method = "BH",
+    padj_threshold = 0.05,
+    rank_action = "mark"
+  )
+}
 ```
 
-For every shared candidate edge:
+The union is over complete triples. TF, peak and target node sets must not be
+unioned separately and recombined.
 
-\[
-\beta_{e,c}=\beta_{e,shared}+\delta_{e,c}.
-\]
+# Standard fallback
 
-Different condition sub-GRNs are induced by their own active masks, so their TF,
-peak and target node sets may differ. Effects may also reverse sign. These
-differences do not change the edge coordinate system or coefficient units.
+With no usable condition column or one condition level, `infer_condition_grn()`
+runs original per-cell-type Pando GLMs and stores
+`condition_coefficients_calculated = FALSE`.
 
-```{r compare}
-condition_grn_subgraph(fit, "Control")
-condition_grn_subgraph(fit, "Drug")
+# Projection
 
-contrast <- condition_grn_contrast(fit, "Control", "Drug")
-contrast[, c(
-  "tf", "region", "target",
-  "beta_condition_1", "beta_condition_2",
-  "delta_beta", "pairwise_direction", "sign_switch", "comparable"
-)]
-```
-
-`delta_condition` means deviation from the shared coefficient. It is not the
-same as repression: absolute regulatory direction is always
-`sign(beta_condition)`.
-
-## Project before constructing metacells
-
-```{r projection}
+```r
+fit <- condition_grn_fit(fit_object, cell_type = "T_cell")
 projection <- project_condition_grn_cells(
-  condition_object,
+  fit_object,
   fit = fit,
-  component = "condition",
-  scale = "std",
-  output = "gene_score",
-  targets = metabolic_genes,
-  nonestimable = "propagate",
-  support_policy = "pairwise_common",
-  comparison_conditions = c("Control", "Drug"),
-  origin = "oof"
+  significant_only = TRUE
 )
-
-projection$gene_score
-projection$gene_direction
-projection$target_condition_status
-projection$aggregation_contract
+metacell <- aggregate_condition_grn_projection(
+  projection,
+  membership,
+  group_col = "metacell_id"
+)
 ```
 
-For a cell in condition \(c\), Pando computes
-
-\[
-R^{OOF}_{i,g,c}=\sum_{e\rightarrow g}z^{(-k)}_{i,e}\beta^{(-k)}_{e,c}
-\]
-
-where cell \(i\) belongs to held-out outer fold \(k\). The score is signed. If any
-candidate edge needed by a target is unavailable in that condition, the target
-score is `NA`; it is never silently converted to zero.
-The projection also verifies the exact fitted cell IDs, RNA/ATAC assays and
-condition labels before calculating scores.
-
-RegCompass should construct metacells only after this projection and aggregate
-each target column by the arithmetic mean within condition × broad cell type.
-It must not multiply aggregated TF and peak values, recompute TF-IDF or
-equal-condition transforms, refit Pando coefficients, or
-replace `NA` with zero. Because every condition projection has identical target
-columns and scale, metacells from different conditions remain directly
-comparable for the same GEM reaction.
-
-`origin = "full_fit"` is available for interpreting the final sub-GRN. It is
-explicitly marked ineligible for penalty construction.
+Projection uses paired single cells before aggregation. The coefficient test is
+conditional on the selected dictionary; candidate-selection uncertainty is not
+included in the ordinary GLM P value.
