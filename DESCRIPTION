@@ -1,5 +1,5 @@
 Package: Pando
-Version: 1.6.4
+Version: 1.6.5
 Type: Package
 Title: Inferring regulomes from multi-modal single-cell genomics data
 Authors@R: person(given = "Jonas Simon",
@@ -32,12 +32,16 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     residual-check failures terminate the analysis. Registered native routines
     are resolved explicitly in each R process so PSOCK and forked BiocParallel
     workers do not depend on transient Rcpp native-symbol bindings in their
-    namespace. The primary
-    projection is condition-full outer-heldout support: jointly estimable edges
-    form the common component, condition-specific estimable edges remain in the
-    focal condition, and every non-estimable edge contributes a projectable
-    structural zero in that condition. Exact-zero predictors remain represented
-    in the shared candidate supergraph without being assigned fitted
+    namespace. Runtime preflight is intentionally lightweight: it checks the
+    registered production kernels and declared memory contract without running
+    a fixed synthetic-matrix numerical benchmark before each analysis. Numerical
+    correctness remains enforced on every real target by the production solver,
+    refit residual, finite-arithmetic, OOF-assignment and memory-budget checks.
+    The primary projection is condition-full outerheldout support: jointly
+    estimable edges form the common component, condition-specific estimable
+    edges remain in the focal condition, and every non-estimable edge contributes
+    a projectable structural zero in that condition. Exact-zero predictors remain
+    represented in the shared candidate supergraph without being assigned fitted
     coefficients.
 License: MIT
 Encoding: UTF-8
@@ -103,4 +107,5 @@ Config/Pando/ConditionRefitBackend: dense-direct-or-matrix-free-schur-pcg-v1
 Config/Pando/ConditionTargetEngineBackend: cpp-eigen-memory-bounded-hybrid-target-v1
 Config/Pando/ConditionInnerCVBackend: exact-refit-validation-sparse-residual-v1
 Config/Pando/ConditionMemoryContract: no-full-p2-on-high-p-path-v1
+Config/Pando/RuntimePreflight: lightweight-metadata-symbol-check-v1
 Config/Pando/InstalledRuntimeCI: R-4.5.1-Matrix-1.7.4

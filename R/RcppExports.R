@@ -46,5 +46,23 @@
 }
 
 .condition_native_self_test_cpp <- function() {
-    .pando_registered_call("_Pando_condition_native_self_test_cpp")
+    symbols <- c(
+        "_Pando_condition_product_matrix_cpp",
+        "_Pando_condition_fit_multitask_path_cpp",
+        "_Pando_condition_refit_path_cpp",
+        "_Pando_condition_fit_target_engine_cpp"
+    )
+    invisible(lapply(symbols, .pando_registered_symbol))
+    description <- utils::packageDescription("Pando")
+    memory_contract <- description[["Config/Pando/ConditionMemoryContract"]]
+    if (!identical(memory_contract, "no-full-p2-on-high-p-path-v1")) {
+        stop("Pando native memory contract metadata is incompatible.", call. = FALSE)
+    }
+    list(
+        passed = TRUE,
+        mode = "lightweight_metadata_symbol_check_v1",
+        numerical_test_run = FALSE,
+        native_symbols = symbols,
+        memory_contract = memory_contract
+    )
 }
