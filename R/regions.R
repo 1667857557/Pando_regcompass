@@ -148,7 +148,7 @@ initiate_grn.GRNData <- function(
 }
 
 .pando_motif_genome_signature <- function(genome){
-    slots <- if (methods::isS4(genome)) methods::slotNames(genome) else character()
+    slots <- if (base::isS4(genome)) methods::slotNames(genome) else character()
     fields <- intersect(
         slots,
         c("pkgname", "organism", "common_name", "provider", "provider_version", "release_name")

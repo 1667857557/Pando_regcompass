@@ -20,6 +20,32 @@ test_that("motif cache digests are deterministic and content-sensitive", {
     expect_false(identical(first, changed))
 })
 
+test_that("motif genome signatures accept S4 genome-like objects", {
+    class_name <- "PandoMotifGenomeSignatureFixture"
+    if (!methods::isClass(class_name)) {
+        methods::setClass(
+            class_name,
+            slots = c(
+                pkgname = "character",
+                organism = "character",
+                provider = "character"
+            )
+        )
+    }
+    genome <- methods::new(
+        class_name,
+        pkgname = "fixture.genome",
+        organism = "Homo sapiens",
+        provider = "test"
+    )
+
+    signature <- Pando:::.pando_motif_genome_signature(genome)
+
+    expect_identical(signature$fields$pkgname, "fixture.genome")
+    expect_identical(signature$fields$organism, "Homo sapiens")
+    expect_identical(signature$fields$provider, "test")
+})
+
 test_that("invalid motif cache controls fail before motif scanning", {
     method <- Pando:::find_motifs.GRNData
     expect_error(
