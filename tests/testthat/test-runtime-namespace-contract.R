@@ -59,15 +59,20 @@ namespace_import_packages <- function(lines) {
     ))
 }
 
-test_that("runtime namespace dependencies are direct package dependencies", {
-    root <- normalizePath(testthat::test_path("..", ".."), mustWork = TRUE)
+package_dependency_sets <- function(root) {
     description <- read.dcf(file.path(root, "DESCRIPTION"))[1L, , drop = TRUE]
-    declared <- unique(c(
+    required <- unique(c(
         split_description_dependencies(description[["Depends"]]),
         split_description_dependencies(description[["Imports"]])
     ))
-    declared <- setdiff(declared, "R")
+    required <- setdiff(required, "R")
+    suggested <- split_description_dependencies(description[["Suggests"]])
+    list(required = required, suggested = suggested)
+}
 
+test_that("runtime namespace dependencies are declared at the right strength", {
+    root <- normalizePath(testthat::test_path("..", ".."), mustWork = TRUE)
+    dependencies <- package_dependency_sets(root)
     namespace_packages <- namespace_import_packages(
         readLines(file.path(root, "NAMESPACE"), warn = FALSE)
     )
@@ -76,21 +81,36 @@ test_that("runtime namespace dependencies are direct package dependencies", {
         recursive = TRUE, full.names = TRUE
     )
     references <- namespace_references(source_files)
-    runtime_packages <- unique(c(namespace_packages, references$package))
-    missing <- setdiff(runtime_packages, c(declared, "base", "Pando"))
 
-    expect_length(
-        missing,
-        0L,
-        info = paste(
-            "Runtime namespaces missing from Depends/Imports:",
-            paste(sort(missing), collapse = ", ")
-        )
+    missing_imports <- setdiff(
+        namespace_packages,
+        c(dependencies$required, "base", "Pando")
     )
+    missing_qualified <- setdiff(
+        unique(references$package),
+        c(dependencies$required, dependencies$suggested, "base", "Pando")
+    )
+
+    failures <- c(
+        if (length(missing_imports)) {
+            paste0(
+                "NAMESPACE imports missing from Depends/Imports: ",
+                paste(sort(missing_imports), collapse = ", ")
+            )
+        },
+        if (length(missing_qualified)) {
+            paste0(
+                "qualified runtime namespaces missing from DESCRIPTION: ",
+                paste(sort(missing_qualified), collapse = ", ")
+            )
+        }
+    )
+    expect_length(failures, 0L, info = paste(failures, collapse = "; "))
 })
 
 test_that("runtime double-colon calls address exported objects", {
     root <- normalizePath(testthat::test_path("..", ".."), mustWork = TRUE)
+    dependencies <- package_dependency_sets(root)
     source_files <- list.files(
         file.path(root, "R"), pattern = "\\.[Rr]$",
         recursive = TRUE, full.names = TRUE
@@ -102,10 +122,14 @@ test_that("runtime double-colon calls address exported objects", {
     for (index in seq_len(nrow(public))) {
         package <- public$package[[index]]
         symbol <- public$symbol[[index]]
-        if (!requireNamespace(package, quietly = TRUE)) {
+        available <- requireNamespace(package, quietly = TRUE)
+        if (!available && package %in% dependencies$suggested) {
+            next
+        }
+        if (!available) {
             failures <- c(
                 failures,
-                paste0(package, "::", symbol, " (namespace unavailable)")
+                paste0(package, "::", symbol, " (required namespace unavailable)")
             )
         } else if (!symbol %in% getNamespaceExports(package)) {
             failures <- c(
