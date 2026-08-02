@@ -1,316 +1,11 @@
-# Condition-aware extension of the Pando TF-peak-target model.
+# Common-dictionary condition-specific extension of the original Pando GLM.
 
-#' Infer a GRN with automatic standard/condition-aware routing
-#'
-#' Uses the original [infer_grn()] workflow when `condition_col` is omitted,
-#' absent from the metadata, or contains fewer than two non-missing levels.
-#' With two or more conditions, fits condition-specific sub-GRNs on one shared
-#' within-cell-type coordinate system. The fallback path does not construct a
-#' `ConditionGRNFit` and does not calculate condition coefficients.
-#'
-#' @param object A GRNData object containing paired RNA and ATAC measurements.
-#' @param cell_type_col Optional metadata column containing broad cell-type
-#'   labels. It is required for condition-aware fitting. In standard fallback
-#'   mode it is used only when `cell_type` is supplied.
-#' @param condition_col Optional metadata column containing condition labels.
-#' @param cell_type Optional cell-type label or labels to retain before fitting.
-#' @param genes Target genes. Defaults to RNA variable features.
-#' @param network_name Prefix used for generated network names.
-#' @param peak_to_gene_method Peak-to-gene method, either Signac or GREAT.
-#' @param upstream,downstream,extend,only_tss Regulatory-domain parameters.
-#' @param peak_to_gene_domains Optional custom gene regulatory domains for the
-#'   condition-aware path.
-#' @param tf_cor,peak_cor Correlation screening thresholds.
-#' @param candidate_screen Condition-aware candidate screening strategy.
-#' @param alpha Elastic-net mixing parameter.
-#' @param condition_mix Group-versus-condition sparsity mixing parameter.
-#' @param comparison_conditions Conditions defining common-support projection.
-#' @param condition_weight Must be `equal` in condition-aware mode.
-#' @param nlambda,lambda,lambda_min_ratio Lambda-path controls.
-#' @param outer_nfolds,inner_nfolds Nested cross-fitting fold counts.
-#' @param lambda_selection Selection of lambda.1se or lambda.min.
-#' @param min_cells_per_condition Minimum cells per condition.
-#' @param small_condition_action Skip, drop, or error for small conditions.
-#' @param scale Must be `TRUE` for condition-aware fitting. The standard
-#'   fallback uses the original Pando default unless overridden in
-#'   `fallback_args`.
-#' @param active_tol Numerical activity threshold.
-#' @param parallel Use the existing Pando foreach backend.
-#' @param BPPARAM Optional BiocParallel parameter for condition-aware fitting.
-#' @param overwrite Replace generated condition networks with matching names.
-#' @param seed Random seed for condition-stratified folds.
-#' @param max_iter,tol_objective,tol_coef Solver controls.
-#' @param engine_control Named memory-bounded native-engine controls:
-#'   `memory_budget_mb`, `dense_max_p`, `lambda_batch_size`,
-#'   `refit_pcg_tol`, `refit_pcg_max_iter`, `preconditioner`,
-#'   `diagnostics_level`, `checkpoint_dir`, and `resume`. Unknown fields are
-#'   rejected. Diagnostic retention and checkpoints do not change fitting,
-#'   lambda selection, coefficients, or projections.
-#' @param fallback_args Named arguments passed only to [infer_grn()] in standard
-#'   fallback mode. Common managed fields cannot be overridden.
-#' @param verbose Display progress messages.
-#' @param ... Must be empty.
-#' @return A GRNData object. `object@grn@params$analysis_mode` is either
-#'   `"standard_grn"` or `"condition_grn"`.
-#' @export
-infer_condition_grn <- function(object, ...) {
-    UseMethod(generic = 'infer_condition_grn', object = object)
-}
+.condition_common_dictionary_schema <- "pando_condition_grn_common_dictionary_v1"
 
-#' @rdname infer_condition_grn
-#' @method infer_condition_grn GRNData
-#' @export
-infer_condition_grn.GRNData <- function(
-    object,
-    cell_type_col = NULL,
-    condition_col = NULL,
-    cell_type = NULL,
-    genes = NULL,
-    network_name = 'condition_grn',
-    peak_to_gene_method = c('Signac', 'GREAT'),
-    upstream = 100000,
-    downstream = 0,
-    extend = 1000000,
-    only_tss = FALSE,
-    peak_to_gene_domains = NULL,
-    tf_cor = 0.1,
-    peak_cor = 0,
-    candidate_screen = c('motif_domain', 'pooled_within_condition'),
-    alpha = 0.5,
-    condition_mix = 0.5,
-    comparison_conditions = NULL,
-    condition_weight = 'equal',
-    nlambda = 50L,
-    lambda = NULL,
-    lambda_min_ratio = NULL,
-    outer_nfolds = 5L,
-    inner_nfolds = 5L,
-    lambda_selection = c('lambda.1se', 'lambda.min'),
-    min_cells_per_condition = 50L,
-    small_condition_action = c('skip_cell_type', 'drop_condition', 'error'),
-    scale = TRUE,
-    active_tol = 1e-8,
-    parallel = FALSE,
-    BPPARAM = NULL,
-    overwrite = FALSE,
-    seed = 12345L,
-    max_iter = 5000L,
-    tol_objective = 1e-7,
-    tol_coef = 1e-6,
-    engine_control = list(),
-    fallback_args = list(),
-    verbose = TRUE,
-    ...
-) {
-    dots <- list(...)
-    if (length(dots)) {
-        dot_names <- names(dots)
-        if (is.null(dot_names) || anyNA(dot_names) || any(!nzchar(dot_names))) {
-            dot_names <- paste0('..', seq_along(dots))
-        }
-        stop('Unused condition GRN argument(s): ', paste(dot_names, collapse = ', '), '.')
-    }
-    if (!inherits(object, 'GRNData')) stop('object must be a GRNData object.')
-    if (!is.list(fallback_args)) stop('fallback_args must be a list.')
-    engine_control <- .condition_normalize_engine_control(engine_control)
-
-    peak_to_gene_method <- match.arg(peak_to_gene_method)
-    metadata <- object@data@meta.data
-    condition_levels <- .condition_resolve_levels(metadata, condition_col)
-    analysis_mode <- if (length(condition_levels) >= 2L) {
-        'condition_grn'
-    } else {
-        'standard_grn'
-    }
-
-    if (identical(analysis_mode, 'standard_grn')) {
-        value <- .condition_run_standard_fallback(
-            object = object,
-            metadata = metadata,
-            cell_type_col = cell_type_col,
-            cell_type = cell_type,
-            condition_col = condition_col,
-            condition_levels = condition_levels,
-            genes = genes,
-            network_name = network_name,
-            peak_to_gene_method = peak_to_gene_method,
-            upstream = upstream,
-            downstream = downstream,
-            extend = extend,
-            only_tss = only_tss,
-            parallel = parallel,
-            tf_cor = tf_cor,
-            peak_cor = peak_cor,
-            alpha = alpha,
-            fallback_args = fallback_args,
-            verbose = verbose
-        )
-        value@grn@params$analysis_mode <- 'standard_grn'
-        value@grn@params$condition_col <- condition_col
-        value@grn@params$condition_levels <- condition_levels
-        value@grn@params$condition_coefficients_calculated <- FALSE
-        value@grn@params$standard_fallback_reason <- if (is.null(condition_col)) {
-            'condition_col_not_supplied'
-        } else if (!condition_col %in% colnames(metadata)) {
-            'condition_col_absent'
-        } else {
-            'fewer_than_two_condition_levels'
-        }
-        return(value)
-    }
-
-    candidate_screen <- match.arg(candidate_screen)
-    lambda_selection <- match.arg(lambda_selection)
-    small_condition_action <- match.arg(small_condition_action)
-    if (!identical(condition_weight, 'equal')) {
-        stop('condition_weight must be "equal" for condition comparability.')
-    }
-    if (!isTRUE(scale)) {
-        stop('scale must be TRUE for condition-aware fitting.')
-    }
-    .condition_validate_public_args(
-        object, cell_type_col, condition_col, scale, alpha, condition_mix,
-        comparison_conditions, nlambda, lambda, outer_nfolds, inner_nfolds,
-        min_cells_per_condition, active_tol, max_iter, tol_objective, tol_coef,
-        tf_cor, peak_cor, lambda_min_ratio, parallel, overwrite, seed, verbose
-    )
-    prepared <- .condition_prepare_global_data(
-        object = object,
-        cell_type_col = cell_type_col,
-        condition_col = condition_col,
-        genes = genes,
-        peak_to_gene_method = peak_to_gene_method,
-        upstream = upstream,
-        downstream = downstream,
-        extend = extend,
-        only_tss = only_tss,
-        peak_to_gene_domains = peak_to_gene_domains,
-        verbose = verbose
-    )
-    value <- .condition_fit_cell_type_models(
-        object = object,
-        prepared = prepared,
-        cell_type_col = cell_type_col,
-        cell_type = cell_type,
-        condition_col = condition_col,
-        network_name = network_name,
-        peak_to_gene_method = peak_to_gene_method,
-        upstream = upstream,
-        downstream = downstream,
-        extend = extend,
-        only_tss = only_tss,
-        tf_cor = tf_cor,
-        peak_cor = peak_cor,
-        candidate_screen = candidate_screen,
-        alpha = alpha,
-        condition_mix = condition_mix,
-        reference_condition = NULL,
-        comparison_conditions = comparison_conditions,
-        condition_weight = condition_weight,
-        nlambda = nlambda,
-        lambda = lambda,
-        lambda_min_ratio = lambda_min_ratio,
-        outer_nfolds = outer_nfolds,
-        inner_nfolds = inner_nfolds,
-        lambda_selection = lambda_selection,
-        min_cells_per_condition = min_cells_per_condition,
-        small_condition_action = small_condition_action,
-        active_tol = active_tol,
-        parallel = parallel,
-        BPPARAM = BPPARAM,
-        overwrite = overwrite,
-        seed = seed,
-        max_iter = max_iter,
-        tol_objective = tol_objective,
-        tol_coef = tol_coef,
-        engine_control = engine_control,
-        verbose = verbose
-    )
-    value@grn@params$analysis_mode <- 'condition_grn'
-    value@grn@params$condition_coefficients_calculated <- TRUE
+.condition_safe_label <- function(x) {
+    value <- gsub("[^[:alnum:]_.-]+", "_", as.character(x))
+    value[!nzchar(value)] <- "unnamed"
     value
-}
-
-.condition_normalize_engine_control <- function(engine_control = list()) {
-    if (is.null(engine_control)) engine_control <- list()
-    if (!is.list(engine_control) || is.null(names(engine_control)) &&
-        length(engine_control)) {
-        stop('engine_control must be a named list.', call. = FALSE)
-    }
-    if (length(engine_control) &&
-        (anyNA(names(engine_control)) || any(!nzchar(names(engine_control))) ||
-         anyDuplicated(names(engine_control)))) {
-        stop(
-            'engine_control fields must have unique non-empty names.',
-            call. = FALSE
-        )
-    }
-    defaults <- list(
-        memory_budget_mb = NULL,
-        dense_max_p = 2048L,
-        lambda_batch_size = 1L,
-        refit_pcg_tol = 1e-8,
-        refit_pcg_max_iter = 2000L,
-        preconditioner = 'hybrid',
-        diagnostics_level = 'full',
-        checkpoint_dir = NULL,
-        resume = FALSE
-    )
-    unknown <- setdiff(names(engine_control), names(defaults))
-    if (length(unknown)) {
-        stop(
-            'Unknown engine_control field(s): ',
-            paste(unknown, collapse = ', '), '.', call. = FALSE
-        )
-    }
-    out <- utils::modifyList(defaults, engine_control, keep.null = TRUE)
-    scalar_integer <- function(value, label, minimum = 1L) {
-        if (!is.numeric(value) || length(value) != 1L || is.na(value) ||
-            !is.finite(value) || value < minimum ||
-            value > .Machine$integer.max || value != floor(value)) {
-            stop(label, ' must be one integer >= ', minimum, '.', call. = FALSE)
-        }
-        as.integer(value)
-    }
-    if (!is.null(out$memory_budget_mb) &&
-        (!is.numeric(out$memory_budget_mb) ||
-         length(out$memory_budget_mb) != 1L ||
-         !is.finite(out$memory_budget_mb) || out$memory_budget_mb <= 0)) {
-        stop('engine_control$memory_budget_mb must be NULL or positive.',
-             call. = FALSE)
-    }
-    out$dense_max_p <- scalar_integer(
-        out$dense_max_p, 'engine_control$dense_max_p'
-    )
-    out$lambda_batch_size <- scalar_integer(
-        out$lambda_batch_size, 'engine_control$lambda_batch_size'
-    )
-    out$refit_pcg_max_iter <- scalar_integer(
-        out$refit_pcg_max_iter, 'engine_control$refit_pcg_max_iter'
-    )
-    if (!is.numeric(out$refit_pcg_tol) ||
-        length(out$refit_pcg_tol) != 1L ||
-        !is.finite(out$refit_pcg_tol) || out$refit_pcg_tol <= 0) {
-        stop('engine_control$refit_pcg_tol must be positive.', call. = FALSE)
-    }
-    out$preconditioner <- match.arg(
-        out$preconditioner, c('hybrid', 'diagonal')
-    )
-    out$diagnostics_level <- match.arg(
-        out$diagnostics_level, c('full', 'compact')
-    )
-    if (!is.null(out$checkpoint_dir) &&
-        (!is.character(out$checkpoint_dir) ||
-         length(out$checkpoint_dir) != 1L || is.na(out$checkpoint_dir) ||
-         !nzchar(trimws(out$checkpoint_dir)))) {
-        stop('engine_control$checkpoint_dir must be NULL or one path.',
-             call. = FALSE)
-    }
-    if (length(out$resume) != 1L || is.na(out$resume) ||
-        !is.logical(out$resume)) {
-        stop('engine_control$resume must be TRUE or FALSE.', call. = FALSE)
-    }
-    out
 }
 
 .condition_resolve_levels <- function(metadata, condition_col) {
@@ -319,139 +14,1201 @@ infer_condition_grn.GRNData <- function(
         !nzchar(trimws(condition_col)) || !condition_col %in% colnames(metadata)) {
         return(character())
     }
-    values <- trimws(as.character(metadata[[condition_col]]))
-    values <- values[!is.na(values) & nzchar(values)]
-    unique(values)
+    value <- trimws(as.character(metadata[[condition_col]]))
+    value <- value[!is.na(value) & nzchar(value)]
+    unique(value)
 }
 
-.condition_run_standard_fallback <- function(
-    object, metadata, cell_type_col, cell_type, condition_col, condition_levels,
-    genes, network_name, peak_to_gene_method, upstream, downstream, extend,
-    only_tss, parallel, tf_cor, peak_cor, alpha, fallback_args, verbose
-) {
-    if (!is.null(cell_type)) {
-        if (is.null(cell_type_col) || !is.character(cell_type_col) ||
-            length(cell_type_col) != 1L || !cell_type_col %in% colnames(metadata)) {
-            stop('cell_type_col must identify a metadata column when cell_type is supplied.')
-        }
-        requested <- unique(trimws(as.character(cell_type)))
-        available <- unique(as.character(metadata[[cell_type_col]]))
-        missing <- setdiff(requested, available)
-        if (length(missing)) {
-            stop('Requested cell_type value(s) were not found: ', paste(missing, collapse = ', '), '.')
-        }
-        cells <- rownames(metadata)[as.character(metadata[[cell_type_col]]) %in% requested]
-        object@data <- subset(object@data, cells = cells)
+.condition_validate_labels <- function(metadata, columns) {
+    missing <- setdiff(columns, colnames(metadata))
+    if (length(missing)) {
+        stop("Missing metadata column(s): ", paste(missing, collapse = ", "),
+             call. = FALSE)
     }
-    managed <- c(
-        'object', 'genes', 'network_name', 'peak_to_gene_method', 'upstream',
-        'downstream', 'extend', 'only_tss', 'parallel', 'tf_cor', 'peak_cor',
-        'alpha', 'verbose'
+    for (column in columns) {
+        value <- as.character(metadata[[column]])
+        if (anyNA(value) || any(!nzchar(trimws(value))) || any(value != trimws(value))) {
+            stop("Metadata column `", column,
+                 "` must contain complete labels without surrounding whitespace.",
+                 call. = FALSE)
+        }
+    }
+    invisible(TRUE)
+}
+
+.condition_prepare_common_input <- function(
+    object, genes = NULL, peak_to_gene_method = c("Signac", "GREAT"),
+    upstream = 100000, downstream = 0, extend = 1000000,
+    only_tss = FALSE, peak_to_gene_domains = NULL, verbose = TRUE) {
+    if (!inherits(object, "GRNData")) {
+        stop("`object` must be a GRNData object.", call. = FALSE)
+    }
+    peak_to_gene_method <- match.arg(peak_to_gene_method)
+    params <- Params(object)
+    motif2tf <- NetworkTFs(object)
+    if (is.null(motif2tf)) {
+        stop("Motif matches are missing; run `find_motifs()` first.",
+             call. = FALSE)
+    }
+    gene_annot <- Signac::Annotation(GetAssay(object, params$peak_assay))
+    if (is.null(gene_annot)) {
+        stop("The peak assay requires a gene annotation.", call. = FALSE)
+    }
+    if (is.null(genes)) {
+        genes <- VariableFeatures(object, assay = params$rna_assay)
+    }
+    genes <- unique(as.character(genes))
+    if (!length(genes)) {
+        stop("No target genes were supplied or found as variable features.",
+             call. = FALSE)
+    }
+
+    gene_data <- Matrix::t(LayerData(
+        object, assay = params$rna_assay, layer = "data"
+    ))
+    peak_data_all <- Matrix::t(LayerData(
+        object, assay = params$peak_assay, layer = "data"
+    ))
+    common_cells <- intersect(rownames(gene_data), rownames(peak_data_all))
+    if (!length(common_cells)) {
+        stop("RNA and ATAC assays do not share paired cells.", call. = FALSE)
+    }
+    gene_data <- gene_data[common_cells, , drop = FALSE]
+    peak_data_all <- peak_data_all[common_cells, , drop = FALSE]
+
+    features <- intersect(gene_annot$gene_name, genes)
+    features <- intersect(features, colnames(gene_data))
+    features <- unique(as.character(features))
+    if (!length(features)) {
+        stop("No requested target overlaps the RNA assay and annotation.",
+             call. = FALSE)
+    }
+    gene_annot <- gene_annot[gene_annot$gene_name %in% features, ]
+
+    regions <- NetworkRegions(object)
+    if (!length(regions@peaks) || is.null(regions@motifs) ||
+        !nrow(regions@motifs@data)) {
+        stop("Pando regions lack measured-peak or motif mappings.",
+             call. = FALSE)
+    }
+    if (any(regions@peaks < 1L | regions@peaks > ncol(peak_data_all))) {
+        stop("Pando region-to-peak indices are out of range.", call. = FALSE)
+    }
+    peak_data <- peak_data_all[, regions@peaks, drop = FALSE]
+    atac_feature_id <- colnames(peak_data)
+    peaks2motif <- regions@motifs@data
+    region_id <- rownames(peaks2motif)
+    if (is.null(region_id) || length(region_id) != ncol(peak_data) ||
+        anyNA(region_id) || any(!nzchar(region_id)) || anyDuplicated(region_id)) {
+        stop("Motif regions require unique IDs aligned to measured peaks.",
+             call. = FALSE)
+    }
+    colnames(peak_data) <- region_id
+
+    log_message("Selecting candidate regulatory regions near targets",
+                verbose = verbose)
+    if (is.null(peak_to_gene_domains)) {
+        peaks_near_gene <- find_peaks_near_genes(
+            peaks = regions@ranges,
+            method = peak_to_gene_method,
+            genes = gene_annot,
+            upstream = upstream,
+            downstream = downstream,
+            extend = extend,
+            only_tss = only_tss
+        )
+    } else {
+        peaks_near_gene <- find_peaks_near_genes(
+            peaks = regions@ranges,
+            method = "Signac",
+            genes = peak_to_gene_domains,
+            upstream = 0,
+            downstream = 0,
+            extend = extend,
+            only_tss = FALSE
+        )
+    }
+    peaks2gene <- aggregate_matrix(
+        t(peaks_near_gene), groups = colnames(peaks_near_gene), fun = "sum"
     )
-    conflict <- intersect(names(fallback_args), managed)
-    if (length(conflict)) {
-        stop('fallback_args cannot override managed fields: ', paste(conflict, collapse = ', '), '.')
+
+    common_regions <- Reduce(intersect, list(
+        colnames(peaks2gene), rownames(peaks2motif), colnames(peak_data)
+    ))
+    common_regions <- colnames(peaks2gene)[
+        colnames(peaks2gene) %in% common_regions
+    ]
+    if (!length(common_regions) || anyDuplicated(common_regions)) {
+        stop("Peak-to-gene, motif and ATAC matrices do not share unique regions.",
+             call. = FALSE)
     }
-    defaults <- list(
-        object = object,
-        genes = genes,
-        network_name = network_name,
+    peaks2gene <- peaks2gene[, common_regions, drop = FALSE]
+    peaks2motif <- peaks2motif[common_regions, , drop = FALSE]
+    peak_data <- peak_data[, common_regions, drop = FALSE]
+
+    tfs <- intersect(colnames(motif2tf), colnames(gene_data))
+    motif2tf <- motif2tf[, tfs, drop = FALSE]
+    motif_ids <- intersect(colnames(peaks2motif), rownames(motif2tf))
+    motif_ids <- colnames(peaks2motif)[colnames(peaks2motif) %in% motif_ids]
+    if (!length(motif_ids) || anyDuplicated(motif_ids)) {
+        stop("Motif matches and motif-to-TF mappings do not share unique IDs.",
+             call. = FALSE)
+    }
+    peaks2motif <- peaks2motif[, motif_ids, drop = FALSE]
+    motif2tf <- motif2tf[motif_ids, , drop = FALSE]
+
+    peaks_at_gene <- as.logical(sparseMatrixStats::colMaxs(peaks2gene))
+    peaks_with_motif <- as.logical(sparseMatrixStats::rowMaxs(peaks2motif * 1))
+    keep <- peaks_at_gene & peaks_with_motif
+    peaks2gene <- peaks2gene[, keep, drop = FALSE]
+    peaks2motif <- peaks2motif[keep, , drop = FALSE]
+    peak_data <- peak_data[, keep, drop = FALSE]
+
+    region_lookup <- stats::setNames(atac_feature_id, region_id)
+    region_map <- data.frame(
+        region = colnames(peak_data),
+        atac_feature_id = unname(region_lookup[colnames(peak_data)]),
+        stringsAsFactors = FALSE
+    )
+    if (anyNA(region_map$atac_feature_id)) {
+        stop("A regulatory region lacks a measured ATAC feature mapping.",
+             call. = FALSE)
+    }
+    list(
+        gene_data = gene_data,
+        peak_data = peak_data,
+        peak_data_all = peak_data_all,
+        features = features,
+        peaks2gene = peaks2gene,
+        peaks2motif = peaks2motif,
+        motif2tf = motif2tf,
+        region_map = region_map,
+        params = params,
         peak_to_gene_method = peak_to_gene_method,
         upstream = upstream,
         downstream = downstream,
         extend = extend,
+        only_tss = only_tss
+    )
+}
+
+.condition_discover_edges_prepared <- function(
+    prepared, cells, source_label, source_type, tf_cor, peak_cor,
+    parallel = FALSE, verbose = TRUE) {
+    cells <- intersect(as.character(cells), rownames(prepared$gene_data))
+    if (length(cells) < 3L) {
+        stop("Candidate discovery requires at least three paired cells.",
+             call. = FALSE)
+    }
+    if (!is.numeric(tf_cor) || length(tf_cor) != 1L || !is.finite(tf_cor) ||
+        tf_cor < 0 || tf_cor > 1 || !is.numeric(peak_cor) ||
+        length(peak_cor) != 1L || !is.finite(peak_cor) ||
+        peak_cor < 0 || peak_cor > 1) {
+        stop("`tf_cor` and `peak_cor` must be finite values in [0, 1].",
+             call. = FALSE)
+    }
+    features <- prepared$features
+    names(features) <- features
+    rows <- map_par(features, function(target) {
+        if (!target %in% rownames(prepared$peaks2gene)) return(NULL)
+        gene_peak_mask <- as.logical(prepared$peaks2gene[target, ])
+        if (!any(gene_peak_mask)) return(NULL)
+        target_x <- prepared$gene_data[cells, target, drop = FALSE]
+        peak_x <- prepared$peak_data[cells, gene_peak_mask, drop = FALSE]
+        peak_cor_matrix <- methods::as(
+            sparse_cor(peak_x, target_x), "generalMatrix"
+        )
+        peak_cor_matrix[is.na(peak_cor_matrix)] <- 0
+        selected_regions <- rownames(peak_cor_matrix)[
+            abs(peak_cor_matrix[, 1L]) > peak_cor
+        ]
+        if (!length(selected_regions)) return(NULL)
+        peak_motifs <- prepared$peaks2motif[
+            selected_regions, , drop = FALSE
+        ]
+        region_tfs <- lapply(selected_regions, function(region) {
+            motif_present <- as.logical(peak_motifs[region, , drop = TRUE])
+            if (!any(motif_present)) return(character())
+            present <- sparseMatrixStats::colMaxs(
+                prepared$motif2tf[motif_present, , drop = FALSE]
+            )
+            setdiff(colnames(prepared$motif2tf)[as.logical(present)], target)
+        })
+        names(region_tfs) <- selected_regions
+        candidate_tfs <- unique(unlist(region_tfs, use.names = FALSE))
+        if (!length(candidate_tfs)) return(NULL)
+        tf_x <- prepared$gene_data[cells, candidate_tfs, drop = FALSE]
+        tf_cor_matrix <- methods::as(
+            sparse_cor(tf_x, target_x), "generalMatrix"
+        )
+        tf_cor_matrix[is.na(tf_cor_matrix)] <- 0
+        selected_tfs <- rownames(tf_cor_matrix)[
+            abs(tf_cor_matrix[, 1L]) > tf_cor
+        ]
+        if (!length(selected_tfs)) return(NULL)
+        edge_rows <- lapply(selected_regions, function(region) {
+            tf <- intersect(region_tfs[[region]], selected_tfs)
+            if (!length(tf)) return(NULL)
+            data.frame(
+                target = target,
+                tf = tf,
+                region = region,
+                atac_feature_id = prepared$region_map$atac_feature_id[
+                    match(region, prepared$region_map$region)
+                ],
+                peak_target_cor = as.numeric(peak_cor_matrix[region, 1L]),
+                tf_target_cor = as.numeric(tf_cor_matrix[tf, 1L]),
+                source_label = source_label,
+                source_type = source_type,
+                stringsAsFactors = FALSE
+            )
+        })
+        edge_rows <- edge_rows[!vapply(edge_rows, is.null, logical(1))]
+        if (!length(edge_rows)) return(NULL)
+        do.call(rbind, edge_rows)
+    }, verbose = verbose, parallel = parallel)
+    rows <- rows[!vapply(rows, is.null, logical(1))]
+    if (!length(rows)) {
+        out <- data.frame(
+            target = character(), tf = character(), region = character(),
+            atac_feature_id = character(), peak_target_cor = numeric(),
+            tf_target_cor = numeric(), source_label = character(),
+            source_type = character(), edge_id = character(),
+            stringsAsFactors = FALSE
+        )
+    } else {
+        out <- unique(do.call(rbind, rows))
+        out$edge_id <- paste(out$target, out$tf, out$region, sep = "||")
+        out <- out[order(out$target, out$tf, out$region), , drop = FALSE]
+        rownames(out) <- NULL
+    }
+    class(out) <- c("PandoEdgeDictionary", "data.frame")
+    attr(out, "source_label") <- source_label
+    attr(out, "source_type") <- source_type
+    out
+}
+
+#' Discover Pando TF-peak-target candidate edges
+#'
+#' Runs the original Pando domain, motif, peak-target correlation and TF-target
+#' correlation candidate steps without using the resulting coefficients as the
+#' final condition effect.
+#'
+#' @param object A `GRNData` object after `find_motifs()`.
+#' @param genes Target genes.
+#' @param cells Paired cells used for candidate discovery.
+#' @param source_label Label stored with the candidate source.
+#' @param source_type Either `"global"` or `"condition"`.
+#' @param tf_cor,peak_cor Absolute correlation thresholds.
+#' @param ... Regulatory-domain and execution arguments.
+#' @return A `PandoEdgeDictionary` data frame.
+#' @export
+discover_grn_edges <- function(
+    object, genes = NULL, cells = NULL, source_label = "global",
+    source_type = c("global", "condition"), tf_cor = 0.1, peak_cor = 0,
+    peak_to_gene_method = c("Signac", "GREAT"), upstream = 100000,
+    downstream = 0, extend = 1000000, only_tss = FALSE,
+    peak_to_gene_domains = NULL, parallel = FALSE, verbose = TRUE) {
+    source_type <- match.arg(source_type)
+    prepared <- .condition_prepare_common_input(
+        object = object, genes = genes,
+        peak_to_gene_method = peak_to_gene_method,
+        upstream = upstream, downstream = downstream, extend = extend,
         only_tss = only_tss,
-        parallel = parallel,
-        tf_cor = tf_cor,
-        peak_cor = peak_cor,
-        alpha = alpha,
+        peak_to_gene_domains = peak_to_gene_domains,
         verbose = verbose
     )
-    do.call(infer_grn, c(defaults, fallback_args))
+    if (is.null(cells)) cells <- rownames(prepared$gene_data)
+    .condition_discover_edges_prepared(
+        prepared = prepared, cells = cells, source_label = source_label,
+        source_type = source_type, tf_cor = tf_cor, peak_cor = peak_cor,
+        parallel = parallel, verbose = verbose
+    )
 }
 
-.condition_validate_public_args <- function(
-    object, cell_type_col, condition_col, scale, alpha, condition_mix,
-    comparison_conditions, nlambda, lambda, outer_nfolds, inner_nfolds,
-    min_cells_per_condition, active_tol, max_iter, tol_objective, tol_coef,
-    tf_cor, peak_cor, lambda_min_ratio, parallel, overwrite, seed, verbose
-) {
-    if (!inherits(object, 'GRNData')) stop('object must be a GRNData object.')
-    metadata <- object@data@meta.data
-    .condition_validate_analysis_metadata(metadata, cell_type_col, condition_col)
-    if (!isTRUE(scale)) stop('Condition GRN comparability requires scale = TRUE.')
-    if (!is.numeric(alpha) || length(alpha) != 1L || !is.finite(alpha) ||
-        alpha < 0 || alpha > 1) stop('alpha must be between 0 and 1.')
-    if (!is.numeric(condition_mix) || length(condition_mix) != 1L ||
-        !is.finite(condition_mix) || condition_mix <= 0 || condition_mix > 1) {
-        stop('condition_mix must be in (0, 1].')
+#' Union exact Pando TF-peak-target candidate triples
+#'
+#' @param global_edges Optional global candidate table.
+#' @param condition_edges Named list of condition candidate tables.
+#' @return A common `PandoEdgeDictionary`.
+#' @export
+union_grn_edges <- function(global_edges = NULL, condition_edges) {
+    if (!is.list(condition_edges) || !length(condition_edges) ||
+        is.null(names(condition_edges)) || any(!nzchar(names(condition_edges)))) {
+        stop("`condition_edges` must be a non-empty named list.",
+             call. = FALSE)
     }
-    if (!is.null(comparison_conditions)) {
-        comparison_conditions <- as.character(comparison_conditions)
-        if (length(comparison_conditions) < 2L || anyNA(comparison_conditions) ||
-            any(!nzchar(trimws(comparison_conditions))) ||
-            anyDuplicated(comparison_conditions)) {
-            stop('comparison_conditions must contain at least two unique labels.')
+    inputs <- condition_edges
+    if (!is.null(global_edges)) inputs <- c(list(global = global_edges), inputs)
+    required <- c("target", "tf", "region", "atac_feature_id")
+    if (any(vapply(inputs, function(x) {
+        !is.data.frame(x) || !all(required %in% colnames(x))
+    }, logical(1)))) {
+        stop("Every candidate table requires target, tf, region and ATAC IDs.",
+             call. = FALSE)
+    }
+    all_rows <- do.call(rbind, lapply(seq_along(inputs), function(i) {
+        x <- as.data.frame(inputs[[i]], stringsAsFactors = FALSE)
+        if (!nrow(x)) return(NULL)
+        x$.union_source <- names(inputs)[[i]]
+        x
+    }))
+    if (is.null(all_rows) || !nrow(all_rows)) {
+        stop("Candidate discovery returned no TF-peak-target edge.",
+             call. = FALSE)
+    }
+    key <- paste(all_rows$target, all_rows$tf, all_rows$region, sep = "\001")
+    groups <- split(seq_len(nrow(all_rows)), key)
+    dictionary <- do.call(rbind, lapply(groups, function(index) {
+        one <- all_rows[index, , drop = FALSE]
+        out <- one[1L, c("target", "tf", "region", "atac_feature_id"),
+                   drop = FALSE]
+        source <- unique(as.character(one$.union_source))
+        condition_source <- sort(setdiff(source, "global"))
+        out$source_global <- "global" %in% source
+        out$source_conditions <- paste(condition_source, collapse = ";")
+        out$n_sources <- length(source)
+        safe_max_abs <- function(value) {
+            value <- abs(as.numeric(value))
+            value <- value[is.finite(value)]
+            if (length(value)) max(value) else NA_real_
+        }
+        out$max_abs_peak_target_cor <- if ("peak_target_cor" %in% colnames(one)) {
+            safe_max_abs(one$peak_target_cor)
+        } else NA_real_
+        out$max_abs_tf_target_cor <- if ("tf_target_cor" %in% colnames(one)) {
+            safe_max_abs(one$tf_target_cor)
+        } else NA_real_
+        out
+    }))
+    dictionary$edge_id <- paste(
+        dictionary$target, dictionary$tf, dictionary$region, sep = "||"
+    )
+    dictionary <- dictionary[order(
+        dictionary$target, dictionary$tf, dictionary$region
+    ), , drop = FALSE]
+    dictionary$candidate_index <- seq_len(nrow(dictionary))
+    rownames(dictionary) <- NULL
+    if (anyDuplicated(dictionary$edge_id)) {
+        stop("Exact edge union produced duplicated triples.", call. = FALSE)
+    }
+    class(dictionary) <- c("PandoEdgeDictionary", "data.frame")
+    dictionary
+}
+
+.condition_validate_dictionary <- function(dictionary, prepared) {
+    required <- c(
+        "edge_id", "target", "tf", "region", "atac_feature_id",
+        "candidate_index"
+    )
+    if (!is.data.frame(dictionary) || !all(required %in% colnames(dictionary)) ||
+        anyNA(dictionary$edge_id) || any(!nzchar(dictionary$edge_id)) ||
+        anyDuplicated(dictionary$edge_id)) {
+        stop("The common edge dictionary is invalid.", call. = FALSE)
+    }
+    expected <- paste(dictionary$target, dictionary$tf, dictionary$region,
+                      sep = "||")
+    if (!identical(as.character(dictionary$edge_id), expected)) {
+        stop("Dictionary edge IDs do not match exact target-TF-region triples.",
+             call. = FALSE)
+    }
+    if (any(!dictionary$target %in% colnames(prepared$gene_data)) ||
+        any(!dictionary$tf %in% colnames(prepared$gene_data)) ||
+        any(!dictionary$region %in% colnames(prepared$peak_data))) {
+        stop("Dictionary targets, TFs or regions are absent from the input.",
+             call. = FALSE)
+    }
+    mapped <- prepared$region_map$atac_feature_id[
+        match(dictionary$region, prepared$region_map$region)
+    ]
+    if (anyNA(mapped) || !identical(as.character(mapped),
+                                    as.character(dictionary$atac_feature_id))) {
+        stop("Dictionary region-to-ATAC mappings differ from the fitted object.",
+             call. = FALSE)
+    }
+    invisible(TRUE)
+}
+
+.condition_fit_target_matrix <- function(
+    response, predictor, terms, rank_action = c("mark", "error"),
+    min_residual_df = 1L) {
+    rank_action <- match.arg(rank_action)
+    response <- as.numeric(response)
+    predictor <- as.matrix(predictor)
+    if (length(response) != nrow(predictor) || ncol(predictor) != length(terms)) {
+        stop("Target response and fixed-dictionary matrix are misaligned.",
+             call. = FALSE)
+    }
+    template <- data.frame(
+        term = terms, estimate = NA_real_, std_err = NA_real_,
+        statistic = NA_real_, pval = NA_real_, estimable = FALSE,
+        zero_variance = FALSE, aliased = FALSE,
+        stringsAsFactors = FALSE
+    )
+    if (!all(is.finite(response)) || !all(is.finite(predictor))) {
+        return(list(
+            coefs = template,
+            gof = data.frame(
+                rsq = NA_real_, rank = NA_integer_, residual_df = NA_integer_,
+                condition_number = NA_real_, fit_status = "nonfinite_input",
+                intercept = NA_real_, stringsAsFactors = FALSE
+            )
+        ))
+    }
+    variance <- apply(predictor, 2L, stats::var)
+    template$zero_variance <- !is.finite(variance) | variance <= 0
+    if (nrow(predictor) <= 1L ||
+        nrow(predictor) - 1L < as.integer(min_residual_df)) {
+        return(list(
+            coefs = template,
+            gof = data.frame(
+                rsq = NA_real_, rank = NA_integer_, residual_df = 0L,
+                condition_number = NA_real_, fit_status = "insufficient_df",
+                intercept = NA_real_, stringsAsFactors = FALSE
+            )
+        ))
+    }
+    colnames(predictor) <- terms
+    model_data <- data.frame(
+        target_response = response, predictor, check.names = FALSE
+    )
+    fit <- tryCatch(
+        stats::glm(
+            target_response ~ ., data = model_data,
+            family = stats::gaussian(link = "identity")
+        ),
+        error = function(error) error
+    )
+    if (inherits(fit, "error")) {
+        return(list(
+            coefs = template,
+            gof = data.frame(
+                rsq = NA_real_, rank = NA_integer_, residual_df = NA_integer_,
+                condition_number = NA_real_, fit_status = "failed",
+                intercept = NA_real_, stringsAsFactors = FALSE
+            )
+        ))
+    }
+    coefficient <- stats::coef(fit)
+    summary_matrix <- summary(fit)$coefficients
+    for (j in seq_along(terms)) {
+        term <- terms[[j]]
+        template$estimate[[j]] <- unname(coefficient[[term]])
+        if (term %in% rownames(summary_matrix)) {
+            template$std_err[[j]] <- summary_matrix[term, 2L]
+            template$statistic[[j]] <- summary_matrix[term, 3L]
+            template$pval[[j]] <- summary_matrix[term, 4L]
         }
     }
-    if (!is.numeric(nlambda) || length(nlambda) != 1L || !is.finite(nlambda) ||
-        nlambda < 1L || nlambda != as.integer(nlambda)) stop('nlambda must be a positive integer.')
-    if (is.null(lambda) && nlambda < 2L) stop('nlambda must be at least 2 when lambda is generated.')
-    if (!is.null(lambda) && (!is.numeric(lambda) || !length(lambda) ||
-        any(!is.finite(lambda)) || any(lambda < 0))) stop('lambda must contain finite non-negative values.')
-    folds <- c(outer_nfolds, inner_nfolds)
-    if (any(!is.finite(folds)) || any(folds < 2L) || any(folds != as.integer(folds))) {
-        stop('outer_nfolds and inner_nfolds must be integers >= 2.')
+    template$estimable <- is.finite(template$estimate)
+    template$aliased <- !template$estimable
+    if (identical(rank_action, "error") && any(template$aliased)) {
+        stop("The fixed dictionary is rank deficient for this target.",
+             call. = FALSE)
     }
-    if (!is.numeric(min_cells_per_condition) || length(min_cells_per_condition) != 1L ||
-        !is.finite(min_cells_per_condition) || min_cells_per_condition < outer_nfolds ||
-        min_cells_per_condition != as.integer(min_cells_per_condition)) {
-        stop('min_cells_per_condition must be an integer >= outer_nfolds.')
+    rsq <- if (is.finite(fit$null.deviance) && fit$null.deviance > 0) {
+        1 - fit$deviance / fit$null.deviance
+    } else NA_real_
+    condition_number <- if (ncol(predictor) <= 2000L) {
+        tryCatch(
+            as.numeric(kappa(stats::model.matrix(fit), exact = FALSE)),
+            error = function(error) NA_real_
+        )
+    } else NA_real_
+    status <- if (fit$df.residual < as.integer(min_residual_df)) {
+        "insufficient_df"
+    } else if (any(template$aliased)) {
+        "rank_deficient"
+    } else {
+        "ok"
     }
-    correlation_thresholds <- c(tf_cor, peak_cor)
-    if (any(!is.finite(correlation_thresholds)) ||
-        any(correlation_thresholds < 0 | correlation_thresholds > 1)) {
-        stop('tf_cor and peak_cor must be in [0, 1].')
-    }
-    if (!is.null(lambda_min_ratio) && (!is.numeric(lambda_min_ratio) ||
-        length(lambda_min_ratio) != 1L || !is.finite(lambda_min_ratio) ||
-        lambda_min_ratio <= 0 || lambda_min_ratio >= 1)) {
-        stop('lambda_min_ratio must be NULL or in (0, 1).')
-    }
-    if (!is.numeric(active_tol) || length(active_tol) != 1L ||
-        !is.finite(active_tol) || active_tol < 0) stop('active_tol must be non-negative.')
-    if (!is.numeric(max_iter) || length(max_iter) != 1L || !is.finite(max_iter) ||
-        max_iter < 1L || max_iter != as.integer(max_iter) ||
-        !is.numeric(tol_objective) || length(tol_objective) != 1L ||
-        !is.finite(tol_objective) || tol_objective <= 0 ||
-        !is.numeric(tol_coef) || length(tol_coef) != 1L ||
-        !is.finite(tol_coef) || tol_coef <= 0) {
-        stop('Solver iteration and tolerance parameters are invalid.')
-    }
-    logical_controls <- list(parallel = parallel, overwrite = overwrite, verbose = verbose)
-    if (any(vapply(logical_controls, function(x) !is.logical(x) || length(x) != 1L || is.na(x), logical(1)))) {
-        stop('parallel, overwrite, and verbose must be TRUE or FALSE.')
-    }
-    if (!is.numeric(seed) || length(seed) != 1L || !is.finite(seed) ||
-        seed != as.integer(seed)) stop('seed must be one finite integer.')
-    invisible(TRUE)
+    list(
+        coefs = template,
+        gof = data.frame(
+            rsq = rsq, rank = as.integer(fit$rank),
+            residual_df = as.integer(fit$df.residual),
+            condition_number = condition_number, fit_status = status,
+            intercept = unname(coefficient[["(Intercept)"]]),
+            stringsAsFactors = FALSE
+        )
+    )
 }
 
-.condition_validate_analysis_metadata <- function(metadata, cell_type_col, condition_col) {
-    columns <- c(cell_type_col, condition_col)
-    if (anyNA(columns) || any(!nzchar(trimws(columns))) ||
-        length(unique(columns)) != 2L) {
-        stop('cell_type_col and condition_col must be different non-empty column names.')
+.condition_fit_dictionary_prepared <- function(
+    object, prepared, edge_dictionary, cells, condition_label,
+    network_name, adjust_method, padj_threshold, rank_action,
+    min_residual_df, parallel, verbose, overwrite) {
+    .condition_validate_dictionary(edge_dictionary, prepared)
+    cells <- intersect(as.character(cells), rownames(prepared$gene_data))
+    if (length(cells) < 3L) {
+        stop("Fixed-dictionary fitting requires at least three paired cells.",
+             call. = FALSE)
     }
-    missing <- setdiff(columns, colnames(metadata))
-    if (length(missing)) stop('Missing metadata column(s): ', paste(missing, collapse = ', '), '.')
-    labels <- lapply(metadata[, columns, drop = FALSE], as.character)
-    invalid <- vapply(labels, function(x) anyNA(x) || any(!nzchar(trimws(x))) || any(x != trimws(x)), logical(1))
-    if (any(invalid)) {
-        stop('Cell-type and condition labels must be complete and free of surrounding whitespace.')
+    if (network_name %in% names(object@grn@networks) && !isTRUE(overwrite)) {
+        stop("Network `", network_name, "` already exists; set overwrite=TRUE.",
+             call. = FALSE)
     }
-    if (length(unique(labels[[2L]])) < 2L) {
-        stop('Condition-aware fitting requires at least two condition levels.')
+    targets <- unique(as.character(edge_dictionary$target))
+    names(targets) <- targets
+    result <- map_par(targets, function(target) {
+        edges <- edge_dictionary[edge_dictionary$target == target, , drop = FALSE]
+        terms <- sprintf("edge_%07d", edges$candidate_index)
+        predictor <- vapply(seq_len(nrow(edges)), function(j) {
+            as.numeric(prepared$gene_data[cells, edges$tf[[j]]]) *
+                as.numeric(prepared$peak_data[cells, edges$region[[j]]])
+        }, numeric(length(cells)))
+        if (is.null(dim(predictor))) {
+            predictor <- matrix(predictor, ncol = 1L)
+        }
+        fit <- .condition_fit_target_matrix(
+            response = prepared$gene_data[cells, target],
+            predictor = predictor,
+            terms = terms,
+            rank_action = rank_action,
+            min_residual_df = min_residual_df
+        )
+        fit$coefs$target <- target
+        fit$coefs$tf <- edges$tf
+        fit$coefs$region <- edges$region
+        fit$coefs$atac_feature_id <- edges$atac_feature_id
+        fit$coefs$edge_id <- edges$edge_id
+        fit$coefs$candidate_index <- edges$candidate_index
+        fit$coefs$source_global <- edges$source_global
+        fit$coefs$source_conditions <- edges$source_conditions
+        fit$coefs$n_sources <- edges$n_sources
+        fit$gof$target <- target
+        fit$gof$nvariables_dictionary <- nrow(edges)
+        fit$gof$nvariables_estimable <- sum(fit$coefs$estimable)
+        fit$gof$n_zero_variance <- sum(fit$coefs$zero_variance)
+        fit$gof$n_aliased <- sum(fit$coefs$aliased)
+        fit
+    }, verbose = verbose, parallel = parallel)
+    coefficient <- do.call(rbind, lapply(result, `[[`, "coefs"))
+    fit_table <- do.call(rbind, lapply(result, `[[`, "gof"))
+    rownames(coefficient) <- rownames(fit_table) <- NULL
+    coefficient$padj <- NA_real_
+    valid <- is.finite(coefficient$pval)
+    coefficient$padj[valid] <- stats::p.adjust(
+        coefficient$pval[valid], method = adjust_method
+    )
+    coefficient$significant <- coefficient$estimable &
+        is.finite(coefficient$padj) & coefficient$padj < padj_threshold
+    coefficient$penalty_effect <- ifelse(
+        coefficient$significant, coefficient$estimate, 0
+    )
+    coefficient$direction <- ifelse(
+        !coefficient$estimable, "undefined",
+        ifelse(coefficient$estimate > 0, "positive",
+               ifelse(coefficient$estimate < 0, "negative", "zero"))
+    )
+    coefficient$condition <- condition_label
+    coefficient$effect_definition <- "fixed_dictionary_condition_glm_coefficient"
+    coefficient$inference_scope <- "conditional_on_selected_edge_dictionary"
+    coefficient <- coefficient[, c(
+        "tf", "target", "region", "term", "edge_id", "atac_feature_id",
+        "estimate", "std_err", "statistic", "pval", "padj",
+        "significant", "penalty_effect", "direction", "estimable",
+        "zero_variance", "aliased", "condition", "candidate_index",
+        "source_global", "source_conditions", "n_sources",
+        "effect_definition", "inference_scope"
+    ), drop = FALSE]
+    fit_table$condition <- condition_label
+    fit_table$n_cells <- length(cells)
+    network <- methods::new(
+        Class = "Network",
+        features = unique(as.character(coefficient$target)),
+        coefs = coefficient,
+        fit = fit_table,
+        params = list(
+            method = "glm",
+            family = "gaussian_identity",
+            fit_mode = "fixed_edge_dictionary",
+            condition = condition_label,
+            edge_dictionary = edge_dictionary,
+            scale = FALSE,
+            interaction = ":",
+            adjust_method = adjust_method,
+            padj_threshold = padj_threshold,
+            inference_scope = "conditional_on_selected_edge_dictionary"
+        )
+    )
+    object@grn@networks[[network_name]] <- network
+    object@grn@active_network <- network_name
+    list(object = object, network = network, coefficients = coefficient,
+         fit = fit_table)
+}
+
+#' Fit a Pando Gaussian GLM from a frozen edge dictionary
+#'
+#' @param object A `GRNData` object.
+#' @param edge_dictionary Exact common TF-peak-target dictionary.
+#' @param cells Cells belonging to one condition.
+#' @param condition_label Condition label.
+#' @param network_name Output Pando network name.
+#' @param adjust_method Multiple-testing method passed to `p.adjust()`.
+#' @param padj_threshold Adjusted-P threshold defining effects used by penalty.
+#' @param rank_action Mark or error on aliased coefficients.
+#' @param min_residual_df Minimum residual degrees of freedom.
+#' @param ... Regulatory-domain and execution arguments.
+#' @return The input `GRNData` with one added standard `Network` object.
+#' @export
+fit_grn_from_edges <- function(
+    object, edge_dictionary, cells = NULL, condition_label = NULL,
+    network_name = "fixed_dictionary_grn", adjust_method = "BH",
+    padj_threshold = 0.05, rank_action = c("mark", "error"),
+    min_residual_df = 1L, genes = NULL,
+    peak_to_gene_method = c("Signac", "GREAT"), upstream = 100000,
+    downstream = 0, extend = 1000000, only_tss = FALSE,
+    peak_to_gene_domains = NULL, parallel = FALSE, overwrite = FALSE,
+    verbose = TRUE) {
+    if (!is.numeric(padj_threshold) || length(padj_threshold) != 1L ||
+        !is.finite(padj_threshold) || padj_threshold <= 0 ||
+        padj_threshold >= 1) {
+        stop("`padj_threshold` must be one number in (0, 1).",
+             call. = FALSE)
     }
-    invisible(TRUE)
+    rank_action <- match.arg(rank_action)
+    prepared <- .condition_prepare_common_input(
+        object, genes = if (is.null(genes)) unique(edge_dictionary$target) else genes,
+        peak_to_gene_method = peak_to_gene_method,
+        upstream = upstream, downstream = downstream, extend = extend,
+        only_tss = only_tss, peak_to_gene_domains = peak_to_gene_domains,
+        verbose = verbose
+    )
+    if (is.null(cells)) cells <- rownames(prepared$gene_data)
+    if (is.null(condition_label)) condition_label <- "all"
+    .condition_fit_dictionary_prepared(
+        object = object, prepared = prepared,
+        edge_dictionary = edge_dictionary, cells = cells,
+        condition_label = as.character(condition_label),
+        network_name = network_name, adjust_method = adjust_method,
+        padj_threshold = padj_threshold, rank_action = rank_action,
+        min_residual_df = min_residual_df, parallel = parallel,
+        verbose = verbose, overwrite = overwrite
+    )$object
+}
+
+.condition_standard_by_cell_type <- function(
+    object, metadata, cell_type_col, cell_type, genes, network_name,
+    peak_to_gene_method, upstream, downstream, extend, only_tss,
+    parallel, tf_cor, peak_cor, fallback_args, verbose, overwrite) {
+    if (is.null(cell_type_col)) {
+        args <- list(
+            object = object, genes = genes, network_name = network_name,
+            peak_to_gene_method = peak_to_gene_method,
+            upstream = upstream, downstream = downstream, extend = extend,
+            only_tss = only_tss, parallel = parallel,
+            tf_cor = tf_cor, peak_cor = peak_cor, scale = FALSE,
+            interaction_term = ":", method = "glm", verbose = verbose
+        )
+        conflict <- intersect(names(fallback_args), names(args))
+        if (length(conflict)) {
+            stop("`fallback_args` cannot override: ",
+                 paste(conflict, collapse = ", "), call. = FALSE)
+        }
+        return(list(
+            object = do.call(infer_grn, c(args, fallback_args)),
+            network_index = data.frame(
+                cell_type = NA_character_, network_name = network_name,
+                stringsAsFactors = FALSE
+            )
+        ))
+    }
+    .condition_validate_labels(metadata, cell_type_col)
+    available <- unique(as.character(metadata[[cell_type_col]]))
+    requested <- if (is.null(cell_type)) available else unique(as.character(cell_type))
+    missing <- setdiff(requested, available)
+    if (length(missing)) {
+        stop("Requested cell type(s) were not found: ",
+             paste(missing, collapse = ", "), call. = FALSE)
+    }
+    index <- list()
+    for (label in requested) {
+        cells <- rownames(metadata)[as.character(metadata[[cell_type_col]]) == label]
+        one <- object
+        one@data <- subset(object@data, cells = cells)
+        one_name <- paste0(
+            network_name, "__", .condition_safe_label(label), "__standard"
+        )
+        if (one_name %in% names(object@grn@networks) && !isTRUE(overwrite)) {
+            stop("Network `", one_name, "` already exists.", call. = FALSE)
+        }
+        args <- list(
+            object = one, genes = genes, network_name = one_name,
+            peak_to_gene_method = peak_to_gene_method,
+            upstream = upstream, downstream = downstream, extend = extend,
+            only_tss = only_tss, parallel = parallel,
+            tf_cor = tf_cor, peak_cor = peak_cor, scale = FALSE,
+            interaction_term = ":", method = "glm", verbose = verbose
+        )
+        conflict <- intersect(names(fallback_args), names(args))
+        if (length(conflict)) {
+            stop("`fallback_args` cannot override: ",
+                 paste(conflict, collapse = ", "), call. = FALSE)
+        }
+        one <- do.call(infer_grn, c(args, fallback_args))
+        object@grn@networks[[one_name]] <- GetNetwork(one, one_name)
+        object@grn@active_network <- one_name
+        index[[length(index) + 1L]] <- data.frame(
+            cell_type = label, network_name = one_name,
+            n_cells = length(cells), stringsAsFactors = FALSE
+        )
+    }
+    list(object = object, network_index = do.call(rbind, index))
+}
+
+#' Infer comparable condition-specific Pando GRNs
+#'
+#' With two or more conditions in a cell type, candidate discovery is run on the
+#' complete cell type and separately in every condition. Exact TF-peak-target
+#' triples are unioned, frozen, and refitted by the original Gaussian identity
+#' Pando interaction model in each condition with `scale = FALSE`. BH-adjusted
+#' P values below `padj_threshold` define the effects passed downstream.
+#' Without a usable condition column, or with one condition level, original
+#' Pando GLMs are fitted independently for each requested cell type.
+#'
+#' @param object A `GRNData` object after motif matching.
+#' @param cell_type_col Broad cell-type metadata column.
+#' @param condition_col Condition metadata column; `NULL`, absent or one level
+#'   selects direct per-cell-type Pando.
+#' @param cell_type Optional cell-type subset.
+#' @param genes Target genes.
+#' @param network_name Prefix for generated networks.
+#' @param tf_cor,peak_cor Candidate-discovery thresholds.
+#' @param min_cells_per_condition Minimum cells retained per condition.
+#' @param small_condition_action Error, drop the condition, or skip the cell type.
+#' @param adjust_method,padj_threshold Final condition-GLM multiple testing rule.
+#' @param rank_action,min_residual_df Fixed-dictionary estimability controls.
+#' @param fallback_args Arguments used only by original Pando fallback.
+#' @param ... Must be empty.
+#' @return A `GRNData` object with standard Pando networks and common-dictionary
+#'   fit contracts.
+#' @export
+infer_condition_grn <- function(object, ...) {
+    UseMethod(generic = "infer_condition_grn", object = object)
+}
+
+#' @rdname infer_condition_grn
+#' @method infer_condition_grn GRNData
+#' @export
+infer_condition_grn.GRNData <- function(
+    object, cell_type_col = NULL, condition_col = NULL, cell_type = NULL,
+    genes = NULL, network_name = "condition_grn",
+    peak_to_gene_method = c("Signac", "GREAT"), upstream = 100000,
+    downstream = 0, extend = 1000000, only_tss = FALSE,
+    peak_to_gene_domains = NULL, tf_cor = 0.1, peak_cor = 0,
+    min_cells_per_condition = 50L,
+    small_condition_action = c("error", "drop_condition", "skip_cell_type"),
+    adjust_method = "BH", padj_threshold = 0.05,
+    rank_action = c("mark", "error"), min_residual_df = 1L,
+    parallel = FALSE, overwrite = FALSE, fallback_args = list(),
+    verbose = TRUE, ...) {
+    dots <- list(...)
+    if (length(dots)) {
+        stop("Unused condition-GRN argument(s): ",
+             paste(names(dots), collapse = ", "), call. = FALSE)
+    }
+    if (!inherits(object, "GRNData")) {
+        stop("`object` must be a GRNData object.", call. = FALSE)
+    }
+    if (!is.list(fallback_args)) {
+        stop("`fallback_args` must be a list.", call. = FALSE)
+    }
+    peak_to_gene_method <- match.arg(peak_to_gene_method)
+    small_condition_action <- match.arg(small_condition_action)
+    rank_action <- match.arg(rank_action)
+    metadata <- object@data@meta.data
+    condition_levels <- .condition_resolve_levels(metadata, condition_col)
+    if (length(condition_levels) < 2L) {
+        standard <- .condition_standard_by_cell_type(
+            object = object, metadata = metadata,
+            cell_type_col = cell_type_col, cell_type = cell_type,
+            genes = genes, network_name = network_name,
+            peak_to_gene_method = peak_to_gene_method,
+            upstream = upstream, downstream = downstream, extend = extend,
+            only_tss = only_tss, parallel = parallel,
+            tf_cor = tf_cor, peak_cor = peak_cor,
+            fallback_args = fallback_args, verbose = verbose,
+            overwrite = overwrite
+        )
+        object <- standard$object
+        object@grn@params$analysis_mode <- "standard_grn"
+        object@grn@params$condition_col <- condition_col
+        object@grn@params$condition_levels <- condition_levels
+        object@grn@params$condition_coefficients_calculated <- FALSE
+        object@grn@params$standard_network_index <- standard$network_index
+        object@grn@params$standard_fallback_reason <- if (is.null(condition_col)) {
+            "condition_col_not_supplied"
+        } else if (!condition_col %in% colnames(metadata)) {
+            "condition_col_absent"
+        } else {
+            "fewer_than_two_condition_levels"
+        }
+        return(object)
+    }
+    if (is.null(cell_type_col)) {
+        stop("`cell_type_col` is required when multiple conditions are present.",
+             call. = FALSE)
+    }
+    .condition_validate_labels(metadata, c(cell_type_col, condition_col))
+    if (!is.numeric(min_cells_per_condition) ||
+        length(min_cells_per_condition) != 1L ||
+        !is.finite(min_cells_per_condition) || min_cells_per_condition < 3L ||
+        min_cells_per_condition != as.integer(min_cells_per_condition)) {
+        stop("`min_cells_per_condition` must be an integer >= 3.",
+             call. = FALSE)
+    }
+    if (!is.numeric(padj_threshold) || length(padj_threshold) != 1L ||
+        !is.finite(padj_threshold) || padj_threshold <= 0 ||
+        padj_threshold >= 1) {
+        stop("`padj_threshold` must be one number in (0, 1).",
+             call. = FALSE)
+    }
+    available_types <- unique(as.character(metadata[[cell_type_col]]))
+    requested_types <- if (is.null(cell_type)) {
+        available_types
+    } else unique(as.character(cell_type))
+    missing_types <- setdiff(requested_types, available_types)
+    if (length(missing_types)) {
+        stop("Requested cell type(s) were not found: ",
+             paste(missing_types, collapse = ", "), call. = FALSE)
+    }
+    prepared <- .condition_prepare_common_input(
+        object = object, genes = genes,
+        peak_to_gene_method = peak_to_gene_method,
+        upstream = upstream, downstream = downstream, extend = extend,
+        only_tss = only_tss,
+        peak_to_gene_domains = peak_to_gene_domains,
+        verbose = verbose
+    )
+    fits <- list()
+    network_index <- list()
+    for (type_label in requested_types) {
+        type_cells <- rownames(metadata)[
+            as.character(metadata[[cell_type_col]]) == type_label
+        ]
+        type_conditions <- unique(as.character(
+            metadata[type_cells, condition_col]
+        ))
+        counts <- vapply(type_conditions, function(condition) {
+            sum(as.character(metadata[type_cells, condition_col]) == condition)
+        }, integer(1))
+        eligible <- type_conditions[counts >= as.integer(min_cells_per_condition)]
+        small <- setdiff(type_conditions, eligible)
+        if (length(small)) {
+            detail <- paste0(small, "=", counts[small], collapse = ", ")
+            if (identical(small_condition_action, "error")) {
+                stop("Cell type `", type_label,
+                     "` has undersized condition(s): ", detail, call. = FALSE)
+            }
+            if (identical(small_condition_action, "skip_cell_type")) {
+                log_message("Skipping cell type ", type_label,
+                            " because condition(s) are undersized: ", detail,
+                            verbose = verbose)
+                next
+            }
+            log_message("Dropping undersized condition(s) for cell type ",
+                        type_label, ": ", detail, verbose = verbose)
+        }
+        if (length(eligible) < 2L) {
+            if (identical(small_condition_action, "error")) {
+                stop("Cell type `", type_label,
+                     "` retains fewer than two eligible conditions.",
+                     call. = FALSE)
+            }
+            next
+        }
+        cells_by_condition <- stats::setNames(lapply(eligible, function(condition) {
+            type_cells[as.character(metadata[type_cells, condition_col]) == condition]
+        }), eligible)
+        global_cells <- unlist(cells_by_condition, use.names = FALSE)
+        log_message("Discovering global candidates for cell type ", type_label,
+                    verbose = verbose)
+        global_edges <- .condition_discover_edges_prepared(
+            prepared, global_cells, source_label = "global",
+            source_type = "global", tf_cor = tf_cor, peak_cor = peak_cor,
+            parallel = parallel, verbose = verbose
+        )
+        condition_edges <- lapply(eligible, function(condition) {
+            log_message("Discovering candidates for ", type_label, " / ",
+                        condition, verbose = verbose)
+            .condition_discover_edges_prepared(
+                prepared, cells_by_condition[[condition]],
+                source_label = condition, source_type = "condition",
+                tf_cor = tf_cor, peak_cor = peak_cor,
+                parallel = parallel, verbose = verbose
+            )
+        })
+        names(condition_edges) <- eligible
+        dictionary <- union_grn_edges(global_edges, condition_edges)
+        coefficient_rows <- fit_rows <- list()
+        network_names <- character()
+        for (condition in eligible) {
+            one_name <- paste0(
+                network_name, "__", .condition_safe_label(type_label),
+                "__condition__", .condition_safe_label(condition)
+            )
+            fitted <- .condition_fit_dictionary_prepared(
+                object = object, prepared = prepared,
+                edge_dictionary = dictionary,
+                cells = cells_by_condition[[condition]],
+                condition_label = condition, network_name = one_name,
+                adjust_method = adjust_method,
+                padj_threshold = padj_threshold,
+                rank_action = rank_action,
+                min_residual_df = min_residual_df,
+                parallel = parallel, verbose = verbose,
+                overwrite = overwrite
+            )
+            object <- fitted$object
+            coefficient_rows[[condition]] <- fitted$coefficients
+            fit_rows[[condition]] <- fitted$fit
+            network_names[[condition]] <- one_name
+            network_index[[length(network_index) + 1L]] <- data.frame(
+                cell_type = type_label, condition = condition,
+                network_name = one_name,
+                n_cells = length(cells_by_condition[[condition]]),
+                n_dictionary_edges = nrow(dictionary),
+                n_significant_edges = sum(fitted$coefficients$significant),
+                stringsAsFactors = FALSE
+            )
+        }
+        coefficient_table <- do.call(rbind, coefficient_rows)
+        fit_table <- do.call(rbind, fit_rows)
+        rownames(coefficient_table) <- rownames(fit_table) <- NULL
+        fit_contract <- list(
+            schema_version = .condition_common_dictionary_schema,
+            fit_engine = "two_stage_exact_edge_union_fixed_dictionary_glm",
+            coefficient_scale = "shared_preprocessed_input_units_unscaled",
+            inference_scope = "conditional_on_selected_edge_dictionary",
+            cell_type = type_label,
+            condition_levels = eligible,
+            condition_col = condition_col,
+            cell_type_col = cell_type_col,
+            condition_cell_ids = cells_by_condition,
+            edge_dictionary = dictionary,
+            coefficients = coefficient_table,
+            fit = fit_table,
+            network_names = network_names,
+            padj_threshold = padj_threshold,
+            adjust_method = adjust_method,
+            scale = FALSE,
+            interaction = ":",
+            projection_effect_column = "penalty_effect",
+            projection_policy = "padj_significant_effects_only",
+            target_genes = unique(as.character(dictionary$target)),
+            rna_assay = prepared$params$rna_assay,
+            atac_assay = prepared$params$peak_assay
+        )
+        class(fit_contract) <- c("ConditionGRNFit", "list")
+        fits[[type_label]] <- fit_contract
+    }
+    if (!length(fits)) {
+        stop("No cell type retained at least two eligible conditions.",
+             call. = FALSE)
+    }
+    object@grn@params$analysis_mode <- "condition_grn"
+    object@grn@params$condition_col <- condition_col
+    object@grn@params$condition_levels <- condition_levels
+    object@grn@params$cell_type_col <- cell_type_col
+    object@grn@params$condition_coefficients_calculated <- TRUE
+    object@grn@params$condition_grn_schema <-
+        .condition_common_dictionary_schema
+    object@grn@params$condition_grn_fits <- fits
+    object@grn@params$condition_network_index <- do.call(rbind, network_index)
+    object
+}
+
+#' Extract common-dictionary condition GRN fits
+#'
+#' @param object A fitted `GRNData` object.
+#' @param network_name Retained for compatibility; fit selection is by cell type.
+#' @param cell_type Optional fitted cell type.
+#' @return One `ConditionGRNFit` or a named list.
+#' @export
+condition_grn_fit <- function(object, ...) {
+    UseMethod(generic = "condition_grn_fit", object = object)
+}
+
+#' @rdname condition_grn_fit
+#' @method condition_grn_fit GRNData
+#' @export
+condition_grn_fit.GRNData <- function(
+    object, network_name = NULL, cell_type = NULL, ...) {
+    fits <- object@grn@params$condition_grn_fits
+    if (!is.list(fits) || !length(fits)) {
+        stop("No common-dictionary condition GRN fit is stored.",
+             call. = FALSE)
+    }
+    if (is.null(cell_type)) return(fits)
+    cell_type <- as.character(cell_type)
+    missing <- setdiff(cell_type, names(fits))
+    if (length(missing)) {
+        stop("Condition GRN fit was not found for: ",
+             paste(missing, collapse = ", "), call. = FALSE)
+    }
+    answer <- fits[cell_type]
+    if (length(answer) == 1L) answer[[1L]] else answer
+}
+
+#' Extract one condition subgraph
+#'
+#' @param fit A `ConditionGRNFit`.
+#' @param condition Fitted condition label.
+#' @param significant_only Return only BH-significant coefficients.
+#' @return Edge table for the selected condition.
+#' @export
+condition_grn_subgraph <- function(fit, condition, significant_only = TRUE) {
+    if (!inherits(fit, "ConditionGRNFit") ||
+        !identical(fit$schema_version, .condition_common_dictionary_schema)) {
+        stop("`fit` is not a common-dictionary ConditionGRNFit.",
+             call. = FALSE)
+    }
+    condition <- as.character(condition)[[1L]]
+    if (!condition %in% fit$condition_levels) {
+        stop("Unknown fitted condition: ", condition, call. = FALSE)
+    }
+    answer <- fit$coefficients[
+        as.character(fit$coefficients$condition) == condition, , drop = FALSE
+    ]
+    if (isTRUE(significant_only)) {
+        answer <- answer[answer$significant %in% TRUE, , drop = FALSE]
+    }
+    answer
+}
+
+#' Project common-dictionary condition effects on paired cells
+#'
+#' Reconstructs TF RNA multiplied by peak ATAC on the original unscaled input and
+#' applies the condition coefficient. The default projection uses only the
+#' BH-significant condition coefficients stored in `penalty_effect`.
+#'
+#' @param object Fitted `GRNData` object.
+#' @param fit A `ConditionGRNFit`.
+#' @param targets Optional target subset.
+#' @param significant_only Use `penalty_effect` rather than every estimate.
+#' @param return_edge_contributions Return the cell-by-edge matrix.
+#' @return A `PandoConditionProjection` list.
+#' @export
+project_condition_grn_cells <- function(
+    object, fit, targets = NULL, significant_only = TRUE,
+    return_edge_contributions = FALSE) {
+    if (!inherits(object, "GRNData") || !inherits(fit, "ConditionGRNFit") ||
+        !identical(fit$schema_version, .condition_common_dictionary_schema)) {
+        stop("Common-dictionary object and fit are required.", call. = FALSE)
+    }
+    prepared <- .condition_prepare_common_input(
+        object, genes = fit$target_genes, verbose = FALSE
+    )
+    dictionary <- fit$edge_dictionary
+    .condition_validate_dictionary(dictionary, prepared)
+    coefficient <- fit$coefficients
+    if (!is.null(targets)) {
+        targets <- intersect(as.character(targets), fit$target_genes)
+        coefficient <- coefficient[coefficient$target %in% targets, , drop = FALSE]
+    }
+    cells <- unique(unlist(fit$condition_cell_ids, use.names = FALSE))
+    cells <- cells[cells %in% rownames(prepared$gene_data)]
+    cell_condition <- rep(NA_character_, length(cells))
+    names(cell_condition) <- cells
+    for (condition in fit$condition_levels) {
+        cell_condition[intersect(cells, fit$condition_cell_ids[[condition]])] <-
+            condition
+    }
+    if (anyNA(cell_condition)) {
+        stop("Fitted condition cells do not align to the paired assay matrices.",
+             call. = FALSE)
+    }
+    edge_contribution <- matrix(
+        0, nrow = length(cells), ncol = nrow(coefficient),
+        dimnames = list(cells, paste(coefficient$edge_id,
+                                    coefficient$condition, sep = "@@"))
+    )
+    effect <- if (isTRUE(significant_only)) {
+        coefficient$penalty_effect
+    } else {
+        coefficient$estimate
+    }
+    effect[!is.finite(effect)] <- 0
+    for (j in seq_len(nrow(coefficient))) {
+        selected <- cells[cell_condition == coefficient$condition[[j]]]
+        if (!length(selected) || effect[[j]] == 0) next
+        edge_contribution[selected, j] <-
+            as.numeric(prepared$gene_data[selected, coefficient$tf[[j]]]) *
+            as.numeric(prepared$peak_data[selected, coefficient$region[[j]]]) *
+            effect[[j]]
+    }
+    target_names <- unique(as.character(coefficient$target))
+    gene_score <- matrix(
+        0, nrow = length(cells), ncol = length(target_names),
+        dimnames = list(cells, target_names)
+    )
+    for (target in target_names) {
+        index <- which(coefficient$target == target)
+        gene_score[, target] <- rowSums(
+            edge_contribution[, index, drop = FALSE]
+        )
+    }
+    answer <- list(
+        schema_version = "pando_condition_projection_common_dictionary_v1",
+        gene_score = gene_score,
+        edge_contribution = if (isTRUE(return_edge_contributions)) {
+            edge_contribution
+        } else NULL,
+        cell_condition = cell_condition,
+        cell_type = fit$cell_type,
+        effect_column = if (isTRUE(significant_only)) {
+            "penalty_effect"
+        } else "estimate",
+        projection_origin = "full_condition_fixed_dictionary_glm",
+        coefficient_scale = fit$coefficient_scale,
+        projection_policy = if (isTRUE(significant_only)) {
+            "BH_adjusted_p_below_threshold_penalty_effect"
+        } else "all_estimable_condition_coefficients"
+    )
+    class(answer) <- c("PandoConditionProjection", "list")
+    answer
+}
+
+#' Aggregate paired-cell condition projection
+#'
+#' @param projection A `PandoConditionProjection`.
+#' @param membership Data frame with `cell_id` and a grouping column.
+#' @param group_col Grouping column, typically `metacell_id`.
+#' @return Aggregated gene scores and provenance.
+#' @export
+aggregate_condition_grn_projection <- function(
+    projection, membership, group_col = "metacell_id") {
+    if (!inherits(projection, "PandoConditionProjection") ||
+        !is.data.frame(membership) ||
+        !all(c("cell_id", group_col) %in% colnames(membership))) {
+        stop("Projection and membership inputs are invalid.", call. = FALSE)
+    }
+    membership$cell_id <- as.character(membership$cell_id)
+    membership[[group_col]] <- as.character(membership[[group_col]])
+    if (anyDuplicated(membership$cell_id)) {
+        stop("Every cell must map to exactly one aggregation group.",
+             call. = FALSE)
+    }
+    cells <- intersect(rownames(projection$gene_score), membership$cell_id)
+    if (!length(cells)) {
+        stop("Projection and membership share no cells.", call. = FALSE)
+    }
+    membership <- membership[match(cells, membership$cell_id), , drop = FALSE]
+    groups <- unique(membership[[group_col]])
+    gene_score <- vapply(groups, function(group) {
+        rows <- membership[[group_col]] == group
+        colMeans(projection$gene_score[cells[rows], , drop = FALSE])
+    }, numeric(ncol(projection$gene_score)))
+    if (is.null(dim(gene_score))) {
+        gene_score <- matrix(gene_score, ncol = 1L)
+    }
+    rownames(gene_score) <- colnames(projection$gene_score)
+    colnames(gene_score) <- groups
+    list(
+        gene_score = gene_score,
+        group_col = group_col,
+        source_projection = projection,
+        aggregation = "arithmetic_mean_of_paired_cell_regulatory_scores"
+    )
 }
