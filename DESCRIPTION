@@ -1,5 +1,5 @@
 Package: Pando
-Version: 1.6.5
+Version: 2.0.0
 Type: Package
 Title: Inferring regulomes from multi-modal single-cell genomics data
 Authors@R: person(given = "Jonas Simon",
@@ -10,39 +10,23 @@ Authors@R: person(given = "Jonas Simon",
 Maintainer: Jonas Simon Fleck <jonas.fleck@bsse.ethz.ch>
 Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     regulatory relationships between TF-binding site pairs and target genes.
-    infer_condition_grn automatically uses the original infer_grn workflow when
-    no condition column is supplied, the requested column is absent, or fewer
-    than two condition levels are observed; that route creates no condition
-    coefficients. With two or more conditions, one exact TF-peak-target
-    candidate supergraph and an equal-condition within-condition variance scale
-    are used within each broad cell type. For each target, R constructs only the
-    candidate sparse TF-by-ATAC design and deterministic condition-stratified
-    fold labels. One registered C++17/RcppEigen target engine then performs the
-    complete outer/inner nested cross-validation, fold-local transforms,
-    automatic or supplied lambda paths, sparse-group warm-start fitting,
-    support-constrained direct-Schur refits, held-out prediction and projection,
-    final full-data lambda selection, final refit, and OOF validation. The
-    engine plans every fold before dense allocation. Small targets retain the
-    centered-Gram/direct-Schur path; high-dimensional targets use sparse
-    matrix-free FISTA, exact residual validation, and a full-coordinate Schur
-    PCG refit without a complete predictor-square matrix. The TF-by-ATAC
-    product, sparse-group solver, refit kernels and fused target engine are all
-    C++-only; missing registration, invalid dimensions, failed direct or
-    iterative solves, non-finite arithmetic, incomplete OOF assignment or
-    residual-check failures terminate the analysis. Registered native routines
-    are resolved explicitly in each R process so PSOCK and forked BiocParallel
-    workers do not depend on transient Rcpp native-symbol bindings in their
-    namespace. Runtime preflight is intentionally lightweight: it checks the
-    registered production kernels and declared memory contract without running
-    a fixed synthetic-matrix numerical benchmark before each analysis. Numerical
-    correctness remains enforced on every real target by the production solver,
-    refit residual, finite-arithmetic, OOF-assignment and memory-budget checks.
-    The primary projection is condition-full outerheldout support: jointly
-    estimable edges form the common component, condition-specific estimable
-    edges remain in the focal condition, and every non-estimable edge contributes
-    a projectable structural zero in that condition. Exact-zero predictors remain
-    represented in the shared candidate supergraph without being assigned fitted
-    coefficients.
+    For two or more conditions within a broad cell type, infer_condition_grn
+    uses one canonical two-stage procedure. Candidate edges are discovered on
+    the complete cell type and separately in each condition using the original
+    Pando peak-to-gene, motif, peak-target-correlation and TF-target-correlation
+    steps. Exact TF-peak-target triples are unioned into one frozen dictionary.
+    Every condition is then refitted with the same Gaussian identity Pando
+    interaction model, the same predictor columns and the same globally
+    preprocessed RNA and ATAC layers, with scale set to FALSE. Condition effects
+    are the resulting coefficients; no pooled-coefficient calibration is
+    applied. Coefficients retain standard errors, P values and network-wide
+    adjusted P values. Only adjusted-P values below the configured threshold
+    enter the exported penalty effect, while the complete coefficient table is
+    retained for audit. Zero-variance and aliased edges remain unavailable rather
+    than being silently converted to fitted zeros. When no condition column is
+    supplied, the column is absent, or fewer than two levels are observed, the
+    original per-cell-type infer_grn Gaussian interaction workflow is used and no
+    condition coefficient is created.
 License: MIT
 Encoding: UTF-8
 LazyData: true
@@ -70,7 +54,6 @@ Imports:
     pals,
     patchwork,
     purrr,
-    Rcpp,
     Seurat (>= 4.4.0),
     SeuratObject (>= 4.1.4),
     S4Vectors,
@@ -85,10 +68,6 @@ Imports:
     tools,
     utils,
     uwot
-LinkingTo:
-    Rcpp,
-    RcppEigen
-SystemRequirements: C++17
 Suggests:
     BiocParallel,
     brms,
@@ -99,13 +78,6 @@ Suggests:
     xgboost
 Remotes:
     github::immunogenomics/presto
-Config/Pando/NativeSparseABI: 6
-Config/Pando/NativeCallBinding: registered-symbol-lookup-worker-safe-v1
-Config/Pando/ConditionProductBackend: cpp-only-fail-fast
-Config/Pando/ConditionSolverBackend: cpp-only-fail-fast
-Config/Pando/ConditionRefitBackend: dense-direct-or-matrix-free-schur-pcg-v1
-Config/Pando/ConditionTargetEngineBackend: cpp-eigen-memory-bounded-hybrid-target-v1
-Config/Pando/ConditionInnerCVBackend: exact-refit-validation-sparse-residual-v1
-Config/Pando/ConditionMemoryContract: no-full-p2-on-high-p-path-v1
-Config/Pando/RuntimePreflight: lightweight-metadata-symbol-check-v1
-Config/Pando/InstalledRuntimeCI: R-4.5.1-Matrix-1.7.4
+Config/Pando/ConditionGRNSchema: pando_condition_grn_common_dictionary_v1
+Config/Pando/ConditionGRNMethod: two-stage-exact-edge-union-fixed-dictionary-glm
+Config/Pando/ConditionEffectFilter: BH-adjusted-p-below-0.05
