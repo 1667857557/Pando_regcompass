@@ -13,7 +13,9 @@ find_motifs(object, ...)
   genome,
   motif_tfs = NULL,
   verbose = TRUE,
-  exact_positions = FALSE
+  exact_positions = FALSE,
+  cache_dir = getOption("Pando.motif_cache_dir", NULL),
+  reuse_cache = TRUE
 )
 }
 \arguments{
@@ -29,6 +31,14 @@ matches. The default, \code{FALSE}, stores only the sparse motif
 presence/absence matrix used to construct TF-peak-target candidates. Set to
 \code{TRUE} when exact match positions are needed, for example for TF
 footprinting.}
+
+\item{cache_dir}{Optional directory for persistent motif-match caching. Cache
+entries are keyed by the ordered candidate ranges, complete PFM collection,
+genome identity and \code{exact_positions}. Identical region layouts therefore
+reuse one motif scan across cell types and later runs.}
+
+\item{reuse_cache}{Logical. Read a valid existing cache entry before scanning.
+A newly computed entry is still written when this is \code{FALSE}.}
 
 \item{verbose}{Display messages.}
 }
