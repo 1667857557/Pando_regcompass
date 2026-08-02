@@ -107,18 +107,38 @@
     result
 }
 
-.condition_make_network_common_dictionary_base <- .condition_make_network
+.find_modules_network_common_dictionary_base <- find_modules.Network
 
-.condition_make_network <- function(
-    coefficients, fit, dictionary, condition_label, params) {
-    network <- .condition_make_network_common_dictionary_base(
-        coefficients = coefficients,
-        fit = fit,
-        dictionary = dictionary,
-        condition_label = condition_label,
-        params = params
+find_modules.Network <- function(
+    object,
+    p_thresh = 0.05,
+    rsq_thresh = 0.1,
+    nvar_thresh = 10,
+    min_genes_per_module = 5,
+    xgb_method = c("tf", "target"),
+    xgb_top = 50,
+    verbose = TRUE) {
+    fixed_dictionary <- identical(
+        NetworkParams(object)$fit_mode,
+        "fixed_edge_dictionary"
     )
-    intercept <- as.character(network@coefs$term) == "(Intercept)"
-    network@coefs$padj[intercept] <- 1
-    network
+    original_coefs <- if (fixed_dictionary) object@coefs else NULL
+    if (fixed_dictionary) {
+        excluded <- as.character(object@coefs$term) == "(Intercept)" |
+            (!is.na(object@coefs$estimable) & !object@coefs$estimable) |
+            !is.finite(object@coefs$estimate)
+        object@coefs$padj[excluded] <- 1
+    }
+    answer <- .find_modules_network_common_dictionary_base(
+        object = object,
+        p_thresh = p_thresh,
+        rsq_thresh = rsq_thresh,
+        nvar_thresh = nvar_thresh,
+        min_genes_per_module = min_genes_per_module,
+        xgb_method = xgb_method,
+        xgb_top = xgb_top,
+        verbose = verbose
+    )
+    if (fixed_dictionary) answer@coefs <- original_coefs
+    answer
 }
