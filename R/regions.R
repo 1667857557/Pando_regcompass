@@ -140,6 +140,81 @@ initiate_grn.GRNData <- function(
     motif2tf
 }
 
+.pando_motif_cache_digest <- function(value){
+    path <- tempfile("pando-motif-signature-", fileext = ".rds")
+    on.exit(unlink(path, force = TRUE), add = TRUE)
+    saveRDS(value, path, version = 2L, compress = FALSE)
+    unname(tools::md5sum(path)[[1L]])
+}
+
+.pando_motif_genome_signature <- function(genome){
+    slots <- if (methods::isS4(genome)) methods::slotNames(genome) else character()
+    fields <- intersect(
+        slots,
+        c("pkgname", "organism", "common_name", "provider", "provider_version", "release_name")
+    )
+    values <- lapply(fields, function(field){
+        value <- methods::slot(genome, field)
+        if (length(value) > 20L) value <- value[seq_len(20L)]
+        value
+    })
+    names(values) <- fields
+    list(
+        class = class(genome),
+        class_package = attr(class(genome), "package"),
+        fields = values
+    )
+}
+
+.pando_motif_cache_key <- function(cand_ranges, pfm, genome, exact_positions){
+    .pando_motif_cache_digest(list(
+        schema_version = "pando_motif_cache_v1",
+        candidate_ranges = Signac::GRangesToString(cand_ranges),
+        pfm = pfm,
+        genome = .pando_motif_genome_signature(genome),
+        exact_positions = isTRUE(exact_positions)
+    ))
+}
+
+.pando_read_motif_cache <- function(path, candidate_ranges, exact_positions){
+    if (!file.exists(path)) return(NULL)
+    payload <- tryCatch(readRDS(path), error = function(error) NULL)
+    if (!is.list(payload) ||
+        !identical(payload$schema_version, "pando_motif_cache_v1") ||
+        !identical(payload$candidate_ranges, candidate_ranges) ||
+        !identical(payload$exact_positions, isTRUE(exact_positions)) ||
+        is.null(payload$motif_object)){
+        return(NULL)
+    }
+    payload$motif_object
+}
+
+.pando_write_motif_cache <- function(path, motif_object, candidate_ranges, exact_positions){
+    dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+    temporary <- tempfile(
+        paste0(basename(path), "."),
+        tmpdir = dirname(path),
+        fileext = ".tmp"
+    )
+    on.exit(unlink(temporary, force = TRUE), add = TRUE)
+    saveRDS(
+        list(
+            schema_version = "pando_motif_cache_v1",
+            candidate_ranges = candidate_ranges,
+            exact_positions = isTRUE(exact_positions),
+            motif_object = motif_object
+        ),
+        temporary,
+        version = 2L
+    )
+    if (!file.exists(path)){
+        if (!file.rename(temporary, path) && !file.exists(path)){
+            stop("Could not publish the Pando motif cache atomically.", call. = FALSE)
+        }
+    }
+    invisible(path)
+}
+
 #' Scan for motifs in candidate regions.
 #'
 #' @importFrom dplyr distinct mutate select
@@ -153,6 +228,12 @@ initiate_grn.GRNData <- function(
 #' presence/absence matrix used to construct TF-peak-target candidates. Set to
 #' \code{TRUE} when exact match positions are needed, for example for TF
 #' footprinting.
+#' @param cache_dir Optional directory for persistent motif-match caching. Cache
+#' entries are keyed by the ordered candidate ranges, complete PFM collection,
+#' genome identity and \code{exact_positions}. Identical region layouts therefore
+#' reuse one motif scan across cell types and later runs.
+#' @param reuse_cache Logical. Read a valid existing cache entry before scanning.
+#' A newly computed entry is still written when this is \code{FALSE}.
 #' @param verbose Display messages.
 #'
 #' @return A GRNData object with updated motif info.
@@ -166,11 +247,22 @@ find_motifs.GRNData <- function(
     genome,
     motif_tfs = NULL,
     verbose = TRUE,
-    exact_positions = FALSE
+    exact_positions = FALSE,
+    cache_dir = getOption("Pando.motif_cache_dir", NULL),
+    reuse_cache = TRUE
 ){
     if (!is.logical(exact_positions) || length(exact_positions) != 1L ||
         is.na(exact_positions)){
         stop("`exact_positions` must be either TRUE or FALSE.", call. = FALSE)
+    }
+    if (!is.logical(reuse_cache) || length(reuse_cache) != 1L ||
+        is.na(reuse_cache)){
+        stop("`reuse_cache` must be either TRUE or FALSE.", call. = FALSE)
+    }
+    if (!is.null(cache_dir) &&
+        (!is.character(cache_dir) || length(cache_dir) != 1L ||
+         is.na(cache_dir) || !nzchar(trimws(cache_dir)))){
+        stop("`cache_dir` must be NULL or one non-empty path.", call. = FALSE)
     }
     params <- Params(object)
 
@@ -201,33 +293,78 @@ find_motifs.GRNData <- function(
     if (length(tfs_use)==0){
         stop('None of the provided TFs were found in the dataset. Consider providing a custom motif-to-TF map as `motif_tfs`')
     }
-    object@grn@regions@tfs <- motif2tf[, tfs_use]
+    object@grn@regions@tfs <- motif2tf[, tfs_use, drop = FALSE]
 
     # Find motif matches with Signac/motifmatchr. Exact positions are optional;
     # Pando's candidate construction only requires the presence/absence matrix.
     cand_ranges <- object@grn@regions@ranges
-    if (exact_positions){
-        motif_object <- Signac::AddMotifs(
-            object = cand_ranges,
-            genome = genome,
+    candidate_ranges <- Signac::GRangesToString(cand_ranges)
+    cache_key <- NULL
+    cache_file <- NULL
+    motif_object <- NULL
+    cache_hit <- FALSE
+    if (!is.null(cache_dir)){
+        cache_key <- .pando_motif_cache_key(
+            cand_ranges = cand_ranges,
             pfm = pfm,
-            verbose = verbose
-        )
-    } else {
-        motif_matrix <- Signac::CreateMotifMatrix(
-            features = cand_ranges,
-            pwm = pfm,
             genome = genome,
-            score = FALSE,
-            use.counts = FALSE
+            exact_positions = exact_positions
         )
-        motif_object <- Signac::CreateMotifObject(
-            data = motif_matrix,
-            pwm = pfm,
-            positions = NULL
+        cache_file <- file.path(
+            cache_dir,
+            paste0("motif_matches__", cache_key, ".rds")
         )
+        if (isTRUE(reuse_cache)){
+            motif_object <- .pando_read_motif_cache(
+                cache_file,
+                candidate_ranges = candidate_ranges,
+                exact_positions = exact_positions
+            )
+            cache_hit <- !is.null(motif_object)
+        }
+    }
+
+    if (is.null(motif_object)){
+        if (exact_positions){
+            motif_object <- Signac::AddMotifs(
+                object = cand_ranges,
+                genome = genome,
+                pfm = pfm,
+                verbose = verbose
+            )
+        } else {
+            motif_matrix <- Signac::CreateMotifMatrix(
+                features = cand_ranges,
+                pwm = pfm,
+                genome = genome,
+                score = FALSE,
+                use.counts = FALSE
+            )
+            motif_object <- Signac::CreateMotifObject(
+                data = motif_matrix,
+                pwm = pfm,
+                positions = NULL
+            )
+        }
+        if (!is.null(cache_file)){
+            .pando_write_motif_cache(
+                cache_file,
+                motif_object = motif_object,
+                candidate_ranges = candidate_ranges,
+                exact_positions = exact_positions
+            )
+        }
+    } else {
+        log_message('Reusing cached motif matches', verbose=verbose)
     }
     object@grn@regions@motifs <- motif_object
+    object@grn@params$motif_cache <- list(
+        enabled = !is.null(cache_dir),
+        hit = cache_hit,
+        cache_key = cache_key,
+        cache_file = cache_file,
+        schema_version = "pando_motif_cache_v1"
+    )
 
     return(object)
 }
