@@ -3,7 +3,7 @@
 \name{infer_condition_grn}
 \alias{infer_condition_grn}
 \alias{infer_condition_grn.GRNData}
-\title{Infer a GRN with automatic standard or condition-aware routing}
+\title{Infer comparable condition-specific Pando GRNs}
 \usage{
 infer_condition_grn(object, ...)
 
@@ -22,101 +22,38 @@ infer_condition_grn(object, ...)
   peak_to_gene_domains = NULL,
   tf_cor = 0.1,
   peak_cor = 0,
-  candidate_screen = c("motif_domain", "pooled_within_condition"),
-  alpha = 0.5,
-  condition_mix = 0.5,
-  comparison_conditions = NULL,
-  condition_weight = "equal",
-  nlambda = 50L,
-  lambda = NULL,
-  lambda_min_ratio = NULL,
-  outer_nfolds = 5L,
-  inner_nfolds = 5L,
-  lambda_selection = c("lambda.1se", "lambda.min"),
   min_cells_per_condition = 50L,
-  small_condition_action = c("skip_cell_type", "drop_condition", "error"),
-  scale = TRUE,
-  active_tol = 1e-08,
+  small_condition_action = c("error", "drop_condition", "skip_cell_type"),
+  adjust_method = "BH",
+  padj_threshold = 0.05,
+  rank_action = c("mark", "error"),
+  min_residual_df = 1L,
   parallel = FALSE,
-  BPPARAM = NULL,
   overwrite = FALSE,
-  seed = 12345L,
-  max_iter = 5000L,
-  tol_objective = 1e-07,
-  tol_coef = 1e-06,
-  engine_control = list(),
   fallback_args = list(),
   verbose = TRUE,
   ...
 )
 }
 \arguments{
-\item{object}{A \code{GRNData} object containing paired RNA and ATAC cells.}
-\item{cell_type_col}{Optional metadata column containing broad cell-type labels. It is required for condition-aware fitting and when \code{cell_type} is supplied in standard fallback mode.}
-\item{condition_col}{Optional metadata column containing condition labels.}
-\item{cell_type}{Optional cell-type label or labels retained before fitting.}
-\item{genes}{Target genes. Defaults to RNA variable features.}
-\item{network_name}{Output network name or condition-network prefix.}
-\item{peak_to_gene_method}{Peak-to-gene method, either \code{Signac} or \code{GREAT}.}
-\item{upstream, downstream, extend, only_tss}{Regulatory-domain parameters.}
-\item{peak_to_gene_domains}{Optional custom domains used only by the condition-aware route.}
-\item{tf_cor, peak_cor}{Correlation screening thresholds.}
-\item{candidate_screen}{Condition-aware candidate screening strategy.}
-\item{alpha}{Elastic-net mixing parameter.}
-\item{condition_mix}{Shared-row versus condition-element sparsity mixing.}
-\item{comparison_conditions}{Conditions defining a common-support comparison.}
-\item{condition_weight}{Must be \code{equal} for condition-aware fitting.}
-\item{nlambda, lambda, lambda_min_ratio}{Lambda-path controls.}
-\item{outer_nfolds, inner_nfolds}{Nested condition-stratified fold counts.}
-\item{lambda_selection}{Use \code{lambda.1se} or \code{lambda.min}.}
-\item{min_cells_per_condition}{Minimum cells per condition.}
-\item{small_condition_action}{Skip, drop, or stop for small condition groups.}
-\item{scale}{Must be \code{TRUE} for condition-aware fitting. The standard fallback keeps original \code{infer_grn()} behavior unless changed in \code{fallback_args}.}
-\item{active_tol}{Condition-edge activity threshold.}
-\item{parallel}{Use the Pando mapping backend.}
-\item{BPPARAM}{Optional BiocParallel backend for condition-aware fitting.}
-\item{overwrite}{Replace existing condition networks.}
-\item{seed}{Random seed.}
-\item{max_iter, tol_objective, tol_coef}{Condition solver controls.}
-\item{engine_control}{Named memory-bounded target-engine controls:
-\code{memory_budget_mb}, \code{dense_max_p}, \code{lambda_batch_size},
-\code{refit_pcg_tol}, \code{refit_pcg_max_iter}, \code{preconditioner},
-\code{diagnostics_level}, \code{checkpoint_dir}, and \code{resume}. Unknown
-fields are rejected. Diagnostic retention and checkpoints do not alter fitted
-coefficients, lambda selection, or OOF projections.}
-\item{fallback_args}{Named arguments passed only to the original \code{infer_grn()} fallback. Managed arguments cannot be overridden.}
+\item{object}{A \code{GRNData} object after motif matching.}
+\item{cell_type_col}{Broad cell-type metadata column.}
+\item{condition_col}{Condition column. NULL, absent, or fewer than two levels selects original per-cell-type Pando.}
+\item{cell_type}{Optional cell-type subset.}
+\item{genes}{Target genes.}
+\item{network_name}{Prefix for generated networks.}
+\item{peak_to_gene_method, upstream, downstream, extend, only_tss, peak_to_gene_domains}{Regulatory-domain controls.}
+\item{tf_cor, peak_cor}{Candidate-discovery correlation thresholds.}
+\item{min_cells_per_condition}{Minimum paired cells per fitted condition.}
+\item{small_condition_action}{Action for undersized conditions.}
+\item{adjust_method, padj_threshold}{Multiple-testing method and threshold defining \code{penalty_effect}.}
+\item{rank_action, min_residual_df}{Fixed-dictionary estimability controls.}
+\item{parallel}{Use Pando target-level parallel mapping.}
+\item{overwrite}{Replace generated networks with matching names.}
+\item{fallback_args}{Arguments passed only to original \code{infer_grn()} fallback.}
 \item{verbose}{Display progress messages.}
 \item{...}{Must be empty.}
 }
-\value{
-A \code{GRNData} object. \code{Params(object)$analysis_mode} is
-\code{"standard_grn"} when the original \code{infer_grn()} route was used and
-\code{"condition_grn"} when condition coefficients were fitted.
-}
-\description{
-When no usable multi-level condition variable is available, this function calls
-the original Pando \code{infer_grn()} implementation and does not create a
-\code{ConditionGRNFit}. With two or more condition levels it fits condition-aware
-sub-GRNs within each broad cell type.
-}
-\details{
-The fallback is selected when \code{condition_col} is omitted, absent from the
-metadata, or has fewer than two non-missing non-empty levels. In that mode no
-condition coefficient, contrast, or condition OOF projection is calculated.
-
-The condition-aware route uses the canonical unversioned
-\code{pando_condition_grn_fit} contract and structural-zero semantics for
-non-estimable projection edges. Canonical behavior is implemented in the
-original function definitions rather than through runtime overrides.
-}
-\examples{
-\dontrun{
-standard <- infer_condition_grn(object, condition_col = NULL)
-condition_fit <- infer_condition_grn(
-  object,
-  cell_type_col = "cell_type",
-  condition_col = "condition",
-  genes = metabolic_genes
-)
-}
-}
+\value{A \code{GRNData} containing standard Pando \code{Network} objects and common-dictionary fit contracts.}
+\description{For each cell type, discovers candidates globally and in every condition, unions exact TF-peak-target triples, freezes the dictionary, and refits every condition with the same unscaled Gaussian identity Pando interaction model.}
+\details{Condition effects are the fixed-dictionary GLM coefficients. No global-coefficient calibration is applied. Network-wide adjusted P values are stored; only coefficients below \code{padj_threshold} enter \code{penalty_effect}. Zero-variance and aliased coefficients remain unavailable.}
