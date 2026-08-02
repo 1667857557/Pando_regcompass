@@ -79,3 +79,30 @@
     }
     invisible(TRUE)
 }
+
+.condition_fit_target_matrix_common_dictionary_base <-
+    .condition_fit_target_matrix
+
+.condition_fit_target_matrix <- function(
+    response, predictor, terms, rank_action = c("mark", "error"),
+    min_residual_df = 1L) {
+    rank_action <- match.arg(rank_action)
+    result <- .condition_fit_target_matrix_common_dictionary_base(
+        response = response,
+        predictor = predictor,
+        terms = terms,
+        rank_action = rank_action,
+        min_residual_df = min_residual_df
+    )
+    residual_df <- as.numeric(result$gof$residual_df[[1L]])
+    if (is.finite(residual_df) && residual_df < as.integer(min_residual_df)) {
+        result$coefs$estimate[] <- NA_real_
+        result$coefs$std_err[] <- NA_real_
+        result$coefs$statistic[] <- NA_real_
+        result$coefs$pval[] <- NA_real_
+        result$coefs$estimable[] <- FALSE
+        result$gof$fit_status <- "insufficient_df"
+        result$gof$intercept <- NA_real_
+    }
+    result
+}
