@@ -47,7 +47,7 @@ test_that("hybrid inner CV uses exact sufficient-statistic validation", {
 
     expect_identical(
         native$inner_cv_backend,
-        "hybrid_centered_gram_or_sparse_fista_with_validation_sufficient_statistics"
+        "exact_refit_validation_dense_support_or_sparse_residual_v1"
     )
     expect_true(all(grepl(
         "centered_gram|sparse_matrix_free|intercept_only",
@@ -111,13 +111,17 @@ test_that("hybrid cost model retains sparse matrix-free path for sparse wide fol
 
 test_that("native ABI metadata advertises the canonical hybrid engine", {
     description <- utils::packageDescription("Pando")
-    expect_identical(description[["Config/Pando/NativeSparseABI"]], "5")
+    expect_identical(description[["Config/Pando/NativeSparseABI"]], "6")
     expect_identical(
         description[["Config/Pando/ConditionInnerCVBackend"]],
-        "cpp-eigen-hybrid-gram-sufficient-statistics-fail-fast"
+        "exact-refit-validation-sparse-residual-v1"
     )
     expect_identical(
         description[["Config/Pando/ConditionTargetEngineBackend"]],
-        "cpp-eigen-fused-hybrid-gram-nested-cv-path-refit-validation-stats-fail-fast"
+        "cpp-eigen-memory-bounded-hybrid-target-v1"
+    )
+    expect_identical(
+        description[["Config/Pando/ConditionMemoryContract"]],
+        "no-full-p2-on-high-p-path-v1"
     )
 })

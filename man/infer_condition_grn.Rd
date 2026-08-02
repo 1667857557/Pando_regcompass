@@ -44,6 +44,7 @@ infer_condition_grn(object, ...)
   max_iter = 5000L,
   tol_objective = 1e-07,
   tol_coef = 1e-06,
+  engine_control = list(),
   fallback_args = list(),
   verbose = TRUE,
   ...
@@ -77,6 +78,12 @@ infer_condition_grn(object, ...)
 \item{overwrite}{Replace existing condition networks.}
 \item{seed}{Random seed.}
 \item{max_iter, tol_objective, tol_coef}{Condition solver controls.}
+\item{engine_control}{Named memory-bounded target-engine controls:
+\code{memory_budget_mb}, \code{dense_max_p}, \code{lambda_batch_size},
+\code{refit_pcg_tol}, \code{refit_pcg_max_iter}, \code{preconditioner},
+\code{diagnostics_level}, \code{checkpoint_dir}, and \code{resume}. Unknown
+fields are rejected. Diagnostic retention and checkpoints do not alter fitted
+coefficients, lambda selection, or OOF projections.}
 \item{fallback_args}{Named arguments passed only to the original \code{infer_grn()} fallback. Managed arguments cannot be overridden.}
 \item{verbose}{Display progress messages.}
 \item{...}{Must be empty.}

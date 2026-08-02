@@ -1,3 +1,25 @@
+# Pando 1.6.3
+
+- Plans every target before any dense Gram, validation, Schur, or LLT
+  allocation. High-dimensional targets use sparse matrix-free FISTA, exact
+  residual validation, and a full-coordinate matrix-free Schur PCG refit; the
+  active-support solve also becomes matrix-free when its dense factor would
+  exceed the cumulative target-level worker budget. The default hybrid
+  preconditioner uses an active-union block only when its retained and
+  construction workspaces fit that same budget, otherwise using the exact same
+  full-coordinate equations with a diagonal preconditioner.
+- Calls the sparse solver directly inside C++ and removes the former
+  Eigen-to-`dgCMatrix`-to-Eigen conversion. Condition-balanced transforms and
+  training goodness-of-fit are now computed once by the native target engine.
+- Adds strict `engine_control`, compact diagnostics, bounded target batches,
+  resumable target checkpoints, allocation diagnostics, and a registered
+  native numerical self-test. Failed iterative solves stop with numerical
+  context and never return an unconverged approximation.
+- Preserves candidate edges, double precision, equal-condition scaling,
+  sparse-group objective, nested fold plans, per-lambda exact refits, lambda
+  selection, shared-baseline equations, single-cell OOF projections, and the
+  downstream condition-GRN coefficient contract. NativeSparseABI is now 6.
+
 # Pando 1.6.1
 
 - Adds an `exact_positions = FALSE` option to `find_motifs.GRNData()`. The

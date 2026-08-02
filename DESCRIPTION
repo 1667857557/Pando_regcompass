@@ -1,5 +1,5 @@
 Package: Pando
-Version: 1.6.2
+Version: 1.6.3
 Type: Package
 Title: Inferring regulomes from multi-modal single-cell genomics data
 Authors@R: person(given = "Jonas Simon",
@@ -22,14 +22,17 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     automatic or supplied lambda paths, sparse-group warm-start fitting,
     support-constrained direct-Schur refits, held-out prediction and projection,
     final full-data lambda selection, final refit, and OOF validation. The
-    engine reuses fold-local sufficient statistics and batches every inner-fold
-    refit path without returning through the R interpreter. The TF-by-ATAC
-    product, sparse-group solver, refit kernel and fused target engine are all
-    C++-only; missing registration, invalid dimensions, failed Cholesky systems,
-    non-finite arithmetic, incomplete OOF assignment or residual-check failures
-    terminate the analysis. Registered native routines are resolved explicitly
-    in each R process so PSOCK and forked BiocParallel workers do not depend on
-    transient Rcpp native-symbol bindings in their namespace. The primary
+    engine plans every fold before dense allocation. Small targets retain the
+    centered-Gram/direct-Schur path; high-dimensional targets use sparse
+    matrix-free FISTA, exact residual validation, and a full-coordinate Schur
+    PCG refit without a complete predictor-square matrix. The TF-by-ATAC
+    product, sparse-group solver, refit kernels and fused target engine are all
+    C++-only; missing registration, invalid dimensions, failed direct or
+    iterative solves, non-finite arithmetic, incomplete OOF assignment or
+    residual-check failures terminate the analysis. Registered native routines
+    are resolved explicitly in each R process so PSOCK and forked BiocParallel
+    workers do not depend on transient Rcpp native-symbol bindings in their
+    namespace. The primary
     projection is condition-full outer-heldout support: jointly estimable edges
     form the common component, condition-specific estimable edges remain in the
     focal condition, and every non-estimable edge contributes a projectable
@@ -83,11 +86,12 @@ Suggests:
     brms
 Remotes: 
     github::immunogenomics/presto
-Config/Pando/NativeSparseABI: 5
+Config/Pando/NativeSparseABI: 6
 Config/Pando/NativeCallBinding: registered-symbol-lookup-worker-safe-v1
 Config/Pando/ConditionProductBackend: cpp-only-fail-fast
 Config/Pando/ConditionSolverBackend: cpp-only-fail-fast
-Config/Pando/ConditionRefitBackend: cpp-eigen-direct-path-fail-fast
-Config/Pando/ConditionTargetEngineBackend: cpp-eigen-fused-hybrid-gram-nested-cv-path-refit-validation-stats-fail-fast
-Config/Pando/ConditionInnerCVBackend: cpp-eigen-hybrid-gram-sufficient-statistics-fail-fast
+Config/Pando/ConditionRefitBackend: dense-direct-or-matrix-free-schur-pcg-v1
+Config/Pando/ConditionTargetEngineBackend: cpp-eigen-memory-bounded-hybrid-target-v1
+Config/Pando/ConditionInnerCVBackend: exact-refit-validation-sparse-residual-v1
+Config/Pando/ConditionMemoryContract: no-full-p2-on-high-p-path-v1
 Config/Pando/InstalledRuntimeCI: R-4.5.1-Matrix-1.7.4
