@@ -456,7 +456,6 @@ aggregate_assay <- function(
 #'
 #' @return A list.
 #'
-#' @importFrom foreach %dopar%
 #' @export
 map_par <- function(x, fun, parallel=FALSE, verbose=TRUE){
     if (!parallel & (verbose==1)){
@@ -466,7 +465,10 @@ map_par <- function(x, fun, parallel=FALSE, verbose=TRUE){
         return(base::lapply(X=x, FUN=fun))
     }
     if (parallel){
-        outlist <- foreach::foreach(i=1:length(x)) %dopar% {fun(x[[i]])}
+        outlist <- foreach::`%dopar%`(
+            foreach::foreach(i=seq_along(x)),
+            fun(x[[i]])
+        )
         names(outlist) <- names(x)
         return(outlist)
     }
