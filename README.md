@@ -2,9 +2,8 @@
 
 # Pando
 
-This fork retains the original `infer_grn()` workflow and adds
-`infer_condition_grn()` for condition-specific TF–peak–target effects within each
-broad cell type.
+This fork retains the original `infer_grn()` workflow and provides one canonical
+condition-specific extension based on the original Gaussian identity Pando model.
 
 ## Install
 
@@ -12,7 +11,7 @@ broad cell type.
 remotes::install_github("1667857557/Pando_regcompass")
 ```
 
-## Condition-aware fit
+## Multiple conditions: two-stage common dictionary
 
 ```r
 condition_object <- infer_condition_grn(
@@ -20,81 +19,94 @@ condition_object <- infer_condition_grn(
   cell_type_col = "cell_type",
   condition_col = "condition",
   genes = metabolic_genes,
-  candidate_screen = "motif_domain",
-  condition_weight = "equal",
-  outer_nfolds = 5L,
-  inner_nfolds = 5L,
-  scale = TRUE
+  tf_cor = 0.1,
+  peak_cor = 0,
+  min_cells_per_condition = 300L,
+  adjust_method = "BH",
+  padj_threshold = 0.05,
+  rank_action = "mark",
+  parallel = TRUE
 )
 
 fit <- condition_grn_fit(
   condition_object,
-  network_name = "condition_grn",
   cell_type = "T_cell"
 )
 ```
 
-Each broad cell type is fitted separately. Conditions share the candidate
-supergraph, coefficient coordinate, target columns and fold-local transforms.
-They may have different active edges, exact zeros and opposite directions.
+For every broad cell type, Pando performs exactly these steps:
 
-## Numerical core
+1. discover candidate edges on all eligible cells of that type;
+2. discover candidate edges separately in every condition;
+3. union exact `(target, TF, region)` triples;
+4. freeze that target-specific edge dictionary;
+5. refit every condition with the same predictor columns using
+   `target ~ TF:peak`, Gaussian identity GLM and `scale = FALSE`;
+6. calculate network-wide adjusted P values and expose `penalty_effect`, which is
+   the fitted coefficient only when `padj < padj_threshold`.
 
-The canonical condition workflow contains only the main nested-CV and final
-support-constrained refit. Bootstrap stability, ridge-grid sensitivity and other
-sensitivity refits are not run or stored.
+The unfiltered condition coefficient remains in `estimate`. Non-significant
+coefficients are not rewritten; only `penalty_effect` is zeroed for downstream
+penalty construction. Zero-variance and aliased coefficients remain `NA` with
+explicit diagnostics.
 
-The TF-by-ATAC product, sparse-group lambda path and support-constrained refit are
-all compiled C++17/RcppEigen kernels. Missing native registration, unsupported
-matrix layouts, invalid dimensions, failed factorization, non-finite arithmetic
-or failed residual verification stop the analysis immediately. There is no
-runtime R fallback.
+Candidate discovery uses the original Pando peak-to-gene domain, motif mapping,
+peak-target correlation and TF-target correlation logic. Candidate coefficients
+from this first stage are never used as final condition effects. Global
+coefficients are not used to rescale condition coefficients.
 
-Predictor scaling remains sparse; equal-condition centering is handled
-algebraically by the condition intercept and the projection shift. For every
-inner training fold, one centered sufficient-statistic cache (`X' H X`,
-`X' H y`, means and response sum of squares) is shared by lambda-path fitting
-and the direct-Schur refit. A cost model selects the mathematically equivalent
-centered-Gram FISTA kernel when dense Gram multiplication is cheaper, otherwise
-the sparse matrix-free FISTA kernel is used. Validation MSE is evaluated from
-exact held-out sufficient statistics for every lambda; only the model selected
-inside each outer fold is projected across individual held-out cells. This
-preserves fold-local transforms, equal-condition weighting, structural zeros,
-condition-specific signs and the existing output schema without an R fallback.
+## Explicit APIs
 
-The alternating R refit remains available only as the internal numerical oracle
-`Pando:::.condition_refit_shared_baseline_reference()` for package regression
-tests. It is not a selectable analysis backend.
-
-## Primary RegCompass handoff
+The automatic workflow is composed from three public functions:
 
 ```r
-projection <- project_condition_grn_primary_cells(
-  condition_object,
-  fit = fit,
-  scale = "std",
-  targets = metabolic_genes
+edges_global <- discover_grn_edges(
+  grn_object,
+  genes = metabolic_genes,
+  cells = cells_of_one_cell_type,
+  source_label = "global",
+  source_type = "global"
+)
+
+edges_condition <- lapply(condition_levels, function(level) {
+  discover_grn_edges(
+    grn_object,
+    genes = metabolic_genes,
+    cells = cells_by_condition[[level]],
+    source_label = level,
+    source_type = "condition"
+  )
+})
+names(edges_condition) <- condition_levels
+
+edge_dictionary <- union_grn_edges(edges_global, edges_condition)
+
+condition_object <- fit_grn_from_edges(
+  grn_object,
+  edge_dictionary = edge_dictionary,
+  cells = cells_by_condition[["Control"]],
+  condition_label = "Control",
+  adjust_method = "BH",
+  padj_threshold = 0.05
 )
 ```
 
-The primary route is `condition-full OOF`:
+## No condition or one condition
 
-- an edge estimable in the focal condition contributes its outer-heldout
-  condition coefficient;
-- jointly estimable edges form the common-support component;
-- an edge non-estimable in one or both conditions contributes exactly zero in
-  each non-estimable condition;
-- an exact-zero predictor, including a peak closed in every input cell, remains
-  in the shared candidate supergraph as a projectable structural-zero edge and
-  is not assigned a fitted coefficient.
+When `condition_col` is `NULL`, absent, or has fewer than two observed levels,
+`infer_condition_grn()` directly runs the original Pando Gaussian interaction
+GRN independently for every requested broad cell type. It creates no condition
+coefficient or condition fit contract.
 
-The common-support decomposition remains available through
-`project_condition_grn_cells(..., support_policy = "pairwise_common")` or
-`"global_common"`. It is not the primary penalty.
-
-Project paired cells before exact metacell aggregation:
+## RegCompass handoff
 
 ```r
+projection <- project_condition_grn_cells(
+  condition_object,
+  fit = fit,
+  significant_only = TRUE
+)
+
 metacell_projection <- aggregate_condition_grn_projection(
   projection,
   membership,
@@ -102,11 +114,14 @@ metacell_projection <- aggregate_condition_grn_projection(
 )
 ```
 
-Do not recompute TF×ATAC from metacell averages, renormalize separately by
-condition, or refit after aggregation.
+Projection reconstructs the paired-cell predictor `TF RNA × peak ATAC` from the
+same globally preprocessed assay layers used for fitting and applies
+`penalty_effect`. Projection occurs before exact metacell aggregation. Do not
+renormalize each condition, regenerate a different edge dictionary, or refit
+coefficients after aggregation.
 
-All equations are maintained in one location:
-[RegCompass Tutorial 3: mathematical model](https://github.com/1667857557/Regcompass/blob/Main/docs/tutorial-03-mathematical-model.md).
+The reported P values are conditional on the selected edge dictionary; the
+workflow does not claim selective-inference correction for candidate discovery.
 
 ## Citation
 
