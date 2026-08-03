@@ -251,8 +251,9 @@ source = Path('R/condition_grn.R').read_text()
 for required in (
     'pando_candidate_input_provenance_v1',
     'preprocessing_provenance_verified',
-    'different RNA/ATAC layers',
-    'frozen dictionary and fixed fit use different RNA/ATAC'
+    'different RNA/ATAC ',
+    'layers, value semantics, or preprocessing fingerprints.',
+    'frozen dictionary and fixed fit use different RNA/ATAC '
 ):
     if required not in source:
         raise RuntimeError(f'missing candidate provenance contract: {required}')
