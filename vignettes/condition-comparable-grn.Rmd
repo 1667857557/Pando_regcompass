@@ -93,7 +93,7 @@ condition_edges <- setNames(lapply(condition_levels, function(level) {
 
 edge_dictionary <- union_grn_edges(pooled_edges, condition_edges)
 
-grnn_object <- fit_grn_from_edges(
+grn_object <- fit_grn_from_edges(
   grn_object,
   edge_dictionary = edge_dictionary,
   cells = cells_by_condition[[1]],
