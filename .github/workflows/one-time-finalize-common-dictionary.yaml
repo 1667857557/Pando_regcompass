@@ -1,4 +1,4 @@
-name: One-time finalize direct common-dictionary contract
+name: One-time finalize candidate preprocessing provenance
 
 on:
   pull_request:
@@ -23,10 +23,8 @@ jobs:
       - uses: r-lib/actions/setup-r@v2
         with:
           r-version: '4.5'
-      - name: Scope finalizer patches by function
-        run: python .github/scripts/patch_common_dictionary_finalizer.py
-      - name: Apply direct source integration
-        run: python .github/scripts/finalize_common_dictionary_contract.py
+      - name: Apply candidate preprocessing provenance
+        run: python .github/scripts/finalize_candidate_provenance.py
       - name: Parse R and test sources
         shell: Rscript {0}
         run: |
@@ -40,7 +38,7 @@ jobs:
               error = function(e) stop(file, ": ", conditionMessage(e))
             )
           }
-      - name: Verify function and file architecture
+      - name: Verify source architecture and reference contract
         shell: python
         run: |
           from pathlib import Path
@@ -69,24 +67,19 @@ jobs:
               raise RuntimeError(f"duplicate functions: {duplicate}")
           source = "\n".join(path.read_text() for path in files)
           required = [
-              "preprocessing_fingerprint",
-              "peak_value_type",
-              "Probability-valued ATAC layers",
+              "pando_candidate_input_provenance_v1",
+              "preprocessing_provenance_verified",
+              "different RNA/ATAC layers",
+              "frozen dictionary and fixed fit use different RNA/ATAC",
               "RNA/ATAC preprocessing identity changed",
-              ".find_modules_network_core",
           ]
           missing = [value for value in required if value not in source]
           if missing:
-              raise RuntimeError(f"incomplete direct contract: {missing}")
-      - name: Keep workflow changes out of bot source commit
-        run: git checkout -- .github/workflows/common-dictionary-condition-grn.yaml
+              raise RuntimeError(f"incomplete reference contract: {missing}")
       - name: Commit canonical source changes
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git reset .github/scripts/finalize_common_dictionary_contract.py
-          git reset .github/scripts/patch_common_dictionary_finalizer.py
-          git reset .github/workflows/one-time-finalize-common-dictionary.yaml
-          git commit -m "integrate common-dictionary contract directly"
+          git add R/condition_grn.R tests/testthat/test-common-dictionary-direct-source.R
+          git commit -m "enforce one candidate preprocessing reference"
           git push origin HEAD:${{ github.head_ref }}
