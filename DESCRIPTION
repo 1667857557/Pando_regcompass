@@ -17,7 +17,9 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     steps. Exact TF-peak-target triples are unioned into one frozen dictionary.
     Every condition is then refitted with the same Gaussian identity Pando
     interaction model, the same predictor columns and the same globally
-    preprocessed RNA and ATAC layers, with scale set to FALSE. Condition effects
+    preprocessed RNA and ATAC layers, with scale set to FALSE. The selected
+    layers, peak-value semantics and a stable preprocessing fingerprint are
+    stored in every condition fit and verified again during projection. Condition effects
     are the resulting coefficients; no pooled-coefficient calibration is
     applied. Coefficients retain standard errors, P values and network-wide
     adjusted P values. Only adjusted-P values below the configured threshold
