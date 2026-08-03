@@ -63,7 +63,11 @@ jobs:
 
           status <- system2(
             file.path(R.home("bin"), "R"),
-            c("CMD", "INSTALL", "--library", library_root, package_root)
+            c(
+              "CMD", "INSTALL",
+              paste0("--library=", library_root),
+              package_root
+            )
           )
           stopifnot(identical(status, 0L))
 
