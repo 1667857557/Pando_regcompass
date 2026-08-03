@@ -1,5 +1,5 @@
 Package: Pando
-Version: 2.0.0
+Version: 2.0.1
 Type: Package
 Title: Inferring regulomes from multi-modal single-cell genomics data
 Authors@R: person(given = "Jonas Simon",
@@ -19,16 +19,19 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     interaction model, the same predictor columns and the same globally
     preprocessed RNA and ATAC layers, with scale set to FALSE. The selected
     layers, peak-value semantics and a stable preprocessing fingerprint are
-    stored in every condition fit and verified again during projection. Condition effects
-    are the resulting coefficients; no pooled-coefficient calibration is
-    applied. Coefficients retain standard errors, P values and network-wide
-    adjusted P values. Only adjusted-P values below the configured threshold
-    enter the exported penalty effect, while the complete coefficient table is
-    retained for audit. Zero-variance and aliased edges remain unavailable rather
-    than being silently converted to fitted zeros. When no condition column is
-    supplied, the column is absent, or fewer than two levels are observed, the
-    original per-cell-type infer_grn Gaussian interaction workflow is used and no
-    condition coefficient is created.
+    stored in every condition fit and verified again during projection.
+    Condition effects are the resulting coefficients; no pooled-coefficient
+    calibration is applied. Coefficients retain standard errors, P values and
+    network-wide adjusted P values. Only adjusted-P values below the configured
+    threshold enter the exported penalty effect, while the complete coefficient
+    table is retained for audit. Zero-variance and aliased edges remain
+    unavailable rather than being silently converted to fitted zeros. When no
+    condition column is supplied, the column is absent, or fewer than two levels
+    are observed, the original per-cell-type infer_grn Gaussian interaction
+    workflow is used and no condition coefficient is created. Independent
+    cell-type jobs can be dispatched through BiocParallel without nested worker
+    pools, and condition-only controls are removed before standard infer_grn
+    model arguments are forwarded to regression backends.
 License: MIT
 Encoding: UTF-8
 LazyData: true
