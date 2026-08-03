@@ -22,9 +22,12 @@ jobs:
         run: |
           description <- read.dcf("DESCRIPTION")
           stopifnot(
-            identical(tolower(description[1L, "LazyData"]), "false"),
             identical(
-              description[1L, "Config/Pando/DataStorage"],
+              tolower(unname(description[1L, "LazyData"])),
+              "false"
+            ),
+            identical(
+              unname(description[1L, "Config/Pando/DataStorage"]),
               "standalone-RData"
             )
           )
