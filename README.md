@@ -14,6 +14,14 @@ remotes::install_github("1667857557/Pando_regcompass")
 ## Multiple conditions: two-stage common dictionary
 
 ```r
+library(BiocParallel)
+
+upstream_bp <- if (.Platform$OS.type == "windows") {
+  SnowParam(workers = 6L, type = "SOCK")
+} else {
+  MulticoreParam(workers = 6L)
+}
+
 condition_object <- infer_condition_grn(
   grn_object,
   cell_type_col = "cell_type",
@@ -25,7 +33,9 @@ condition_object <- infer_condition_grn(
   adjust_method = "BH",
   padj_threshold = 0.05,
   rank_action = "mark",
-  parallel = TRUE
+  parallel = TRUE,
+  BPPARAM = upstream_bp,
+  parallel_scope = "cell_type"
 )
 
 fit <- condition_grn_fit(
@@ -33,6 +43,8 @@ fit <- condition_grn_fit(
   cell_type = "T_cell"
 )
 ```
+
+With multiple requested broad cell types, `parallel_scope = "cell_type"` runs independent cell-type jobs through `BPPARAM`. Each worker runs candidate discovery and fixed-dictionary fitting serially, preventing nested worker pools and oversubscription. `parallel_scope = "target"` retains the original target-level Pando parallel path. The default `"auto"` chooses cell-type parallelism when multiple cell types are available.
 
 For every broad cell type, Pando performs exactly these steps:
 
@@ -97,6 +109,8 @@ When `condition_col` is `NULL`, absent, or has fewer than two observed levels,
 `infer_condition_grn()` directly runs the original Pando Gaussian interaction
 GRN independently for every requested broad cell type. It creates no condition
 coefficient or condition fit contract.
+
+Condition-GRN controls are never forwarded into standard `infer_grn()` model backends. Arguments such as `padj_threshold`, `rank_action`, `min_residual_df`, condition/layer controls, `BPPARAM`, and `parallel_scope` are removed before `stats::glm()` or another standard model receives `...`. This prevents one invalid condition-only argument from causing repeated per-gene model failures.
 
 ## RegCompass handoff
 
