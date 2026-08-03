@@ -362,6 +362,13 @@
     class(out) <- c("PandoEdgeDictionary", "data.frame")
     attr(out, "source_label") <- source_label
     attr(out, "source_type") <- source_type
+    attr(out, "rna_layer") <- prepared$rna_layer
+    attr(out, "peak_layer") <- prepared$peak_layer
+    attr(out, "peak_value_type") <- prepared$peak_value_type
+    attr(out, "preprocessing_fingerprint") <-
+        prepared$preprocessing_fingerprint
+    attr(out, "dictionary_input_schema") <-
+        "pando_candidate_input_provenance_v1"
     out
 }
 
@@ -428,6 +435,41 @@ union_grn_edges <- function(global_edges = NULL, condition_edges) {
         stop("Every candidate table requires target, tf, region and ATAC IDs.",
              call. = FALSE)
     }
+    provenance_fields <- c(
+        "rna_layer", "peak_layer", "peak_value_type",
+        "preprocessing_fingerprint", "dictionary_input_schema"
+    )
+    provenance <- lapply(inputs, function(candidate) {
+        stats::setNames(lapply(provenance_fields, function(field) {
+            attr(candidate, field, exact = TRUE)
+        }), provenance_fields)
+    })
+    complete_provenance <- vapply(provenance, function(value) {
+        all(vapply(value, function(item) {
+            is.character(item) && length(item) == 1L &&
+                !is.na(item) && nzchar(item)
+        }, logical(1)))
+    }, logical(1))
+    if (any(complete_provenance) && !all(complete_provenance)) {
+        stop(
+            "Candidate tables mix verified and unverified preprocessing ",
+            "provenance.", call. = FALSE
+        )
+    }
+    if (all(complete_provenance)) {
+        reference <- provenance[[1L]]
+        same_reference <- vapply(provenance, function(value) {
+            identical(value, reference)
+        }, logical(1))
+        if (!all(same_reference)) {
+            stop(
+                "Global and condition candidates use different RNA/ATAC ",
+                "layers, value semantics, or preprocessing fingerprints.",
+                call. = FALSE
+            )
+        }
+    }
+
     all_rows <- do.call(rbind, lapply(seq_along(inputs), function(i) {
         x <- as.data.frame(inputs[[i]], stringsAsFactors = FALSE)
         if (!nrow(x)) return(NULL)
@@ -474,6 +516,13 @@ union_grn_edges <- function(global_edges = NULL, condition_edges) {
         stop("Exact edge union produced duplicated triples.", call. = FALSE)
     }
     class(dictionary) <- c("PandoEdgeDictionary", "data.frame")
+    attr(dictionary, "preprocessing_provenance_verified") <-
+        all(complete_provenance)
+    if (all(complete_provenance)) {
+        for (field in provenance_fields) {
+            attr(dictionary, field) <- provenance[[1L]][[field]]
+        }
+    }
     dictionary
 }
 
@@ -488,6 +537,39 @@ union_grn_edges <- function(global_edges = NULL, condition_edges) {
         anyDuplicated(dictionary$edge_id)) {
         stop("The common edge dictionary is invalid.", call. = FALSE)
     }
+    dictionary_fingerprint <- attr(
+        dictionary, "preprocessing_fingerprint", exact = TRUE
+    )
+    dictionary_rna_layer <- attr(dictionary, "rna_layer", exact = TRUE)
+    dictionary_peak_layer <- attr(dictionary, "peak_layer", exact = TRUE)
+    dictionary_peak_value_type <- attr(
+        dictionary, "peak_value_type", exact = TRUE
+    )
+    provenance_values <- list(
+        dictionary_fingerprint, dictionary_rna_layer,
+        dictionary_peak_layer, dictionary_peak_value_type
+    )
+    has_provenance <- vapply(provenance_values, function(value) {
+        is.character(value) && length(value) == 1L &&
+            !is.na(value) && nzchar(value)
+    }, logical(1))
+    if (any(has_provenance) && !all(has_provenance)) {
+        stop("The dictionary contains incomplete preprocessing provenance.",
+             call. = FALSE)
+    }
+    if (all(has_provenance) &&
+        (!identical(dictionary_fingerprint,
+                    prepared$preprocessing_fingerprint) ||
+         !identical(dictionary_rna_layer, prepared$rna_layer) ||
+         !identical(dictionary_peak_layer, prepared$peak_layer) ||
+         !identical(dictionary_peak_value_type,
+                    prepared$peak_value_type))) {
+        stop(
+            "The frozen dictionary and fixed fit use different RNA/ATAC ",
+            "preprocessing references.", call. = FALSE
+        )
+    }
+
     expected <- paste(
         dictionary$target, dictionary$tf, dictionary$region, sep = "||"
     )
@@ -767,6 +849,11 @@ union_grn_edges <- function(global_edges = NULL, condition_edges) {
             peak_layer = prepared$peak_layer,
             peak_value_type = prepared$peak_value_type,
             preprocessing_fingerprint = prepared$preprocessing_fingerprint,
+            dictionary_preprocessing_provenance_verified = isTRUE(attr(
+                edge_dictionary,
+                "preprocessing_provenance_verified",
+                exact = TRUE
+            )),
             adjust_method = adjust_method,
             padj_threshold = padj_threshold,
             inference_scope = "conditional_on_selected_edge_dictionary"
@@ -1186,7 +1273,6 @@ infer_condition_grn.GRNData <- function(
 #' Extract common-dictionary condition GRN fits
 #'
 #' @param object A fitted `GRNData` object.
-#' @param network_name Retained for compatibility; fit selection is by cell type.
 #' @param cell_type Optional fitted cell type.
 #' @return One `ConditionGRNFit` or a named list.
 #' @export
@@ -1198,7 +1284,16 @@ condition_grn_fit <- function(object, ...) {
 #' @method condition_grn_fit GRNData
 #' @export
 condition_grn_fit.GRNData <- function(
-    object, network_name = NULL, cell_type = NULL, ...) {
+    object, cell_type = NULL, ...) {
+    dots <- list(...)
+    if (length(dots)) {
+        label <- names(dots)
+        label[!nzchar(label)] <- "<unnamed>"
+        stop(
+            "Unused condition_grn_fit argument(s): ",
+            paste(label, collapse = ", "), call. = FALSE
+        )
+    }
     fits <- object@grn@params$condition_grn_fits
     if (!is.list(fits) || !length(fits)) {
         stop("No common-dictionary condition GRN fit is stored.",

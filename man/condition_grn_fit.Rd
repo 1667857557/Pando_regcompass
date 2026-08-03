@@ -7,13 +7,12 @@
 \usage{
 condition_grn_fit(object, ...)
 
-\method{condition_grn_fit}{GRNData}(object, network_name = NULL, cell_type = NULL, ...)
+\method{condition_grn_fit}{GRNData}(object, cell_type = NULL, ...)
 }
 \arguments{
 \item{object}{A fitted \code{GRNData}.}
-\item{network_name}{Retained for compatibility.}
 \item{cell_type}{Optional fitted cell type.}
-\item{...}{Additional arguments.}
+\item{...}{Must be empty. Unknown arguments are rejected.}
 }
 \value{One \code{ConditionGRNFit} or a named list.}
 \description{Returns the exact edge dictionary, condition coefficient table, fit diagnostics, network names, significance rule and assay provenance.}
