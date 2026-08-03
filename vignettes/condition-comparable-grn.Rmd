@@ -11,28 +11,13 @@ vignette: >
 knitr::opts_chunk$set(eval = FALSE, collapse = TRUE, comment = "#>")
 ```
 
-# Model contract
+# Required object state
 
-For one broad cell type, candidate discovery is run globally and independently
-in every condition. For target `g`, the exact edge union is
+The input must be a `GRNData` object with paired RNA and ATAC cells, gene annotation, regulatory regions, and motif matches from `find_motifs()`.
 
-\[
-E_g^\cup = E_g^{global} \cup \bigcup_c E_g^{(c)}.
-\]
+The complete mathematical specification is in `docs/mathematical-model.md`.
 
-Every condition then fits the same model:
-
-\[
-Y_{igc}=\alpha_{gc}+\sum_{r\in E_g^\cup}\beta_{rgc}
-E_{i,t(r),c}A_{i,p(r),c}+\varepsilon_{igc}.
-\]
-
-RNA and ATAC layers must be preprocessed before condition splitting. The final
-fit uses Gaussian identity GLM, `interaction = ":"` and `scale = FALSE`. Thus
-all conditions share predictor definitions, units and conditioning covariates.
-No global-coefficient calibration is applied.
-
-# Automatic route
+# Automatic routing
 
 ```r
 fit_object <- infer_condition_grn(
@@ -52,30 +37,51 @@ fit_object <- infer_condition_grn(
 )
 ```
 
-The resulting condition networks are ordinary Pando `Network` objects. Their
-coefficient tables include:
+With at least two eligible conditions in a cell type, `infer_condition_grn()` discovers pooled and condition-specific candidates, freezes the exact TF–peak–target union, and fits every condition against that dictionary. With no usable condition column or one condition level, it runs the original per-cell-type `infer_grn()` route and does not create condition coefficients.
+
+Important parameters:
+
+- `tf_cor`, `peak_cor`: candidate-discovery thresholds.
+- `min_cells_per_condition`: minimum paired cells required for a condition fit.
+- `small_condition_action`: action for undersized conditions.
+- `adjust_method`, `padj_threshold`: adjusted-P rule used for `significant` and `penalty_effect`.
+- `rank_action`, `min_residual_df`: estimability controls.
+- `rna_layer`, `peak_layer`, `peak_value_type`: recorded preprocessing reference used again during projection.
+
+# Outputs
+
+Each fitted condition is stored as a standard Pando `Network`. The coefficient table includes:
 
 ```text
 tf target region edge_id estimate std_err statistic pval padj
 significant penalty_effect direction estimable zero_variance aliased
 ```
 
-`estimate` is the complete fitted condition effect. `penalty_effect` equals
-`estimate` only where `padj < 0.05`; otherwise it is zero. An unavailable
-coefficient remains `NA` and is not treated as an estimated zero.
+`estimate` retains the fitted coefficient. `penalty_effect` contains only coefficients accepted by the configured adjusted-P rule. Unavailable coefficients remain `NA`.
 
-# Manual two-stage route
+Use `condition_grn_fit()` to retrieve the cell-type contract and `condition_grn_subgraph()` to retrieve one condition's edge table.
 
 ```r
-edges_global <- discover_grn_edges(
+fit <- condition_grn_fit(fit_object, cell_type = "T_cell")
+edges <- condition_grn_subgraph(
+  fit,
+  condition = "Control",
+  significant_only = TRUE
+)
+```
+
+# Manual dictionary route
+
+```r
+pooled_edges <- discover_grn_edges(
   grn_object,
   genes = metabolic_genes,
   cells = cells_cell_type,
-  source_label = "global",
+  source_label = "pooled",
   source_type = "global"
 )
 
-edges_condition <- setNames(lapply(condition_levels, function(level) {
+condition_edges <- setNames(lapply(condition_levels, function(level) {
   discover_grn_edges(
     grn_object,
     genes = metabolic_genes,
@@ -85,47 +91,36 @@ edges_condition <- setNames(lapply(condition_levels, function(level) {
   )
 }), condition_levels)
 
-edge_dictionary <- union_grn_edges(edges_global, edges_condition)
+edge_dictionary <- union_grn_edges(pooled_edges, condition_edges)
 
-for (level in condition_levels) {
-  grn_object <- fit_grn_from_edges(
-    grn_object,
-    edge_dictionary = edge_dictionary,
-    cells = cells_by_condition[[level]],
-    condition_label = level,
-    network_name = paste0("condition_grn__", level),
-    adjust_method = "BH",
-    padj_threshold = 0.05,
-    rank_action = "mark"
-  )
-}
+grnn_object <- fit_grn_from_edges(
+  grn_object,
+  edge_dictionary = edge_dictionary,
+  cells = cells_by_condition[[1]],
+  condition_label = condition_levels[[1]],
+  network_name = "condition_grn",
+  adjust_method = "BH",
+  padj_threshold = 0.05,
+  rank_action = "mark"
+)
 ```
 
-The union is over complete triples. TF, peak and target node sets must not be
-unioned separately and recombined.
+The dictionary union is always performed on complete TF–peak–target triples.
 
-# Standard fallback
-
-With no usable condition column or one condition level, `infer_condition_grn()`
-runs original per-cell-type Pando GLMs and stores
-`condition_coefficients_calculated = FALSE`.
-
-# Projection
+# Projection and aggregation
 
 ```r
-fit <- condition_grn_fit(fit_object, cell_type = "T_cell")
 projection <- project_condition_grn_cells(
   fit_object,
   fit = fit,
   significant_only = TRUE
 )
-metacell <- aggregate_condition_grn_projection(
+
+metacell_projection <- aggregate_condition_grn_projection(
   projection,
   membership,
   group_col = "metacell_id"
 )
 ```
 
-Projection uses paired single cells before aggregation. The coefficient test is
-conditional on the selected dictionary; candidate-selection uncertainty is not
-included in the ordinary GLM P value.
+Projection uses the fitted paired-cell RNA and ATAC layers and is aggregated only after cell-level target scores are calculated.
