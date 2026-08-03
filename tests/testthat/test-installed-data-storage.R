@@ -33,5 +33,5 @@ test_that("bundled datasets use standalone installed files", {
         "motif2tf", envir = data_environment, inherits = FALSE
     )
     expect_true(is.data.frame(motif2tf))
-    expect_gte(ncol(motif2tf), 2L)
+    expect_true(ncol(motif2tf) >= 2L)
 })
