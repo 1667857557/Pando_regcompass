@@ -42,4 +42,26 @@ prepare = replace_once(
 '''
 if text.count(old) != 1:
     raise RuntimeError(f'expected one finalizer block, found {text.count(old)}')
-path.write_text(text.replace(old, new, 1))
+text = text.replace(old, new, 1)
+
+old_projection_write = '''(R_DIR / 'condition_grn_projection.R').write_text(projection)
+projection_path.unlink()
+validation_path.unlink()
+'''
+new_projection_write = '''# Projection is implemented only in its responsibility-named source file.
+project_start, project_end = function_span(
+    condition, 'project_condition_grn_cells'
+)
+condition = condition[:project_start] + condition[project_end:]
+condition_path.write_text(condition)
+(R_DIR / 'condition_grn_projection.R').write_text(projection)
+projection_path.unlink()
+validation_path.unlink()
+'''
+if text.count(old_projection_write) != 1:
+    raise RuntimeError(
+        f'expected one projection write block, found '
+        f'{text.count(old_projection_write)}'
+    )
+text = text.replace(old_projection_write, new_projection_write, 1)
+path.write_text(text)
