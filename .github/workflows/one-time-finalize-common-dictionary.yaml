@@ -1,4 +1,4 @@
-name: One-time finalize candidate preprocessing provenance
+name: One-time finalize current common-dictionary API
 
 on:
   pull_request:
@@ -25,6 +25,8 @@ jobs:
           r-version: '4.5'
       - name: Apply candidate preprocessing provenance
         run: python .github/scripts/finalize_candidate_provenance.py
+      - name: Remove obsolete API and tutorial surfaces
+        run: python .github/scripts/finalize_current_api.py
       - name: Parse R and test sources
         shell: Rscript {0}
         run: |
@@ -38,18 +40,18 @@ jobs:
               error = function(e) stop(file, ": ", conditionMessage(e))
             )
           }
-      - name: Verify source architecture and reference contract
+      - name: Verify current source and API contract
         shell: python
         run: |
           from pathlib import Path
           import re
           files = sorted(Path("R").glob("*.R"))
-          forbidden = {
+          forbidden_files = {
               "zz_common_dictionary_validation.R",
               "zz_common_dictionary_projection.R",
               "zzz_fit_schema_contract.R",
           }
-          present = forbidden.intersection(path.name for path in files)
+          present = forbidden_files.intersection(path.name for path in files)
           if present:
               raise RuntimeError(f"late-loaded files remain: {present}")
           pattern = re.compile(
@@ -69,17 +71,29 @@ jobs:
           required = [
               "pando_candidate_input_provenance_v1",
               "preprocessing_provenance_verified",
-              "different RNA/ATAC layers",
-              "frozen dictionary and fixed fit use different RNA/ATAC",
+              "different RNA/ATAC ",
+              "layers, value semantics, or preprocessing fingerprints.",
+              "frozen dictionary and fixed fit use different RNA/ATAC ",
               "RNA/ATAC preprocessing identity changed",
           ]
           missing = [value for value in required if value not in source]
           if missing:
               raise RuntimeError(f"incomplete reference contract: {missing}")
-      - name: Commit canonical source changes
+          retired = [
+              "condition_grn_contrast <- function",
+              "project_condition_grn_primary_cells <- function",
+              "project_condition_grn_to_cells <- function",
+              "network_name = NULL, cell_type = NULL",
+          ]
+          found = [value for value in retired if value in source]
+          if found:
+              raise RuntimeError(f"retired API remains: {found}")
+          if Path("docs/condition-subgrn-shared-baseline.md").exists():
+              raise RuntimeError("obsolete shared-baseline tutorial remains")
+      - name: Commit canonical source and documentation changes
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add R/condition_grn.R tests/testthat/test-common-dictionary-direct-source.R
-          git commit -m "enforce one candidate preprocessing reference"
+          git add -A R tests/testthat NEWS.md man vignettes docs
+          git commit -m "finalize current common-dictionary API"
           git push origin HEAD:${{ github.head_ref }}
