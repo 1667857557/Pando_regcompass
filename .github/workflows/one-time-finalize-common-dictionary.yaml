@@ -78,16 +78,15 @@ jobs:
           missing = [value for value in required if value not in source]
           if missing:
               raise RuntimeError(f"incomplete direct contract: {missing}")
-      - name: Remove temporary migration files
-        run: |
-          rm .github/scripts/finalize_common_dictionary_contract.py
-          rm .github/scripts/patch_common_dictionary_finalizer.py
-          rm .github/workflows/one-time-finalize-common-dictionary.yaml
-          rmdir .github/scripts 2>/dev/null || true
+      - name: Keep workflow changes out of bot source commit
+        run: git checkout -- .github/workflows/common-dictionary-condition-grn.yaml
       - name: Commit canonical source changes
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
+          git reset .github/scripts/finalize_common_dictionary_contract.py
+          git reset .github/scripts/patch_common_dictionary_finalizer.py
+          git reset .github/workflows/one-time-finalize-common-dictionary.yaml
           git commit -m "integrate common-dictionary contract directly"
           git push origin HEAD:${{ github.head_ref }}
