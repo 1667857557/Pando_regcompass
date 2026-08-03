@@ -153,6 +153,3 @@ LayerData <- function(object, ...){
 VariableFeatures <- function(object, ...){
     UseMethod(generic = 'VariableFeatures', object = object)
 }
-
-
-

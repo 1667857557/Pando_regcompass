@@ -1,3 +1,22 @@
+# Pando 2.0.0
+
+- Replaces the retired condition-aware nested-CV, sparse-group, native solver,
+  structural-zero and OOF projection engines with one two-stage
+  common-dictionary workflow.
+- Discovers exact TF-peak-target candidates in the complete cell type and in
+  each condition, freezes their exact union, and fits the same Gaussian
+  identity `TF:peak` design in every condition with `scale = FALSE`.
+- Records RNA/ATAC layers, ATAC value semantics and a preprocessing fingerprint
+  in candidate tables, the frozen dictionary, fitted networks and projections.
+  Candidate unions and fixed fits reject mixed preprocessing references.
+- Uses BH-adjusted condition coefficients for `penalty_effect`; unavailable or
+  aliased coefficients remain unavailable rather than becoming fitted zeros.
+- Removes obsolete condition APIs and compatibility arguments. The supported
+  condition API is `discover_grn_edges()`, `union_grn_edges()`,
+  `fit_grn_from_edges()`, `infer_condition_grn()`, `condition_grn_fit()`,
+  `condition_grn_subgraph()`, `project_condition_grn_cells()` and
+  `aggregate_condition_grn_projection()`.
+
 # Pando 1.6.3
 
 - Plans every target before any dense Gram, validation, Schur, or LLT

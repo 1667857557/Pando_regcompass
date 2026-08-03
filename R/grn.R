@@ -496,7 +496,7 @@ format_coefs <- function(coefs, term=':', adjust_method='fdr'){
 #' @rdname find_modules
 #' @export
 #' @method find_modules Network
-find_modules.Network <- function(
+.find_modules_network_core <- function(
     object,
     p_thresh = 0.05,
     rsq_thresh = 0.1,
@@ -617,6 +617,56 @@ find_modules.Network <- function(
         min_genes_per_module = min_genes_per_module
     )
     return(object)
+}
+
+find_modules.Network <- function(
+    object,
+    p_thresh = 0.05,
+    rsq_thresh = 0.1,
+    nvar_thresh = 10,
+    min_genes_per_module = 5,
+    xgb_method = c("tf", "target"),
+    xgb_top = 50,
+    verbose = TRUE) {
+    fixed_dictionary <- identical(
+        NetworkParams(object)$fit_mode,
+        "fixed_edge_dictionary"
+    )
+    original_coefs <- if (fixed_dictionary) object@coefs else NULL
+    original_fit <- if (fixed_dictionary) object@fit else NULL
+    if (fixed_dictionary) {
+        if (!"nvariables" %in% colnames(object@fit) &&
+            "nvariables_dictionary" %in% colnames(object@fit)) {
+            object@fit$nvariables <- as.integer(
+                object@fit$nvariables_dictionary
+            )
+        }
+        excluded <- (!is.na(object@coefs$estimable) &
+                     !object@coefs$estimable) |
+            !is.finite(object@coefs$estimate)
+        object@coefs$padj[excluded] <- 1
+    }
+    answer <- .find_modules_network_core(
+        object = object,
+        p_thresh = p_thresh,
+        rsq_thresh = rsq_thresh,
+        nvar_thresh = nvar_thresh,
+        min_genes_per_module = min_genes_per_module,
+        xgb_method = xgb_method,
+        xgb_top = xgb_top,
+        verbose = verbose
+    )
+    if (fixed_dictionary) {
+        answer@coefs <- original_coefs
+        answer@fit <- original_fit
+        if (!"nvariables" %in% colnames(answer@fit) &&
+            "nvariables_dictionary" %in% colnames(answer@fit)) {
+            answer@fit$nvariables <- as.integer(
+                answer@fit$nvariables_dictionary
+            )
+        }
+    }
+    answer
 }
 
 

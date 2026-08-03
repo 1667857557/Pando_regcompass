@@ -1,12 +1,12 @@
 # Projection from a frozen dictionary must not rerun candidate discovery.
 
-.condition_prepare_projection_input <- function(object) {
+.condition_prepare_projection_input <- function(object, fit) {
     params <- Params(object)
     gene_data <- Matrix::t(LayerData(
-        object, assay = params$rna_assay, layer = "data"
+        object, assay = params$rna_assay, layer = fit$rna_layer
     ))
     peak_data_all <- Matrix::t(LayerData(
-        object, assay = params$peak_assay, layer = "data"
+        object, assay = params$peak_assay, layer = fit$peak_layer
     ))
     common_cells <- intersect(rownames(gene_data), rownames(peak_data_all))
     if (!length(common_cells)) {
@@ -14,6 +14,15 @@
     }
     gene_data <- gene_data[common_cells, , drop = FALSE]
     peak_data_all <- peak_data_all[common_cells, , drop = FALSE]
+    observed_fingerprint <- .condition_preprocessing_fingerprint(
+        object = object, gene_data = gene_data, peak_data = peak_data_all,
+        rna_layer = fit$rna_layer, peak_layer = fit$peak_layer,
+        peak_value_type = fit$peak_value_type
+    )
+    if (!identical(observed_fingerprint, fit$preprocessing_fingerprint)) {
+        stop("RNA/ATAC preprocessing identity changed after condition fitting.",
+             call. = FALSE)
+    }
     regions <- NetworkRegions(object)
     if (!length(regions@peaks) || any(
         regions@peaks < 1L | regions@peaks > ncol(peak_data_all)
@@ -50,7 +59,17 @@ project_condition_grn_cells <- function(
         !identical(fit$schema_version, .condition_common_dictionary_schema)) {
         stop("Common-dictionary object and fit are required.", call. = FALSE)
     }
-    prepared <- .condition_prepare_projection_input(object)
+    required_provenance <- c(
+        "rna_layer", "peak_layer", "peak_value_type",
+        "preprocessing_fingerprint"
+    )
+    if (!all(required_provenance %in% names(fit)) ||
+        any(!nzchar(vapply(fit[required_provenance], as.character,
+                           character(1))))) {
+        stop("The fitted condition GRN lacks preprocessing provenance.",
+             call. = FALSE)
+    }
+    prepared <- .condition_prepare_projection_input(object, fit)
     dictionary <- as.data.frame(fit$edge_dictionary, stringsAsFactors = FALSE)
     required <- c("edge_id", "target", "tf", "region", "atac_feature_id")
     if (!all(required %in% colnames(dictionary)) ||

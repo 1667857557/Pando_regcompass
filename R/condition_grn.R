@@ -2,6 +2,50 @@
 
 .condition_common_dictionary_schema <- "pando_condition_grn_common_dictionary_v1"
 
+.condition_hash_object <- function(value) {
+    file <- tempfile("pando_condition_fingerprint_", fileext = ".rds")
+    on.exit(unlink(file), add = TRUE)
+    saveRDS(value, file, version = 2L, compress = FALSE)
+    unname(tools::md5sum(file)[[1L]])
+}
+
+.condition_preprocessing_fingerprint <- function(
+    object, gene_data, peak_data, rna_layer, peak_layer,
+    peak_value_type = "normalized") {
+    params <- Params(object)
+    command_provenance <- tryCatch({
+        commands <- object@data@commands
+        lapply(commands, function(command) {
+            list(
+                name = tryCatch(as.character(command@name),
+                                error = function(error) NA_character_),
+                assay = tryCatch(as.character(command@assay.used),
+                                 error = function(error) NA_character_),
+                call = tryCatch(as.character(command@call.string),
+                                error = function(error) NA_character_)
+            )
+        })
+    }, error = function(error) list())
+    .condition_hash_object(list(
+        schema = "pando_common_dictionary_preprocessing_v1",
+        rna_assay = params$rna_assay,
+        peak_assay = params$peak_assay,
+        rna_layer = rna_layer,
+        peak_layer = peak_layer,
+        peak_value_type = peak_value_type,
+        gene_matrix_class = class(gene_data),
+        peak_matrix_class = class(peak_data),
+        gene_dim = dim(gene_data),
+        peak_dim = dim(peak_data),
+        gene_cells = rownames(gene_data),
+        peak_cells = rownames(peak_data),
+        gene_features = colnames(gene_data),
+        peak_features = colnames(peak_data),
+        preprocessing_commands = command_provenance
+    ))
+}
+
+
 .condition_safe_label <- function(x) {
     value <- gsub("[^[:alnum:]_.-]+", "_", as.character(x))
     value[!nzchar(value)] <- "unnamed"
@@ -39,11 +83,23 @@
 .condition_prepare_common_input <- function(
     object, genes = NULL, peak_to_gene_method = c("Signac", "GREAT"),
     upstream = 100000, downstream = 0, extend = 1000000,
-    only_tss = FALSE, peak_to_gene_domains = NULL, verbose = TRUE) {
+    only_tss = FALSE, peak_to_gene_domains = NULL,
+    rna_layer = "data", peak_layer = "data",
+    peak_value_type = c("normalized", "probability", "other"),
+    verbose = TRUE) {
     if (!inherits(object, "GRNData")) {
         stop("`object` must be a GRNData object.", call. = FALSE)
     }
     peak_to_gene_method <- match.arg(peak_to_gene_method)
+    peak_value_type <- match.arg(peak_value_type)
+    valid_layer <- function(value) {
+        is.character(value) && length(value) == 1L && !is.na(value) &&
+            nzchar(trimws(value))
+    }
+    if (!valid_layer(rna_layer) || !valid_layer(peak_layer)) {
+        stop("RNA and ATAC layer names must be non-empty strings.",
+             call. = FALSE)
+    }
     params <- Params(object)
     motif2tf <- NetworkTFs(object)
     if (is.null(motif2tf)) {
@@ -64,10 +120,10 @@
     }
 
     gene_data <- Matrix::t(LayerData(
-        object, assay = params$rna_assay, layer = "data"
+        object, assay = params$rna_assay, layer = rna_layer
     ))
     peak_data_all <- Matrix::t(LayerData(
-        object, assay = params$peak_assay, layer = "data"
+        object, assay = params$peak_assay, layer = peak_layer
     ))
     common_cells <- intersect(rownames(gene_data), rownames(peak_data_all))
     if (!length(common_cells)) {
@@ -75,6 +131,23 @@
     }
     gene_data <- gene_data[common_cells, , drop = FALSE]
     peak_data_all <- peak_data_all[common_cells, , drop = FALSE]
+    if (identical(peak_value_type, "probability")) {
+        observed <- if (inherits(peak_data_all, "sparseMatrix")) {
+            peak_data_all@x
+        } else {
+            as.numeric(peak_data_all)
+        }
+        if (any(!is.finite(observed)) ||
+            any(observed < 0 | observed > 1)) {
+            stop("Probability-valued ATAC layers must be finite and in [0, 1].",
+                 call. = FALSE)
+        }
+    }
+    preprocessing_fingerprint <- .condition_preprocessing_fingerprint(
+        object = object, gene_data = gene_data, peak_data = peak_data_all,
+        rna_layer = rna_layer, peak_layer = peak_layer,
+        peak_value_type = peak_value_type
+    )
 
     features <- intersect(gene_annot$gene_name, genes)
     features <- intersect(features, colnames(gene_data))
@@ -184,6 +257,10 @@
         motif2tf = motif2tf,
         region_map = region_map,
         params = params,
+        rna_layer = rna_layer,
+        peak_layer = peak_layer,
+        peak_value_type = peak_value_type,
+        preprocessing_fingerprint = preprocessing_fingerprint,
         peak_to_gene_method = peak_to_gene_method,
         upstream = upstream,
         downstream = downstream,
@@ -285,6 +362,13 @@
     class(out) <- c("PandoEdgeDictionary", "data.frame")
     attr(out, "source_label") <- source_label
     attr(out, "source_type") <- source_type
+    attr(out, "rna_layer") <- prepared$rna_layer
+    attr(out, "peak_layer") <- prepared$peak_layer
+    attr(out, "peak_value_type") <- prepared$peak_value_type
+    attr(out, "preprocessing_fingerprint") <-
+        prepared$preprocessing_fingerprint
+    attr(out, "dictionary_input_schema") <-
+        "pando_candidate_input_provenance_v1"
     out
 }
 
@@ -308,15 +392,19 @@ discover_grn_edges <- function(
     source_type = c("global", "condition"), tf_cor = 0.1, peak_cor = 0,
     peak_to_gene_method = c("Signac", "GREAT"), upstream = 100000,
     downstream = 0, extend = 1000000, only_tss = FALSE,
-    peak_to_gene_domains = NULL, parallel = FALSE, verbose = TRUE) {
+    peak_to_gene_domains = NULL, rna_layer = "data", peak_layer = "data",
+    peak_value_type = c("normalized", "probability", "other"),
+    parallel = FALSE, verbose = TRUE) {
     source_type <- match.arg(source_type)
+    peak_value_type <- match.arg(peak_value_type)
     prepared <- .condition_prepare_common_input(
         object = object, genes = genes,
         peak_to_gene_method = peak_to_gene_method,
         upstream = upstream, downstream = downstream, extend = extend,
         only_tss = only_tss,
         peak_to_gene_domains = peak_to_gene_domains,
-        verbose = verbose
+        rna_layer = rna_layer, peak_layer = peak_layer,
+        peak_value_type = peak_value_type, verbose = verbose
     )
     if (is.null(cells)) cells <- rownames(prepared$gene_data)
     .condition_discover_edges_prepared(
@@ -347,6 +435,41 @@ union_grn_edges <- function(global_edges = NULL, condition_edges) {
         stop("Every candidate table requires target, tf, region and ATAC IDs.",
              call. = FALSE)
     }
+    provenance_fields <- c(
+        "rna_layer", "peak_layer", "peak_value_type",
+        "preprocessing_fingerprint", "dictionary_input_schema"
+    )
+    provenance <- lapply(inputs, function(candidate) {
+        stats::setNames(lapply(provenance_fields, function(field) {
+            attr(candidate, field, exact = TRUE)
+        }), provenance_fields)
+    })
+    complete_provenance <- vapply(provenance, function(value) {
+        all(vapply(value, function(item) {
+            is.character(item) && length(item) == 1L &&
+                !is.na(item) && nzchar(item)
+        }, logical(1)))
+    }, logical(1))
+    if (any(complete_provenance) && !all(complete_provenance)) {
+        stop(
+            "Candidate tables mix verified and unverified preprocessing ",
+            "provenance.", call. = FALSE
+        )
+    }
+    if (all(complete_provenance)) {
+        reference <- provenance[[1L]]
+        same_reference <- vapply(provenance, function(value) {
+            identical(value, reference)
+        }, logical(1))
+        if (!all(same_reference)) {
+            stop(
+                "Global and condition candidates use different RNA/ATAC ",
+                "layers, value semantics, or preprocessing fingerprints.",
+                call. = FALSE
+            )
+        }
+    }
+
     all_rows <- do.call(rbind, lapply(seq_along(inputs), function(i) {
         x <- as.data.frame(inputs[[i]], stringsAsFactors = FALSE)
         if (!nrow(x)) return(NULL)
@@ -393,6 +516,13 @@ union_grn_edges <- function(global_edges = NULL, condition_edges) {
         stop("Exact edge union produced duplicated triples.", call. = FALSE)
     }
     class(dictionary) <- c("PandoEdgeDictionary", "data.frame")
+    attr(dictionary, "preprocessing_provenance_verified") <-
+        all(complete_provenance)
+    if (all(complete_provenance)) {
+        for (field in provenance_fields) {
+            attr(dictionary, field) <- provenance[[1L]][[field]]
+        }
+    }
     dictionary
 }
 
@@ -401,30 +531,108 @@ union_grn_edges <- function(global_edges = NULL, condition_edges) {
         "edge_id", "target", "tf", "region", "atac_feature_id",
         "candidate_index"
     )
-    if (!is.data.frame(dictionary) || !all(required %in% colnames(dictionary)) ||
+    if (!is.data.frame(dictionary) || !nrow(dictionary) ||
+        !all(required %in% colnames(dictionary)) ||
         anyNA(dictionary$edge_id) || any(!nzchar(dictionary$edge_id)) ||
         anyDuplicated(dictionary$edge_id)) {
         stop("The common edge dictionary is invalid.", call. = FALSE)
     }
-    expected <- paste(dictionary$target, dictionary$tf, dictionary$region,
-                      sep = "||")
+    dictionary_fingerprint <- attr(
+        dictionary, "preprocessing_fingerprint", exact = TRUE
+    )
+    dictionary_rna_layer <- attr(dictionary, "rna_layer", exact = TRUE)
+    dictionary_peak_layer <- attr(dictionary, "peak_layer", exact = TRUE)
+    dictionary_peak_value_type <- attr(
+        dictionary, "peak_value_type", exact = TRUE
+    )
+    provenance_values <- list(
+        dictionary_fingerprint, dictionary_rna_layer,
+        dictionary_peak_layer, dictionary_peak_value_type
+    )
+    has_provenance <- vapply(provenance_values, function(value) {
+        is.character(value) && length(value) == 1L &&
+            !is.na(value) && nzchar(value)
+    }, logical(1))
+    if (any(has_provenance) && !all(has_provenance)) {
+        stop("The dictionary contains incomplete preprocessing provenance.",
+             call. = FALSE)
+    }
+    if (all(has_provenance) &&
+        (!identical(dictionary_fingerprint,
+                    prepared$preprocessing_fingerprint) ||
+         !identical(dictionary_rna_layer, prepared$rna_layer) ||
+         !identical(dictionary_peak_layer, prepared$peak_layer) ||
+         !identical(dictionary_peak_value_type,
+                    prepared$peak_value_type))) {
+        stop(
+            "The frozen dictionary and fixed fit use different RNA/ATAC ",
+            "preprocessing references.", call. = FALSE
+        )
+    }
+
+    expected <- paste(
+        dictionary$target, dictionary$tf, dictionary$region, sep = "||"
+    )
     if (!identical(as.character(dictionary$edge_id), expected)) {
         stop("Dictionary edge IDs do not match exact target-TF-region triples.",
              call. = FALSE)
     }
-    if (any(!dictionary$target %in% colnames(prepared$gene_data)) ||
+    candidate_index <- suppressWarnings(as.integer(dictionary$candidate_index))
+    if (anyNA(candidate_index) || any(candidate_index < 1L) ||
+        any(candidate_index != dictionary$candidate_index) ||
+        anyDuplicated(candidate_index)) {
+        stop("Dictionary candidate indices must be unique positive integers.",
+             call. = FALSE)
+    }
+    if (anyNA(dictionary$atac_feature_id) ||
+        any(!nzchar(as.character(dictionary$atac_feature_id))) ||
+        any(!dictionary$target %in% colnames(prepared$gene_data)) ||
         any(!dictionary$tf %in% colnames(prepared$gene_data)) ||
         any(!dictionary$region %in% colnames(prepared$peak_data))) {
-        stop("Dictionary targets, TFs or regions are absent from the input.",
+        stop("Dictionary targets, TFs, regions or ATAC IDs are absent.",
              call. = FALSE)
     }
     mapped <- prepared$region_map$atac_feature_id[
         match(dictionary$region, prepared$region_map$region)
     ]
-    if (anyNA(mapped) || !identical(as.character(mapped),
-                                    as.character(dictionary$atac_feature_id))) {
+    if (anyNA(mapped) || !identical(
+        as.character(mapped), as.character(dictionary$atac_feature_id)
+    )) {
         stop("Dictionary region-to-ATAC mappings differ from the fitted object.",
              call. = FALSE)
+    }
+    domain_supported <- vapply(seq_len(nrow(dictionary)), function(i) {
+        value <- as.numeric(prepared$peaks2gene[
+            dictionary$target[[i]], dictionary$region[[i]], drop = TRUE
+        ])
+        length(value) == 1L && is.finite(value) && value != 0
+    }, logical(1))
+    if (any(!domain_supported)) {
+        bad <- dictionary$edge_id[!domain_supported]
+        stop(
+            "Dictionary contains target-region pairs outside the Pando domain: ",
+            paste(utils::head(bad, 10L), collapse = ", "),
+            call. = FALSE
+        )
+    }
+    motif_supported <- vapply(seq_len(nrow(dictionary)), function(i) {
+        motif_row <- prepared$peaks2motif[
+            dictionary$region[[i]], , drop = FALSE
+        ]
+        motif_index <- which(as.numeric(motif_row) != 0)
+        if (!length(motif_index)) return(FALSE)
+        tf_support <- prepared$motif2tf[
+            motif_index, dictionary$tf[[i]], drop = FALSE
+        ]
+        any(as.numeric(tf_support) != 0)
+    }, logical(1))
+    if (any(!motif_supported)) {
+        bad <- dictionary$edge_id[!motif_supported]
+        stop(
+            "Dictionary contains peak-TF pairs without motif support: ",
+            paste(utils::head(bad, 10L), collapse = ", "),
+            call. = FALSE
+        )
     }
     invisible(TRUE)
 }
@@ -522,6 +730,15 @@ union_grn_edges <- function(global_edges = NULL, condition_edges) {
     } else {
         "ok"
     }
+    if (identical(status, "insufficient_df")) {
+        template$estimate[] <- NA_real_
+        template$std_err[] <- NA_real_
+        template$statistic[] <- NA_real_
+        template$pval[] <- NA_real_
+        template$estimable[] <- FALSE
+        template$aliased[] <- TRUE
+        coefficient[["(Intercept)"]] <- NA_real_
+    }
     list(
         coefs = template,
         gof = data.frame(
@@ -586,6 +803,7 @@ union_grn_edges <- function(global_edges = NULL, condition_edges) {
     coefficient <- do.call(rbind, lapply(result, `[[`, "coefs"))
     fit_table <- do.call(rbind, lapply(result, `[[`, "gof"))
     rownames(coefficient) <- rownames(fit_table) <- NULL
+    fit_table$nvariables <- as.integer(fit_table$nvariables_dictionary)
     coefficient$padj <- NA_real_
     valid <- is.finite(coefficient$pval)
     coefficient$padj[valid] <- stats::p.adjust(
@@ -627,6 +845,15 @@ union_grn_edges <- function(global_edges = NULL, condition_edges) {
             edge_dictionary = edge_dictionary,
             scale = FALSE,
             interaction = ":",
+            rna_layer = prepared$rna_layer,
+            peak_layer = prepared$peak_layer,
+            peak_value_type = prepared$peak_value_type,
+            preprocessing_fingerprint = prepared$preprocessing_fingerprint,
+            dictionary_preprocessing_provenance_verified = isTRUE(attr(
+                edge_dictionary,
+                "preprocessing_provenance_verified",
+                exact = TRUE
+            )),
             adjust_method = adjust_method,
             padj_threshold = padj_threshold,
             inference_scope = "conditional_on_selected_edge_dictionary"
@@ -659,8 +886,23 @@ fit_grn_from_edges <- function(
     min_residual_df = 1L, genes = NULL,
     peak_to_gene_method = c("Signac", "GREAT"), upstream = 100000,
     downstream = 0, extend = 1000000, only_tss = FALSE,
-    peak_to_gene_domains = NULL, parallel = FALSE, overwrite = FALSE,
-    verbose = TRUE) {
+    peak_to_gene_domains = NULL, method = "glm",
+    family = stats::gaussian(link = "identity"), interaction_term = ":",
+    scale = FALSE, rna_layer = "data", peak_layer = "data",
+    peak_value_type = c("normalized", "probability", "other"),
+    parallel = FALSE, overwrite = FALSE, verbose = TRUE) {
+    peak_value_type <- match.arg(peak_value_type)
+    family_name <- tryCatch(family$family, error = function(error) NA_character_)
+    family_link <- tryCatch(family$link, error = function(error) NA_character_)
+    if (!identical(method, "glm") || !identical(family_name, "gaussian") ||
+        !identical(family_link, "identity") ||
+        !identical(interaction_term, ":") || !identical(scale, FALSE)) {
+        stop(
+            "Comparable fixed-dictionary fitting requires method='glm', ",
+            "Gaussian identity, interaction_term=':', and scale=FALSE.",
+            call. = FALSE
+        )
+    }
     if (!is.numeric(padj_threshold) || length(padj_threshold) != 1L ||
         !is.finite(padj_threshold) || padj_threshold <= 0 ||
         padj_threshold >= 1) {
@@ -673,7 +915,8 @@ fit_grn_from_edges <- function(
         peak_to_gene_method = peak_to_gene_method,
         upstream = upstream, downstream = downstream, extend = extend,
         only_tss = only_tss, peak_to_gene_domains = peak_to_gene_domains,
-        verbose = verbose
+        rna_layer = rna_layer, peak_layer = peak_layer,
+        peak_value_type = peak_value_type, verbose = verbose
     )
     if (is.null(cells)) cells <- rownames(prepared$gene_data)
     if (is.null(condition_label)) condition_label <- "all"
@@ -796,7 +1039,9 @@ infer_condition_grn.GRNData <- function(
     genes = NULL, network_name = "condition_grn",
     peak_to_gene_method = c("Signac", "GREAT"), upstream = 100000,
     downstream = 0, extend = 1000000, only_tss = FALSE,
-    peak_to_gene_domains = NULL, tf_cor = 0.1, peak_cor = 0,
+    peak_to_gene_domains = NULL, rna_layer = "data", peak_layer = "data",
+    peak_value_type = c("normalized", "probability", "other"),
+    tf_cor = 0.1, peak_cor = 0,
     min_cells_per_condition = 50L,
     small_condition_action = c("error", "drop_condition", "skip_cell_type"),
     adjust_method = "BH", padj_threshold = 0.05,
@@ -817,6 +1062,7 @@ infer_condition_grn.GRNData <- function(
     peak_to_gene_method <- match.arg(peak_to_gene_method)
     small_condition_action <- match.arg(small_condition_action)
     rank_action <- match.arg(rank_action)
+    peak_value_type <- match.arg(peak_value_type)
     metadata <- object@data@meta.data
     condition_levels <- .condition_resolve_levels(metadata, condition_col)
     if (length(condition_levels) < 2L) {
@@ -879,7 +1125,8 @@ infer_condition_grn.GRNData <- function(
         upstream = upstream, downstream = downstream, extend = extend,
         only_tss = only_tss,
         peak_to_gene_domains = peak_to_gene_domains,
-        verbose = verbose
+        rna_layer = rna_layer, peak_layer = peak_layer,
+        peak_value_type = peak_value_type, verbose = verbose
     )
     fits <- list()
     network_index <- list()
@@ -998,7 +1245,11 @@ infer_condition_grn.GRNData <- function(
             projection_policy = "padj_significant_effects_only",
             target_genes = unique(as.character(dictionary$target)),
             rna_assay = prepared$params$rna_assay,
-            atac_assay = prepared$params$peak_assay
+            atac_assay = prepared$params$peak_assay,
+            rna_layer = prepared$rna_layer,
+            peak_layer = prepared$peak_layer,
+            peak_value_type = prepared$peak_value_type,
+            preprocessing_fingerprint = prepared$preprocessing_fingerprint
         )
         class(fit_contract) <- c("ConditionGRNFit", "list")
         fits[[type_label]] <- fit_contract
@@ -1022,7 +1273,6 @@ infer_condition_grn.GRNData <- function(
 #' Extract common-dictionary condition GRN fits
 #'
 #' @param object A fitted `GRNData` object.
-#' @param network_name Retained for compatibility; fit selection is by cell type.
 #' @param cell_type Optional fitted cell type.
 #' @return One `ConditionGRNFit` or a named list.
 #' @export
@@ -1034,7 +1284,16 @@ condition_grn_fit <- function(object, ...) {
 #' @method condition_grn_fit GRNData
 #' @export
 condition_grn_fit.GRNData <- function(
-    object, network_name = NULL, cell_type = NULL, ...) {
+    object, cell_type = NULL, ...) {
+    dots <- list(...)
+    if (length(dots)) {
+        label <- names(dots)
+        label[!nzchar(label)] <- "<unnamed>"
+        stop(
+            "Unused condition_grn_fit argument(s): ",
+            paste(label, collapse = ", "), call. = FALSE
+        )
+    }
     fits <- object@grn@params$condition_grn_fits
     if (!is.list(fits) || !length(fits)) {
         stop("No common-dictionary condition GRN fit is stored.",
@@ -1090,85 +1349,7 @@ condition_grn_subgraph <- function(fit, condition, significant_only = TRUE) {
 #' @param return_edge_contributions Return the cell-by-edge matrix.
 #' @return A `PandoConditionProjection` list.
 #' @export
-project_condition_grn_cells <- function(
-    object, fit, targets = NULL, significant_only = TRUE,
-    return_edge_contributions = FALSE) {
-    if (!inherits(object, "GRNData") || !inherits(fit, "ConditionGRNFit") ||
-        !identical(fit$schema_version, .condition_common_dictionary_schema)) {
-        stop("Common-dictionary object and fit are required.", call. = FALSE)
-    }
-    prepared <- .condition_prepare_common_input(
-        object, genes = fit$target_genes, verbose = FALSE
-    )
-    dictionary <- fit$edge_dictionary
-    .condition_validate_dictionary(dictionary, prepared)
-    coefficient <- fit$coefficients
-    if (!is.null(targets)) {
-        targets <- intersect(as.character(targets), fit$target_genes)
-        coefficient <- coefficient[coefficient$target %in% targets, , drop = FALSE]
-    }
-    cells <- unique(unlist(fit$condition_cell_ids, use.names = FALSE))
-    cells <- cells[cells %in% rownames(prepared$gene_data)]
-    cell_condition <- rep(NA_character_, length(cells))
-    names(cell_condition) <- cells
-    for (condition in fit$condition_levels) {
-        cell_condition[intersect(cells, fit$condition_cell_ids[[condition]])] <-
-            condition
-    }
-    if (anyNA(cell_condition)) {
-        stop("Fitted condition cells do not align to the paired assay matrices.",
-             call. = FALSE)
-    }
-    edge_contribution <- matrix(
-        0, nrow = length(cells), ncol = nrow(coefficient),
-        dimnames = list(cells, paste(coefficient$edge_id,
-                                    coefficient$condition, sep = "@@"))
-    )
-    effect <- if (isTRUE(significant_only)) {
-        coefficient$penalty_effect
-    } else {
-        coefficient$estimate
-    }
-    effect[!is.finite(effect)] <- 0
-    for (j in seq_len(nrow(coefficient))) {
-        selected <- cells[cell_condition == coefficient$condition[[j]]]
-        if (!length(selected) || effect[[j]] == 0) next
-        edge_contribution[selected, j] <-
-            as.numeric(prepared$gene_data[selected, coefficient$tf[[j]]]) *
-            as.numeric(prepared$peak_data[selected, coefficient$region[[j]]]) *
-            effect[[j]]
-    }
-    target_names <- unique(as.character(coefficient$target))
-    gene_score <- matrix(
-        0, nrow = length(cells), ncol = length(target_names),
-        dimnames = list(cells, target_names)
-    )
-    for (target in target_names) {
-        index <- which(coefficient$target == target)
-        gene_score[, target] <- rowSums(
-            edge_contribution[, index, drop = FALSE]
-        )
-    }
-    answer <- list(
-        schema_version = "pando_condition_projection_common_dictionary_v1",
-        gene_score = gene_score,
-        edge_contribution = if (isTRUE(return_edge_contributions)) {
-            edge_contribution
-        } else NULL,
-        cell_condition = cell_condition,
-        cell_type = fit$cell_type,
-        effect_column = if (isTRUE(significant_only)) {
-            "penalty_effect"
-        } else "estimate",
-        projection_origin = "full_condition_fixed_dictionary_glm",
-        coefficient_scale = fit$coefficient_scale,
-        projection_policy = if (isTRUE(significant_only)) {
-            "BH_adjusted_p_below_threshold_penalty_effect"
-        } else "all_estimable_condition_coefficients"
-    )
-    class(answer) <- c("PandoConditionProjection", "list")
-    answer
-}
+
 
 #' Aggregate paired-cell condition projection
 #'
