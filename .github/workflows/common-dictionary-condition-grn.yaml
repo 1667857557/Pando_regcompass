@@ -22,7 +22,11 @@ jobs:
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           dependencies: '"hard"'
-          extra-packages: any::rcmdcheck
+          extra-packages: |
+            any::rcmdcheck
+            any::bayestestR
+            any::glmnetUtils
+            github::immunogenomics/presto
       - name: Parse R sources
         shell: Rscript {0}
         run: |
@@ -33,4 +37,6 @@ jobs:
           for (file in files) parse(file = file)
       - name: Check package
         shell: Rscript {0}
+        env:
+          _R_CHECK_FORCE_SUGGESTS_: 'false'
         run: rcmdcheck::rcmdcheck(args = "--no-manual", error_on = "error")
