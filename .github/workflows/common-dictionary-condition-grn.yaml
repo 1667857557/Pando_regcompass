@@ -3,13 +3,11 @@ name: Common dictionary condition GRN
 on:
   pull_request:
   push:
-    branches:
-      - agent/common-dictionary-condition-grn
-      - main
+    branches: [main]
 
 jobs:
   package-check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -26,12 +24,63 @@ jobs:
             any::testthat
             any::knitr
             any::rmarkdown
-      - name: Verify retired condition engine is absent
+      - name: Verify current source architecture
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+          files = sorted(Path("R").glob("*.R"))
+          forbidden_files = {
+              "RcppExports.R",
+              "zz_common_dictionary_validation.R",
+              "zz_common_dictionary_projection.R",
+              "zzz_fit_schema_contract.R",
+          }
+          present = forbidden_files.intersection(path.name for path in files)
+          if present:
+              raise RuntimeError(f"retired source files remain: {present}")
+          if any(Path("src").glob("*")):
+              raise RuntimeError("retired native condition engine remains")
+          pattern = re.compile(
+              r"(?m)^([A-Za-z.][A-Za-z0-9._]*)\s*<-\s*function\b"
+          )
+          definitions = {}
+          for path in files:
+              for name in pattern.findall(path.read_text()):
+                  definitions.setdefault(name, []).append(str(path))
+          duplicate = {
+              name: paths for name, paths in definitions.items()
+              if len(paths) > 1
+          }
+          if duplicate:
+              raise RuntimeError(f"duplicate top-level functions: {duplicate}")
+          source = "\n".join(path.read_text() for path in files)
+          required = [
+              "pando_candidate_input_provenance_v1",
+              "preprocessing_provenance_verified",
+              "preprocessing_fingerprint",
+              "Probability-valued ATAC layers",
+              "RNA/ATAC preprocessing identity changed",
+          ]
+          missing = [value for value in required if value not in source]
+          if missing:
+              raise RuntimeError(f"common-dictionary contract missing: {missing}")
+      - name: Verify retired API is absent
         shell: bash
         run: |
-          test ! -e R/RcppExports.R
-          test -z "$(find src -maxdepth 1 -type f 2>/dev/null | head -n 1)"
-          ! grep -R -n -E 'outer_nfolds|inner_nfolds|condition_mix|engine_control|projection_condition_full_oof' R DESCRIPTION NAMESPACE
+          targets="R NAMESPACE man README.md vignettes docs"
+          ! grep -R -n -E 'condition_grn_contrast|project_condition_grn_primary_cells|project_condition_grn_to_cells' $targets
+          ! grep -R -n -E 'network_name = NULL, cell_type = NULL' R man
+          ! grep -R -n -E 'outer_nfolds|inner_nfolds|condition_mix|engine_control|projection_condition_full_oof' R DESCRIPTION NAMESPACE man vignettes README.md
+          test ! -e docs/condition-subgrn-shared-baseline.md
+      - name: Parse sources
+        shell: Rscript {0}
+        run: |
+          files <- c(
+            list.files("R", pattern = "[.]R$", full.names = TRUE),
+            list.files("tests/testthat", pattern = "[.]R$", full.names = TRUE)
+          )
+          for (file in files) parse(file = file)
       - name: Check package
         shell: Rscript {0}
         run: |
