@@ -39,11 +39,19 @@ jobs:
           present = [value for value in forbidden if value in completion]
           if present:
               raise RuntimeError(f"late contract layer redefines canonical methods: {present}")
+          required_completion = [
+              ".pando_condition_grn_fit_complete_contract_method",
+              "registerS3method",
+              ".pando_condition_grn_fit_base_impl",
+          ]
+          missing = [value for value in required_completion if value not in completion]
+          if missing:
+              raise RuntimeError(f"condition-fit S3 completion is incomplete: {missing}")
           projection = Path("R/condition_grn_projection.R").read_text()
           required = [
               ".condition_resolve_projection_targets",
               ".condition_validate_projection_cells",
-              "missing paired cell(s)",
+              "fitted paired cell(s)",
           ]
           missing = [value for value in required if value not in projection]
           if missing:
@@ -89,6 +97,14 @@ jobs:
           )
           stopifnot(isTRUE(
             .pando_complete_condition_fit_contract(contract)$dictionary_preprocessing_provenance_verified
+          ))
+          .pando_condition_grn_fit_base_impl <- function(
+              object, cell_type = NULL, ...) {
+            contract
+          }
+          wrapped <- .pando_condition_grn_fit_complete_contract_method(NULL)
+          stopifnot(isTRUE(
+            wrapped$dictionary_preprocessing_provenance_verified
           ))
       - name: Build source package
         run: R CMD build --no-build-vignettes --no-manual .
