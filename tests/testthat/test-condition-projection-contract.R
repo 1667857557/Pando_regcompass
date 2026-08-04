@@ -39,3 +39,23 @@ test_that("fitted cells are complete and condition-disjoint", {
     "missing 1 fitted paired cell"
   )
 })
+
+test_that("condition cell lists are uniquely named and non-empty", {
+  duplicated_names <- list(c("cell1"), c("cell2"))
+  names(duplicated_names) <- c("control", "control")
+  fit <- list(
+    condition_levels = c("control", "treated"),
+    condition_cell_ids = duplicated_names
+  )
+  expect_error(
+    .condition_validate_projection_cells(fit, c("cell1", "cell2")),
+    "incomplete or ambiguously named"
+  )
+
+  empty_condition <- list(control = "cell1", treated = character())
+  fit$condition_cell_ids <- empty_condition
+  expect_error(
+    .condition_validate_projection_cells(fit, "cell1"),
+    "at least one paired cell"
+  )
+})
