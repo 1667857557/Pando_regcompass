@@ -1,5 +1,5 @@
 Package: Pando
-Version: 2.0.1
+Version: 2.0.2
 Type: Package
 Title: Inferring regulomes from multi-modal single-cell genomics data
 Authors@R: person(given = "Jonas Simon",
@@ -31,10 +31,12 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     workflow is used and no condition coefficient is created. Independent
     cell-type jobs can be dispatched through BiocParallel without nested worker
     pools, and condition-only controls are removed before standard infer_grn
-    model arguments are forwarded to regression backends.
+    model arguments are forwarded to regression backends. Bundled reference
+    datasets are installed as standalone RData files so worker processes do not
+    retain promises to an installation-specific lazy-data database.
 License: MIT
 Encoding: UTF-8
-LazyData: true
+LazyData: false
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.1
 VignetteBuilder: knitr
@@ -86,3 +88,4 @@ Remotes:
 Config/Pando/ConditionGRNSchema: pando_condition_grn_common_dictionary_v1
 Config/Pando/ConditionGRNMethod: two-stage-exact-edge-union-fixed-dictionary-glm
 Config/Pando/ConditionEffectFilter: BH-adjusted-p-below-0.05
+Config/Pando/DataStorage: standalone-RData

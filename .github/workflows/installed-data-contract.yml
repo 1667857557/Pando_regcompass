@@ -1,0 +1,98 @@
+name: Pando installed data contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  installed-data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.5.1'
+          use-public-rspm: true
+      - name: Verify standalone installed data
+        shell: Rscript {0}
+        run: |
+          description <- read.dcf("DESCRIPTION")
+          stopifnot(
+            identical(
+              tolower(unname(description[1L, "LazyData"])),
+              "false"
+            ),
+            identical(
+              unname(description[1L, "Config/Pando/DataStorage"]),
+              "standalone-RData"
+            )
+          )
+
+          root <- tempfile("pando-data-contract-")
+          package_root <- file.path(root, "PandoDataContract")
+          data_root <- file.path(package_root, "data")
+          library_root <- file.path(root, "library")
+          dir.create(data_root, recursive = TRUE)
+          dir.create(library_root, recursive = TRUE)
+          writeLines(c(
+            "Package: PandoDataContract",
+            "Version: 1.0.0",
+            "Title: Pando Installed Data Contract",
+            "Description: Verifies standalone installation of Pando datasets.",
+            "Authors@R: person('Pando', 'Data', role = c('aut', 'cre'), email = 'data@example.com')",
+            "License: MIT",
+            "Encoding: UTF-8",
+            "LazyData: false"
+          ), file.path(package_root, "DESCRIPTION"))
+          writeLines("", file.path(package_root, "NAMESPACE"))
+
+          expected <- c(
+            "EnsDb.Hsapiens.v93.annot.UCSC.hg38.RData",
+            "SCREEN.ccRE.UCSC.hg38.RData",
+            "motif2tf.RData",
+            "motifs.RData",
+            "phastConsElements20Mammals.UCSC.hg38.RData"
+          )
+          copied <- file.copy(
+            file.path("data", expected),
+            file.path(data_root, expected),
+            overwrite = TRUE
+          )
+          stopifnot(all(copied))
+
+          status <- system2(
+            file.path(R.home("bin"), "R"),
+            c(
+              "CMD", "INSTALL",
+              paste0("--library=", library_root),
+              package_root
+            )
+          )
+          stopifnot(identical(status, 0L))
+
+          installed_data <- file.path(
+            library_root, "PandoDataContract", "data"
+          )
+          stopifnot(
+            all(file.exists(file.path(installed_data, expected))),
+            !file.exists(file.path(installed_data, "Rdata.rdb")),
+            !file.exists(file.path(installed_data, "Rdata.rdx"))
+          )
+
+          data_environment <- new.env(parent = emptyenv())
+          utils::data(
+            list = "motif2tf",
+            package = "PandoDataContract",
+            lib.loc = library_root,
+            envir = data_environment
+          )
+          stopifnot(
+            exists("motif2tf", envir = data_environment, inherits = FALSE),
+            is.data.frame(get(
+              "motif2tf", envir = data_environment, inherits = FALSE
+            ))
+          )
