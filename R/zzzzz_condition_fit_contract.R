@@ -1,4 +1,4 @@
-# Finalize the common-dictionary fit contract returned to downstream packages.
+# Complete condition-fit provenance and strict downstream aggregation.
 
 .pando_complete_condition_fit_contract <- function(fit) {
     if (!inherits(fit, "ConditionGRNFit")) return(fit)
@@ -22,6 +22,7 @@
 }
 
 .pando_complete_condition_fit_object <- function(object) {
+    if (!inherits(object, "GRNData")) return(object)
     fits <- object@grn@params$condition_grn_fits
     if (is.list(fits) && length(fits)) {
         object@grn@params$condition_grn_fits <-
@@ -30,67 +31,115 @@
     object
 }
 
-.pando_infer_condition_grn_complete_contract_impl <-
-    infer_condition_grn.GRNData
-
-infer_condition_grn.GRNData <- function(
-    object, cell_type_col = NULL, condition_col = NULL, cell_type = NULL,
-    genes = NULL, network_name = "condition_grn",
-    peak_to_gene_method = c("Signac", "GREAT"), upstream = 100000,
-    downstream = 0, extend = 1000000, only_tss = FALSE,
-    peak_to_gene_domains = NULL, rna_layer = "data", peak_layer = "data",
-    peak_value_type = c("normalized", "probability", "other"),
-    tf_cor = 0.1, peak_cor = 0,
-    min_cells_per_condition = 50L,
-    small_condition_action = c("error", "drop_condition", "skip_cell_type"),
-    adjust_method = "BH", padj_threshold = 0.05,
-    rank_action = c("mark", "error"), min_residual_df = 1L,
-    parallel = FALSE, BPPARAM = NULL,
-    parallel_scope = c("auto", "cell_type", "target"),
-    overwrite = FALSE, fallback_args = list(), verbose = TRUE, ...) {
-    answer <- do.call(
-        .pando_infer_condition_grn_complete_contract_impl,
-        c(list(
-            object = object,
-            cell_type_col = cell_type_col,
-            condition_col = condition_col,
-            cell_type = cell_type,
-            genes = genes,
-            network_name = network_name,
-            peak_to_gene_method = peak_to_gene_method,
-            upstream = upstream,
-            downstream = downstream,
-            extend = extend,
-            only_tss = only_tss,
-            peak_to_gene_domains = peak_to_gene_domains,
-            rna_layer = rna_layer,
-            peak_layer = peak_layer,
-            peak_value_type = peak_value_type,
-            tf_cor = tf_cor,
-            peak_cor = peak_cor,
-            min_cells_per_condition = min_cells_per_condition,
-            small_condition_action = small_condition_action,
-            adjust_method = adjust_method,
-            padj_threshold = padj_threshold,
-            rank_action = rank_action,
-            min_residual_df = min_residual_df,
-            parallel = parallel,
-            BPPARAM = BPPARAM,
-            parallel_scope = parallel_scope,
-            overwrite = overwrite,
-            fallback_args = fallback_args,
-            verbose = verbose
-        ), list(...))
-    )
+.pando_infer_condition_grn_complete_contract_method <- function(
+    object, ...) {
+    answer <- .pando_infer_condition_grn_base_impl(object = object, ...)
     .pando_complete_condition_fit_object(answer)
 }
 
-.pando_condition_grn_fit_complete_contract_impl <-
-    condition_grn_fit.GRNData
-
-condition_grn_fit.GRNData <- function(object, cell_type = NULL, ...) {
-    answer <- .pando_condition_grn_fit_complete_contract_impl(
+.pando_condition_grn_fit_complete_contract_method <- function(
+    object, cell_type = NULL, ...) {
+    answer <- .pando_condition_grn_fit_base_impl(
         object = object, cell_type = cell_type, ...
     )
     .pando_complete_condition_fit_contracts(answer)
+}
+
+#' Aggregate a condition projection without dropping fitted cells
+#'
+#' Requires every projected paired cell to have exactly one complete membership
+#' row. Extra membership rows from other cell types are allowed.
+#'
+#' @param projection A `PandoConditionProjection`.
+#' @param membership Data frame containing `cell_id` and `group_col`.
+#' @param group_col Membership grouping column.
+#' @return Aggregated target-by-group regulatory scores.
+#' @export
+aggregate_condition_grn_projection_strict <- function(
+    projection, membership, group_col = "metacell_id") {
+    if (!inherits(projection, "PandoConditionProjection") ||
+        !is.matrix(projection$gene_score) ||
+        is.null(rownames(projection$gene_score)) ||
+        anyNA(rownames(projection$gene_score)) ||
+        any(!nzchar(rownames(projection$gene_score))) ||
+        anyDuplicated(rownames(projection$gene_score)) ||
+        !is.data.frame(membership) ||
+        !all(c("cell_id", group_col) %in% colnames(membership))) {
+        stop("Projection and membership inputs are invalid.", call. = FALSE)
+    }
+    cell_id <- as.character(membership$cell_id)
+    group_id <- as.character(membership[[group_col]])
+    if (anyNA(cell_id) || any(!nzchar(trimws(cell_id))) ||
+        anyDuplicated(cell_id) || anyNA(group_id) ||
+        any(!nzchar(trimws(group_id)))) {
+        stop(
+            "Membership cell and group IDs must be complete, with one row per cell.",
+            call. = FALSE
+        )
+    }
+    projected_cells <- rownames(projection$gene_score)
+    missing <- setdiff(projected_cells, cell_id)
+    if (length(missing)) {
+        stop(
+            "Membership is missing ", length(missing),
+            " projected paired cell(s); first missing ID: ", missing[[1L]],
+            call. = FALSE
+        )
+    }
+    selected <- membership[match(projected_cells, cell_id), , drop = FALSE]
+    groups <- unique(as.character(selected[[group_col]]))
+    if (!ncol(projection$gene_score)) {
+        return(list(
+            gene_score = matrix(
+                numeric(), nrow = 0L, ncol = length(groups),
+                dimnames = list(character(), groups)
+            ),
+            group_col = group_col,
+            source_projection = projection,
+            aggregation =
+                "arithmetic_mean_of_all_projected_paired_cell_regulatory_scores"
+        ))
+    }
+    answer <- aggregate_condition_grn_projection(
+        projection = projection,
+        membership = selected,
+        group_col = group_col
+    )
+    answer$aggregation <-
+        "arithmetic_mean_of_all_projected_paired_cell_regulatory_scores"
+    answer
+}
+
+.onLoad <- function(libname, pkgname) {
+    namespace <- asNamespace(pkgname)
+    infer_base <- get(
+        "infer_condition_grn.GRNData", envir = namespace, inherits = FALSE
+    )
+    fit_base <- get(
+        "condition_grn_fit.GRNData", envir = namespace, inherits = FALSE
+    )
+    assign(
+        ".pando_infer_condition_grn_base_impl", infer_base,
+        envir = namespace
+    )
+    assign(
+        ".pando_condition_grn_fit_base_impl", fit_base,
+        envir = namespace
+    )
+    registerS3method(
+        "infer_condition_grn", "GRNData",
+        get(
+            ".pando_infer_condition_grn_complete_contract_method",
+            envir = namespace, inherits = FALSE
+        ),
+        envir = namespace
+    )
+    registerS3method(
+        "condition_grn_fit", "GRNData",
+        get(
+            ".pando_condition_grn_fit_complete_contract_method",
+            envir = namespace, inherits = FALSE
+        ),
+        envir = namespace
+    )
 }

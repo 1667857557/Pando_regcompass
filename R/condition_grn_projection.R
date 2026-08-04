@@ -50,6 +50,77 @@
     )
 }
 
+.condition_resolve_projection_targets <- function(targets, fitted_targets) {
+    fitted_targets <- unique(as.character(fitted_targets))
+    if (!length(fitted_targets) || anyNA(fitted_targets) ||
+        any(!nzchar(fitted_targets))) {
+        stop("Fitted target names must be complete non-empty strings.",
+             call. = FALSE)
+    }
+    fitted_key <- toupper(fitted_targets)
+    if (anyDuplicated(fitted_key)) {
+        duplicated_key <- unique(fitted_key[duplicated(fitted_key)])
+        stop(
+            "Fitted targets are ambiguous after case normalization: ",
+            paste(utils::head(duplicated_key, 10L), collapse = ", "),
+            call. = FALSE
+        )
+    }
+    if (is.null(targets)) return(fitted_targets)
+    requested <- unique(as.character(targets))
+    requested <- requested[!is.na(requested) & nzchar(requested)]
+    index <- match(toupper(requested), fitted_key)
+    unique(fitted_targets[index[!is.na(index)]])
+}
+
+.condition_validate_projection_cells <- function(fit, available_cells) {
+    levels <- as.character(fit$condition_levels)
+    cell_lists <- fit$condition_cell_ids
+    list_names <- names(cell_lists)
+    if (!length(levels) || anyNA(levels) || any(!nzchar(levels)) ||
+        anyDuplicated(levels) || !is.list(cell_lists) ||
+        is.null(list_names) || anyNA(list_names) ||
+        any(!nzchar(list_names)) || anyDuplicated(list_names) ||
+        !all(levels %in% list_names)) {
+        stop("Fitted condition cell lists are incomplete or ambiguously named.",
+             call. = FALSE)
+    }
+    cells_by_condition <- cell_lists[levels]
+    condition_sizes <- lengths(cells_by_condition)
+    if (any(condition_sizes < 1L)) {
+        stop("Every fitted condition must contain at least one paired cell.",
+             call. = FALSE)
+    }
+    all_cells <- as.character(unlist(cells_by_condition, use.names = FALSE))
+    if (!length(all_cells) || anyNA(all_cells) || any(!nzchar(all_cells))) {
+        stop("Fitted condition cell IDs must be complete non-empty strings.",
+             call. = FALSE)
+    }
+    if (anyDuplicated(all_cells)) {
+        stop("A fitted cell is assigned to more than one condition.",
+             call. = FALSE)
+    }
+    available_cells <- as.character(available_cells)
+    if (anyNA(available_cells) || any(!nzchar(available_cells)) ||
+        anyDuplicated(available_cells)) {
+        stop("Projection assay cell IDs must be complete and unique.",
+             call. = FALSE)
+    }
+    missing <- setdiff(all_cells, available_cells)
+    if (length(missing)) {
+        stop(
+            "The projection object is missing ", length(missing),
+            " fitted paired cell(s); first missing ID: ", missing[[1L]],
+            call. = FALSE
+        )
+    }
+    list(
+        cells = all_cells,
+        cells_by_condition = cells_by_condition,
+        condition_levels = levels
+    )
+}
+
 #' @rdname project_condition_grn_cells
 #' @export
 project_condition_grn_cells <- function(
@@ -90,18 +161,22 @@ project_condition_grn_cells <- function(
              call. = FALSE)
     }
     coefficient <- as.data.frame(fit$coefficients, stringsAsFactors = FALSE)
+    resolved_targets <- .condition_resolve_projection_targets(
+        targets, fit$target_genes
+    )
     if (!is.null(targets)) {
-        targets <- intersect(as.character(targets), fit$target_genes)
         coefficient <- coefficient[
-            coefficient$target %in% targets, , drop = FALSE
+            coefficient$target %in% resolved_targets, , drop = FALSE
         ]
     }
-    cells <- unique(unlist(fit$condition_cell_ids, use.names = FALSE))
-    cells <- cells[cells %in% rownames(prepared$gene_data)]
+    cell_contract <- .condition_validate_projection_cells(
+        fit, rownames(prepared$gene_data)
+    )
+    cells <- cell_contract$cells
     cell_condition <- rep(NA_character_, length(cells))
     names(cell_condition) <- cells
-    for (condition in fit$condition_levels) {
-        selected <- intersect(cells, fit$condition_cell_ids[[condition]])
+    for (condition in cell_contract$condition_levels) {
+        selected <- cell_contract$cells_by_condition[[condition]]
         cell_condition[selected] <- condition
     }
     if (anyNA(cell_condition)) {
