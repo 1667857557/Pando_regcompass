@@ -42,9 +42,12 @@ jobs:
           if present:
               raise RuntimeError(f"late contract layer redefines canonical methods: {present}")
           required_completion = [
+              ".pando_infer_condition_grn_complete_contract_method",
               ".pando_condition_grn_fit_complete_contract_method",
-              "registerS3method",
+              ".pando_complete_condition_fit_object",
+              ".pando_infer_condition_grn_base_impl",
               ".pando_condition_grn_fit_base_impl",
+              "registerS3method",
           ]
           missing = [value for value in required_completion if value not in completion]
           if missing:
