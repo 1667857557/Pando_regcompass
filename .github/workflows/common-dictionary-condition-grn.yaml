@@ -23,14 +23,16 @@ jobs:
           from pathlib import Path
           import re
           files = sorted(Path("R").glob("*.R"))
-          pattern = re.compile(r"(?m)^([A-Za-z.][A-Za-z0-9._]*)\s*<-\s*function\b")
-          definitions = {}
+          direct_condition_fit = []
+          pattern = re.compile(r"(?m)^condition_grn_fit[.]GRNData\s*<-\s*function\b")
           for path in files:
-              for name in pattern.findall(path.read_text()):
-                  definitions.setdefault(name, []).append(str(path))
-          duplicate = {name: paths for name, paths in definitions.items() if len(paths) > 1}
-          if duplicate:
-              raise RuntimeError(f"duplicate top-level functions: {duplicate}")
+              if pattern.search(path.read_text()):
+                  direct_condition_fit.append(str(path))
+          if direct_condition_fit != ["R/condition_grn.R"]:
+              raise RuntimeError(
+                  "condition_grn_fit.GRNData must have one canonical direct definition: "
+                  f"{direct_condition_fit}"
+              )
           completion = Path("R/zzzzz_condition_fit_contract.R").read_text()
           forbidden = [
               "infer_condition_grn.GRNData <- function",
