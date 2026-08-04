@@ -17,6 +17,37 @@ jobs:
       - uses: r-lib/actions/setup-r@v2
         with:
           r-version: '4.5'
+      - name: Validate source architecture
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+          files = sorted(Path("R").glob("*.R"))
+          pattern = re.compile(r"(?m)^([A-Za-z.][A-Za-z0-9._]*)\s*<-\s*function\b")
+          definitions = {}
+          for path in files:
+              for name in pattern.findall(path.read_text()):
+                  definitions.setdefault(name, []).append(str(path))
+          duplicate = {name: paths for name, paths in definitions.items() if len(paths) > 1}
+          if duplicate:
+              raise RuntimeError(f"duplicate top-level functions: {duplicate}")
+          completion = Path("R/zzzzz_condition_fit_contract.R").read_text()
+          forbidden = [
+              "infer_condition_grn.GRNData <- function",
+              "condition_grn_fit.GRNData <- function",
+          ]
+          present = [value for value in forbidden if value in completion]
+          if present:
+              raise RuntimeError(f"late contract layer redefines canonical methods: {present}")
+          projection = Path("R/condition_grn_projection.R").read_text()
+          required = [
+              ".condition_resolve_projection_targets",
+              ".condition_validate_projection_cells",
+              "missing paired cell(s)",
+          ]
+          missing = [value for value in required if value not in projection]
+          if missing:
+              raise RuntimeError(f"projection contract is incomplete: {missing}")
       - name: Parse package sources
         shell: Rscript {0}
         run: |
@@ -26,5 +57,38 @@ jobs:
             list.files("tests/testthat", pattern = "[.]R$", full.names = TRUE)
           )
           for (file in files) parse(file = file)
+      - name: Run lightweight contract tests
+        shell: Rscript {0}
+        run: |
+          source("R/condition_grn_projection.R")
+          source("R/zzzzz_condition_fit_contract.R")
+          stopifnot(identical(
+            .condition_resolve_projection_targets(
+              c("tp53", "slc22a17"), c("TP53", "Slc22a17")
+            ),
+            c("TP53", "Slc22a17")
+          ))
+          ambiguous <- try(
+            .condition_resolve_projection_targets("gene", c("GENE", "gene")),
+            silent = TRUE
+          )
+          stopifnot(inherits(ambiguous, "try-error"))
+          fit <- list(
+            condition_levels = c("A", "B"),
+            condition_cell_ids = list(A = "cell1", B = "cell2")
+          )
+          cells <- .condition_validate_projection_cells(
+            fit, c("cell1", "cell2")
+          )
+          stopifnot(identical(cells$cells, c("cell1", "cell2")))
+          dictionary <- data.frame(edge_id = "G||TF||chr1:1-2")
+          attr(dictionary, "preprocessing_provenance_verified") <- TRUE
+          contract <- structure(
+            list(edge_dictionary = dictionary),
+            class = c("ConditionGRNFit", "list")
+          )
+          stopifnot(isTRUE(
+            .pando_complete_condition_fit_contract(contract)$dictionary_preprocessing_provenance_verified
+          ))
       - name: Build source package
         run: R CMD build --no-build-vignettes --no-manual .
