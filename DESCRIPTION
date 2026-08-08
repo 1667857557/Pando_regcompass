@@ -28,12 +28,17 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     unavailable rather than being silently converted to fitted zeros. When no
     condition column is supplied, the column is absent, or fewer than two levels
     are observed, the original per-cell-type infer_grn Gaussian interaction
-    workflow is used and no condition coefficient is created. Independent
-    cell-type jobs can be dispatched through BiocParallel without nested worker
-    pools, and condition-only controls are removed before standard infer_grn
-    model arguments are forwarded to regression backends. Bundled reference
-    datasets are installed as standalone RData files so worker processes do not
-    retain promises to an installation-specific lazy-data database.
+    workflow is used and no condition coefficient is created. Multi-condition
+    execution can dispatch global and condition-specific candidate discovery
+    across condition-by-cell-type work units, reaches an exact-dictionary
+    barrier separately for every cell type, and then dispatches the resulting
+    fixed-dictionary condition-by-cell-type GLMs through one BiocParallel worker
+    budget without nested target-level pools. Broad-cell-type and target-level
+    scheduling remain available as explicit alternatives. Condition-only
+    controls are removed before standard infer_grn model arguments are forwarded
+    to regression backends. Bundled reference datasets are installed as
+    standalone RData files so worker processes do not retain promises to an
+    installation-specific lazy-data database.
 License: MIT
 Encoding: UTF-8
 LazyData: false
