@@ -33,7 +33,7 @@ infer_condition_grn(object, ...)
   min_residual_df = 1L,
   parallel = FALSE,
   BPPARAM = NULL,
-  parallel_scope = c("auto", "cell_type", "target"),
+  parallel_scope = c("auto", "condition_cell_type", "cell_type", "target"),
   overwrite = FALSE,
   fallback_args = list(),
   verbose = TRUE,
@@ -55,8 +55,8 @@ infer_condition_grn(object, ...)
 \item{adjust_method, padj_threshold}{Multiple-testing method and threshold defining \code{penalty_effect}.}
 \item{rank_action, min_residual_df}{Fixed-dictionary estimability controls.}
 \item{parallel}{Enable parallel execution.}
-\item{BPPARAM}{\code{NULL}, \code{FALSE}, or a \code{BiocParallelParam}. When multiple cell types are requested, this controls independent cell-type jobs.}
-\item{parallel_scope}{Parallelization level. \code{"auto"} uses cell-type jobs when more than one cell type is available; \code{"cell_type"} requests that behavior explicitly; \code{"target"} retains the original target-level Pando path.}
+\item{BPPARAM}{\code{NULL}, \code{FALSE}, or a \code{BiocParallelParam}. It is the worker budget for the selected non-nested parallel scope.}
+\item{parallel_scope}{Parallelization level. \code{"auto"} selects \code{"condition_cell_type"} for multi-condition fits. In that mode, global and condition-specific candidate discovery tasks are dispatched across cell types and conditions, then each cell type reaches an exact-dictionary barrier before condition-by-cell-type fixed-dictionary GLMs are dispatched. \code{"cell_type"} retains broad-cell-type scheduling; \code{"target"} retains the original target-level Pando path.}
 \item{overwrite}{Replace generated networks with matching names.}
 \item{fallback_args}{Arguments passed only to original \code{infer_grn()} fallback.}
 \item{verbose}{Display progress messages.}
@@ -64,4 +64,4 @@ infer_condition_grn(object, ...)
 }
 \value{A \code{GRNData} containing standard Pando \code{Network} objects and common-dictionary fit contracts.}
 \description{For each cell type, discovers candidates globally and in every condition, unions exact TF-peak-target triples, freezes the dictionary, and refits every condition with the same unscaled Gaussian identity Pando interaction model.}
-\details{Condition effects are the fixed-dictionary GLM coefficients. No global-coefficient calibration is applied. Network-wide adjusted P values are stored; only coefficients below \code{padj_threshold} enter \code{penalty_effect}. Zero-variance and aliased coefficients remain unavailable. Independent cell-type jobs run serially inside each worker so nested worker pools are not created.}
+\details{Condition effects are the fixed-dictionary GLM coefficients. No global-coefficient calibration is applied. Network-wide adjusted P values are stored; only coefficients below \code{padj_threshold} enter \code{penalty_effect}. Zero-variance and aliased coefficients remain unavailable. Condition-by-cell-type parallel execution changes scheduling only: candidate discovery completes before the per-cell-type exact edge union, and all condition fits use that same frozen dictionary. Target-level parallelism is disabled inside those workers to prevent nested pools.}
