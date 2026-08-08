@@ -60,7 +60,8 @@ infer_grn.GRNData <- function(
     peak_cor = 0.,
     aggregate_rna_col = NULL,
     aggregate_peaks_col = NULL,
-    method = c('glm', 'glmnet', 'cv.glmnet', 'brms', 'xgb', 'bagging_ridge', 'bayesian_ridge'),
+    method = c('glm', 'glmnet', 'cv.glmnet', 'brms', 'xgb',
+     'bagging_ridge', 'bayesian_ridge'),
     alpha = 0.5,
     family = 'gaussian',
     interaction_term = ':',
@@ -68,13 +69,12 @@ infer_grn.GRNData <- function(
     scale = FALSE,
     verbose = TRUE,
     ...
-){
-    # Match args
+) {
     method <- match.arg(method)
     peak_to_gene_method <- match.arg(peak_to_gene_method)
-
-    # Fit models
-    object <- fit_grn_models(
+    if (missing(network_name)) network_name <- paste0(method, "_network")
+    routed <- .pando_sanitize_standard_infer_dots(list(...), warn = verbose)
+    do.call(fit_grn_models, c(list(
         object = object,
         genes = genes,
         network_name = network_name,
@@ -94,10 +94,8 @@ infer_grn.GRNData <- function(
         interaction_term = interaction_term,
         adjust_method = adjust_method,
         scale = scale,
-        verbose = verbose,
-        ...
-    )
-    return(object)
+        verbose = verbose
+    ), routed$args))
 }
 
 #' Fit models for gene expression

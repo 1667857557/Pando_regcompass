@@ -1031,10 +1031,7 @@ infer_condition_grn <- function(object, ...) {
     UseMethod(generic = "infer_condition_grn", object = object)
 }
 
-#' @rdname infer_condition_grn
-#' @method infer_condition_grn GRNData
-#' @export
-infer_condition_grn.GRNData <- function(
+.pando_infer_condition_grn_one <- function(
     object, cell_type_col = NULL, condition_col = NULL, cell_type = NULL,
     genes = NULL, network_name = "condition_grn",
     peak_to_gene_method = c("Signac", "GREAT"), upstream = 100000,
@@ -1268,6 +1265,111 @@ infer_condition_grn.GRNData <- function(
     object@grn@params$condition_grn_fits <- fits
     object@grn@params$condition_network_index <- do.call(rbind, network_index)
     object
+}
+
+
+#' @rdname infer_condition_grn
+#' @method infer_condition_grn GRNData
+#' @export
+infer_condition_grn.GRNData <- function(
+    object, cell_type_col = NULL, condition_col = NULL, cell_type = NULL,
+    genes = NULL, network_name = "condition_grn",
+    peak_to_gene_method = c("Signac", "GREAT"), upstream = 100000,
+    downstream = 0, extend = 1000000, only_tss = FALSE,
+    peak_to_gene_domains = NULL, rna_layer = "data", peak_layer = "data",
+    peak_value_type = c("normalized", "probability", "other"),
+    tf_cor = 0.1, peak_cor = 0,
+    min_cells_per_condition = 50L,
+    small_condition_action = c("error", "drop_condition", "skip_cell_type"),
+    adjust_method = "BH", padj_threshold = 0.05,
+    rank_action = c("mark", "error"), min_residual_df = 1L,
+    parallel = FALSE, BPPARAM = NULL,
+    parallel_scope = c("auto", "cell_type", "target"),
+    overwrite = FALSE, fallback_args = list(), verbose = TRUE, ...) {
+    dots <- list(...)
+    if (length(dots)) {
+        label <- names(dots)
+        label[!nzchar(label)] <- "<unnamed>"
+        stop("Unused condition-GRN argument(s): ",
+   paste(label, collapse = ", "), call. = FALSE)
+    }
+    .pando_validate_bpparam(BPPARAM)
+    parallel_scope <- match.arg(parallel_scope)
+    metadata <- object@data@meta.data
+    can_split <- isTRUE(parallel) &&
+        !identical(parallel_scope, "target") &&
+        is.character(cell_type_col) && length(cell_type_col) == 1L &&
+        !is.na(cell_type_col) && cell_type_col %in% colnames(metadata)
+    available <- if (can_split) {
+        unique(as.character(metadata[[cell_type_col]]))
+    } else character()
+    requested <- if (!can_split) {
+        character()
+    } else if (is.null(cell_type)) {
+        available
+    } else {
+        unique(as.character(cell_type))
+    }
+    run_one <- function(input_object, type_label = cell_type,
+              inner_parallel = parallel) {
+        do.call(.pando_infer_condition_grn_one, list(
+  object = input_object,
+  cell_type_col = cell_type_col,
+  condition_col = condition_col,
+  cell_type = type_label,
+  genes = genes,
+  network_name = network_name,
+  peak_to_gene_method = peak_to_gene_method,
+  upstream = upstream,
+  downstream = downstream,
+  extend = extend,
+  only_tss = only_tss,
+  peak_to_gene_domains = peak_to_gene_domains,
+  rna_layer = rna_layer,
+  peak_layer = peak_layer,
+  peak_value_type = peak_value_type,
+  tf_cor = tf_cor,
+  peak_cor = peak_cor,
+  min_cells_per_condition = min_cells_per_condition,
+  small_condition_action = small_condition_action,
+  adjust_method = adjust_method,
+  padj_threshold = padj_threshold,
+  rank_action = rank_action,
+  min_residual_df = min_residual_df,
+  parallel = inner_parallel,
+  overwrite = overwrite,
+  fallback_args = fallback_args,
+  verbose = verbose
+        ))
+    }
+    if (!can_split || length(requested) <= 1L) {
+        return(run_one(object))
+    }
+    missing <- setdiff(requested, available)
+    if (length(missing)) {
+        stop("Requested cell type(s) were not found: ",
+   paste(missing, collapse = ", "), call. = FALSE)
+    }
+    run_type <- function(type_label) {
+        cells <- rownames(metadata)[
+  as.character(metadata[[cell_type_col]]) == type_label
+        ]
+        one <- object
+        one@data <- subset(object@data, cells = cells)
+        run_one(one, type_label = type_label, inner_parallel = FALSE)
+    }
+    results <- .pando_parallel_lapply(
+        requested, run_type, parallel = TRUE, BPPARAM = BPPARAM
+    )
+    answer <- .pando_merge_cell_type_grn_results(
+        object, results, condition_col = condition_col,
+        cell_type_col = cell_type_col
+    )
+    answer@grn@params$parallel_plan <- list(
+        scope = "cell_type", n_jobs = length(requested),
+        nested_parallel = FALSE, cell_types = requested
+    )
+    answer
 }
 
 #' Extract common-dictionary condition GRN fits
