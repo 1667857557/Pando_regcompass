@@ -28,6 +28,7 @@ jobs:
           combined = "\n".join(source.values())
 
           canonical = {
+              "infer_grn.GRNData": "R/grn.R",
               "infer_condition_grn.GRNData": "R/condition_grn.R",
               "condition_grn_fit.GRNData": "R/condition_grn.R",
               "aggregate_condition_grn_projection": "R/condition_grn.R",
@@ -48,6 +49,11 @@ jobs:
                   )
 
           forbidden = [
+              ".pando_infer_grn_grndata_impl",
+              ".pando_infer_condition_grn_grndata_impl",
+              ".pando_infer_grn_routed_impl",
+              ".pando_infer_condition_grn_routed_impl",
+              ".pando_merge_cell_type_grn_results_impl",
               ".pando_infer_condition_grn_base_impl",
               ".pando_condition_grn_fit_base_impl",
               ".pando_infer_condition_grn_complete_contract_method",
@@ -59,11 +65,19 @@ jobs:
           present = [value for value in forbidden if value in combined]
           if present:
               raise RuntimeError(
-                  f"late/variant condition-GRN implementation remains: {present}"
+                  f"late/variant GRN implementation remains: {present}"
               )
 
-          if Path("R/zzzzz_condition_fit_contract.R").exists():
-              raise RuntimeError("late-loaded condition fit contract file remains")
+          obsolete_files = [
+              "R/zzz_grn_runtime.R",
+              "R/zzzz_grn_runtime_contract.R",
+              "R/zzzzz_condition_fit_contract.R",
+          ]
+          present_files = [path for path in obsolete_files if Path(path).exists()]
+          if present_files:
+              raise RuntimeError(
+                  f"late-loaded GRN runtime files remain: {present_files}"
+              )
 
           namespace = Path("NAMESPACE").read_text()
           if "export(validate_condition_grn_projection_membership)" not in namespace:
