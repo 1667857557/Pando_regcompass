@@ -35,7 +35,7 @@ condition_object <- infer_condition_grn(
   rank_action = "mark",
   parallel = TRUE,
   BPPARAM = upstream_bp,
-  parallel_scope = "cell_type"
+  parallel_scope = "condition_cell_type"
 )
 
 fit <- condition_grn_fit(
@@ -44,7 +44,15 @@ fit <- condition_grn_fit(
 )
 ```
 
-With multiple requested broad cell types, `parallel_scope = "cell_type"` runs independent cell-type jobs through `BPPARAM`. Each worker runs candidate discovery and fixed-dictionary fitting serially, preventing nested worker pools and oversubscription. `parallel_scope = "target"` retains the original target-level Pando parallel path. The default `"auto"` chooses cell-type parallelism when multiple cell types are available.
+With multiple conditions, `parallel_scope = "auto"` selects
+`"condition_cell_type"`. Candidate-discovery tasks are distributed across the
+pooled cell-type background and each condition × cell-type subset. Pando then
+waits at a strict barrier, unions the exact `(target, TF, region)` triples within
+each cell type, freezes one common dictionary per cell type, and only then
+parallelizes the fixed-dictionary GLMs across condition × cell-type jobs. Each
+job disables target-level nested parallelism. `parallel_scope = "cell_type"`
+retains the older broad-cell-type scheduler and `parallel_scope = "target"`
+retains the original target-level Pando path.
 
 For every broad cell type, Pando performs exactly these steps:
 
@@ -110,7 +118,11 @@ When `condition_col` is `NULL`, absent, or has fewer than two observed levels,
 GRN independently for every requested broad cell type. It creates no condition
 coefficient or condition fit contract.
 
-Condition-GRN controls are never forwarded into standard `infer_grn()` model backends. Arguments such as `padj_threshold`, `rank_action`, `min_residual_df`, condition/layer controls, `BPPARAM`, and `parallel_scope` are removed before `stats::glm()` or another standard model receives `...`. This prevents one invalid condition-only argument from causing repeated per-gene model failures.
+Condition-GRN controls are never forwarded into standard `infer_grn()` model
+backends. Arguments such as `padj_threshold`, `rank_action`, `min_residual_df`,
+condition/layer controls, `BPPARAM`, and `parallel_scope` are removed before
+`stats::glm()` or another standard model receives `...`. This prevents one
+invalid condition-only argument from causing repeated per-gene model failures.
 
 ## RegCompass handoff
 
