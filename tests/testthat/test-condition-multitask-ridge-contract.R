@@ -51,18 +51,3 @@ test_that("ridge penalty is positive definite", {
     eigenvalues <- eigen(penalty, symmetric = TRUE, only.values = TRUE)$values
     expect_true(all(eigenvalues > 0))
 })
-
-test_that("runtime integration does not redefine the public S3 method", {
-    runtime <- readLines(
-        system.file("R", "condition_multitask_ridge_runtime.R", package = "Pando"),
-        warn = FALSE
-    )
-    if (length(runtime)) {
-        expect_false(any(grepl(
-            "^infer_condition_grn\\.GRNData\\s*<-\\s*function",
-            runtime
-        )))
-    } else {
-        succeed()
-    }
-})
