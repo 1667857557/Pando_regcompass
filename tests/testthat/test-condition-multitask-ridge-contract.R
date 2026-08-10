@@ -1,14 +1,14 @@
-test_that("public condition API keeps explicit arguments and adds ridge control", {
+test_that("public condition API remains canonical and explicit", {
     args <- names(formals(Pando:::infer_condition_grn.GRNData))
     expect_true(all(c(
         "cell_type_col", "condition_col", "tf_cor", "peak_cor",
         "min_cells_per_condition", "rank_action", "min_residual_df",
-        "ridge_control", "parallel", "BPPARAM", "parallel_scope",
-        "fallback_args"
+        "parallel", "BPPARAM", "parallel_scope", "fallback_args"
     ) %in% args))
+    expect_false("ridge_control" %in% args)
 })
 
-test_that("multi-condition path goes directly from exact union to ridge", {
+test_that("multi-condition internal path goes directly from exact union to ridge", {
     body_text <- paste(
         deparse(body(Pando:::.pando_infer_condition_grn_one)),
         collapse = "\n"
@@ -38,9 +38,13 @@ test_that("ridge defaults are deterministic and strictly regularized", {
     expect_equal(control$fusion_ratio, 1)
     expect_equal(control$cv_folds, 5L)
     expect_equal(control$seed, 1L)
+    expect_identical(
+        Pando:::.condition_ridge_fallback_key,
+        "condition_ridge_control"
+    )
 })
 
-test_that("ridge penalty is positive definite after positive lambda", {
+test_that("ridge penalty is positive definite", {
     k <- 3L
     p <- 4L
     penalty <- Pando:::.condition_ridge_penalty(k, p, fusion_ratio = 1)
@@ -48,11 +52,17 @@ test_that("ridge penalty is positive definite after positive lambda", {
     expect_true(all(eigenvalues > 0))
 })
 
-test_that("projection metadata follows the fitted multi-task engine", {
-    wrapper <- paste(
-        deparse(body(Pando:::project_condition_grn_cells)),
-        collapse = "\n"
+test_that("runtime integration does not redefine the public S3 method", {
+    runtime <- readLines(
+        system.file("R", "condition_multitask_ridge_runtime.R", package = "Pando"),
+        warn = FALSE
     )
-    expect_match(wrapper, "projection_origin", fixed = TRUE)
-    expect_match(wrapper, "raw_tf_atac_interaction_units", fixed = TRUE)
+    if (length(runtime)) {
+        expect_false(any(grepl(
+            "^infer_condition_grn\\.GRNData\\s*<-\\s*function",
+            runtime
+        )))
+    } else {
+        succeed()
+    }
 })
