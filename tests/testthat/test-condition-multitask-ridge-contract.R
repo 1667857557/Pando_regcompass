@@ -51,3 +51,13 @@ test_that("ridge penalty is positive definite", {
     eigenvalues <- eigen(penalty, symmetric = TRUE, only.values = TRUE)$values
     expect_true(all(eigenvalues > 0))
 })
+
+test_that("condition projection reports the actual fitted engine", {
+    body_text <- paste(
+        deparse(body(Pando:::project_condition_grn_cells)),
+        collapse = "\n"
+    )
+    expect_match(body_text, "fit$fit_engine", fixed = TRUE)
+    expect_false(grepl("full_condition_fixed_dictionary_glm", body_text,
+                       fixed = TRUE))
+})
