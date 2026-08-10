@@ -1,4 +1,4 @@
-# Joint refit of a legacy exact-union ConditionGRNFit with multi-task ridge.
+# Joint multi-task ridge refit of one exact-union ConditionGRNFit skeleton.
 
 .condition_ridge_target <- function(
     prepared, edges, cells_by_condition, folds, control,
@@ -34,6 +34,14 @@
     for (i in seq_along(cells_by_condition)) {
         condition <- names(cells_by_condition)[[i]]
         estimate <- as.numeric(fit$beta[i, ])
+        condition_informative <- fit$informative &
+            !as.logical(fit$zero_variance[i, ])
+        std_err <- as.numeric(fit$se[i, ])
+        statistic <- as.numeric(fit$statistic[i, ])
+        pval <- as.numeric(fit$pval[i, ])
+        std_err[!condition_informative] <- NA_real_
+        statistic[!condition_informative] <- NA_real_
+        pval[!condition_informative] <- NA_real_
         coefficients[[i]] <- data.frame(
             tf = edges$tf,
             target = edges$target,
@@ -45,12 +53,14 @@
             estimate_standardized = as.numeric(fit$beta_z[i, ]),
             shared_estimate = as.numeric(shared),
             condition_deviation = as.numeric(deviation[i, ]),
-            std_err = as.numeric(fit$se[i, ]),
-            statistic = as.numeric(fit$statistic[i, ]),
-            pval = as.numeric(fit$pval[i, ]),
-            estimable = fit$informative & is.finite(estimate),
+            std_err = std_err,
+            statistic = statistic,
+            pval = pval,
+            estimable = condition_informative & is.finite(estimate),
             zero_variance = as.logical(fit$zero_variance[i, ]),
-            condition_informative = !as.logical(fit$zero_variance[i, ]),
+            condition_informative = condition_informative,
+            borrowed_by_fusion = !condition_informative &
+                fit$informative & is.finite(estimate) & estimate != 0,
             aliased = FALSE,
             condition = condition,
             candidate_index = edges$candidate_index,
@@ -84,7 +94,7 @@
             cv_se = cv$cv_se,
             design_rank_deficient = raw_rank_deficient[[i]],
             nvariables_dictionary = nrow(edges),
-            nvariables_estimable = sum(fit$informative),
+            nvariables_estimable = sum(condition_informative),
             n_zero_variance = sum(fit$zero_variance[i, ]),
             n_aliased = 0L,
             condition_weight = fit$weight[[i]],
@@ -128,7 +138,8 @@
     coefficient$padj <- NA_real_
     for (condition in fit$condition_levels) {
         index <- which(coefficient$condition == condition)
-        valid <- index[is.finite(coefficient$pval[index])]
+        valid <- index[coefficient$estimable[index] %in% TRUE &
+                       is.finite(coefficient$pval[index])]
         if (length(valid)) {
             coefficient$padj[valid] <- stats::p.adjust(
                 coefficient$pval[valid], method = fit$adjust_method
@@ -149,7 +160,7 @@
     coefficient$effect_definition <-
         "multitask_ridge_condition_coefficient_raw_tf_atac_units"
     coefficient$inference_scope <-
-        "ridge_wald_conditional_on_dictionary_and_cv_lambda"
+        "ridge_wald_conditional_on_dictionary_cv_lambda_and_fusion"
 
     for (condition in fit$condition_levels) {
         network_name <- fit$network_names[[condition]]
@@ -192,7 +203,7 @@
     fit$coefficient_scale <- "raw_tf_atac_interaction_units"
     fit$internal_predictor_scale <- "pooled_conditions_common_zscore"
     fit$inference_scope <-
-        "ridge_wald_conditional_on_dictionary_and_cv_lambda"
+        "ridge_wald_conditional_on_dictionary_cv_lambda_and_fusion"
     fit$coefficients <- coefficient
     fit$fit <- fit_table
     fit$scale <- FALSE
