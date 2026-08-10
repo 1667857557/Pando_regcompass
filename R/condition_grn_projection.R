@@ -215,19 +215,9 @@ project_condition_grn_cells <- function(
             edge_contribution[, index, drop = FALSE]
         )
     }
-    target_reliability <- condition_grn_reliability(
-        fit, significant_only = significant_only
-    )
-    if (!is.null(targets)) {
-        target_reliability <- target_reliability[
-            target_reliability$target %in% resolved_targets, , drop = FALSE
-        ]
-    }
     answer <- list(
         schema_version = "pando_condition_projection_common_dictionary_v1",
         gene_score = gene_score,
-        target_reliability = target_reliability,
-        reliability_definition = "sqrt(clamp(target_condition_rsq,0,1))",
         edge_contribution = if (isTRUE(return_edge_contributions)) {
             edge_contribution
         } else NULL,
