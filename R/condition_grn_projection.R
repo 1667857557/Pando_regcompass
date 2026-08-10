@@ -226,7 +226,10 @@ project_condition_grn_cells <- function(
         effect_column = if (isTRUE(significant_only)) {
             "penalty_effect"
         } else "estimate",
-        projection_origin = "full_condition_fixed_dictionary_glm",
+        projection_origin = if (
+            is.character(fit$fit_engine) && length(fit$fit_engine) == 1L &&
+            !is.na(fit$fit_engine) && nzchar(fit$fit_engine)
+        ) fit$fit_engine else "condition_fit_engine_unspecified",
         coefficient_scale = fit$coefficient_scale,
         projection_policy = if (isTRUE(significant_only)) {
             "BH_adjusted_p_below_threshold_penalty_effect"
