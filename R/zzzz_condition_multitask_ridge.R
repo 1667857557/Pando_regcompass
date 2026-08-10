@@ -21,7 +21,8 @@
     dots <- list(...)
     if (length(dots)) {
         label <- names(dots)
-        label[is.null(label) | !nzchar(label)] <- "<unnamed>"
+        if (is.null(label)) label <- rep("<unnamed>", length(dots))
+        label[!nzchar(label)] <- "<unnamed>"
         stop("Unused condition-GRN argument(s): ",
              paste(label, collapse = ", "), call. = FALSE)
     }
@@ -261,28 +262,6 @@
     object@grn@params$condition_grn_fits <- fits
     object@grn@params$condition_network_index <- do.call(rbind, network_index)
     object
-}
-
-#' @rdname infer_condition_grn
-#' @method infer_condition_grn GRNData
-#' @export
-infer_condition_grn.GRNData <- function(object, ..., ridge_control = list()) {
-    dots <- list(...)
-    fallback_args <- if ("fallback_args" %in% names(dots)) {
-        dots$fallback_args
-    } else {
-        list()
-    }
-    if (!is.list(fallback_args)) {
-        stop("`fallback_args` must be a list.", call. = FALSE)
-    }
-    fallback_args[[.condition_ridge_control_key]] <-
-        .condition_ridge_control(ridge_control)
-    dots$fallback_args <- fallback_args
-    do.call(
-        .condition_legacy_infer_condition_grn_method,
-        c(list(object = object), dots)
-    )
 }
 
 .condition_legacy_project_condition_grn_cells <- project_condition_grn_cells
