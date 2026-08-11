@@ -5,6 +5,8 @@
 # CV lambda selection, effective degrees of freedom and ridge-Wald diagnostics
 # are identical to the condition implementation without introducing a second
 # ridge backend. Original Gaussian GLM remains the default standard-Pando path.
+# The canonical direct infer_grn.GRNData definition stays in R/grn.R; this file
+# installs the extended method through an alias after defining its helpers.
 
 .pando_standard_ridge_infer_impl <- infer_grn.GRNData
 
@@ -152,7 +154,7 @@
     answer
 }
 
-infer_grn.GRNData <- function(
+.pando_standard_ridge_method <- function(
     object,
     genes = NULL,
     network_name = paste0(method, "_network"),
@@ -271,3 +273,5 @@ infer_grn.GRNData <- function(
         verbose = verbose
     )
 }
+
+infer_grn.GRNData <- .pando_standard_ridge_method
