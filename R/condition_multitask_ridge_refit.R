@@ -1,4 +1,8 @@
 # Joint multi-task ridge refit of one exact-union ConditionGRNFit skeleton.
+#
+# This file contains the canonical one-pass estimator. Target-level execution is
+# memory bounded through condition_target_parallel.R; no later-loaded function
+# replacement is required.
 
 .condition_ridge_contrasts <- function(
     fit, edges, condition_informative, scaling) {
@@ -168,9 +172,10 @@
     )
 }
 
-.condition_ridge_refit_contract <- function(
+.condition_ridge_refit_contract_one_pass <- function(
     object, fit, prepared, control, rank_action = "mark",
-    min_residual_df = 1L, parallel = FALSE, verbose = TRUE) {
+    min_residual_df = 1L, parallel = FALSE, verbose = TRUE,
+    progress_phase = NULL, progress_label = NULL) {
     .condition_validate_dictionary(fit$edge_dictionary, prepared)
     cells <- fit$condition_cell_ids[fit$condition_levels]
     if (any(lengths(cells) < 3L)) {
@@ -180,15 +185,36 @@
     folds <- .condition_ridge_folds(cells, control$cv_folds, control$seed)
     targets <- unique(as.character(fit$edge_dictionary$target))
     names(targets) <- targets
-    result <- map_par(targets, function(target) {
-        edges <- fit$edge_dictionary[
-            fit$edge_dictionary$target == target, , drop = FALSE
-        ]
-        .condition_ridge_target(
-            prepared, edges, cells, folds, control,
-            min_residual_df, rank_action
-        )
-    }, verbose = verbose, parallel = parallel)
+
+    if (is.null(progress_phase)) {
+        progress_phase <- if (length(fit$condition_levels) == 1L) {
+            "ridge_standard"
+        } else {
+            "ridge_fit"
+        }
+    }
+    if (is.null(progress_label)) progress_label <- fit$cell_type %||% ""
+
+    result <- .pando_target_payload_map(
+        keys = targets,
+        build_payload = function(target) {
+            .pando_ridge_target_payload(
+                prepared = prepared,
+                edge_dictionary = fit$edge_dictionary,
+                target = target,
+                cells = cells,
+                folds = folds,
+                control = control,
+                min_residual_df = min_residual_df,
+                rank_action = rank_action
+            )
+        },
+        worker_name = ".pando_ridge_target_worker",
+        parallel = parallel,
+        verbose = verbose,
+        phase = progress_phase,
+        label = progress_label
+    )
 
     coefficient <- do.call(rbind, lapply(result, `[[`, "coefficients"))
     contrast <- do.call(rbind, lapply(result, `[[`, "contrasts"))
@@ -196,11 +222,6 @@
     rownames(coefficient) <- rownames(fit_table) <- NULL
     if (is.data.frame(contrast) && nrow(contrast)) rownames(contrast) <- NULL
 
-    # Ridge-Wald P values remain available as model diagnostics, but they are
-    # not used to hard-threshold the quantitative projection. Condition-wise
-    # thresholding turns two nearly identical regularized coefficients into
-    # beta versus zero solely because one adjusted P value crosses 0.05, which
-    # is not a stable estimand for downstream between-condition comparison.
     coefficient$padj <- NA_real_
     for (condition in fit$condition_levels) {
         index <- which(coefficient$condition == condition)
@@ -306,6 +327,15 @@
                  "rsq_oof", "curve")]
     })
     fit$target_scaling <- lapply(result, `[[`, "scaling")
+    fit$target_parallel_memory_policy <- list(
+        payload = "target_specific_rna_atac_edges",
+        batching = "worker_sized",
+        worker_dispatch = "namespace_level_function_name",
+        worker_gc = TRUE,
+        master_batch_gc = TRUE
+    )
     class(fit) <- c("ConditionGRNFit", "list")
+    result <- NULL
+    invisible(gc(verbose = FALSE, full = TRUE))
     list(object = object, fit = fit)
 }
