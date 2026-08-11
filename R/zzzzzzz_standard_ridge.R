@@ -1,10 +1,10 @@
 # Optional single-task ridge for standard Pando.
 #
-# This is the K = 1 special case of the condition-GRN ridge solver.  The fusion
+# This is the K = 1 special case of the condition-GRN ridge solver. The fusion
 # Laplacian is exactly zero for K = 1, so the numerical path, predictor scaling,
 # CV lambda selection, effective degrees of freedom and ridge-Wald diagnostics
 # are identical to the condition implementation without introducing a second
-# ridge backend.  Original Gaussian GLM remains the default standard-Pando path.
+# ridge backend. Original Gaussian GLM remains the default standard-Pando path.
 
 .pando_standard_ridge_infer_impl <- infer_grn.GRNData
 
@@ -120,11 +120,6 @@
     )
     answer <- refitted$object
     fit <- refitted$fit
-    fit$model_schema <- "pando_standard_grn_single_task_ridge_v1"
-    fit$fit_engine <- "single_task_ridge_same_condition_solver"
-    fit$projection_policy <- "standard_ridge_bh_diagnostic"
-    fit$condition_levels <- "standard"
-    fit$cell_type <- NA_character_
 
     network <- answer@grn@networks[[network_name]]
     if (!is.null(network)) {
@@ -141,8 +136,19 @@
     answer@grn@params$standard_fit_method <- "ridge"
     answer@grn@params$standard_ridge_schema <-
         "pando_standard_grn_single_task_ridge_v1"
-    answer@grn@params$standard_ridge_fit <- fit
-    answer@grn@params$standard_ridge_control <- control
+    answer@grn@params$standard_ridge_contract <- list(
+        schema = "pando_standard_grn_single_task_ridge_v1",
+        solver = "condition_ridge_k1",
+        candidate_edges = nrow(dictionary),
+        fitted_targets = length(unique(as.character(fit$fit$target))),
+        coefficient_scale = "raw_tf_atac_interaction_units",
+        predictor_scale_reference = "within_task_rms",
+        adjust_method = as.character(adjust_method),
+        padj_threshold = as.numeric(padj_threshold),
+        rank_action = rank_action,
+        min_residual_df = min_residual_df,
+        ridge_control = control
+    )
     answer
 }
 
