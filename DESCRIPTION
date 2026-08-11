@@ -1,5 +1,5 @@
 Package: Pando
-Version: 2.0.6
+Version: 2.0.7
 Type: Package
 Title: Inferring regulomes from multi-modal single-cell genomics data
 Authors@R: person(given = "Jonas Simon",
@@ -45,12 +45,16 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     coefficient covariance rather than inferred from asymmetric significance
     calls. The coefficient and contrast P values remain approximate and
     conditional on data-dependent candidate discovery, significance screening,
-    CV-selected lambda and fusion regularization. When no condition column is
-    supplied, the column is absent, or fewer than two levels are observed, the
-    original per-cell-type infer_grn Gaussian interaction workflow is used.
-    Independent cell-type jobs can be dispatched through BiocParallel without
-    nested worker pools, and bundled reference datasets are installed as
-    standalone RData files.
+    CV-selected lambda and fusion regularization. Standard infer_grn retains
+    the original Gaussian GLM as its default method and additionally supports a
+    single-task ridge method. Standard ridge is the K=1 special case of the same
+    condition ridge solver, so the fusion term is exactly zero while the same CV
+    lambda selection, within-task RMS predictor scaling, effective degrees of
+    freedom and ridge-Wald diagnostics are retained. BiocParallel target pools
+    can be supplied for both condition and standard ridge paths and are stopped
+    after the corresponding fit when Pando started them. Independent cell-type
+    jobs can also be dispatched through BiocParallel, and bundled reference
+    datasets are installed as standalone RData files.
 License: MIT
 Encoding: UTF-8
 LazyData: false
@@ -107,4 +111,6 @@ Config/Pando/ConditionGRNModelSchema: pando_condition_grn_multitask_ridge_v2
 Config/Pando/ConditionGRNMethod: significant-union-multitask-ridge-refit
 Config/Pando/ConditionProjectionPolicy: padj-significant-ridge-effects
 Config/Pando/ConditionInference: approximate-ridge-Wald-screen-and-refit
+Config/Pando/StandardRidgeSchema: pando_standard_grn_single_task_ridge_v1
+Config/Pando/StandardRidgeMethod: condition-ridge-k1
 Config/Pando/DataStorage: standalone-RData
