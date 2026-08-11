@@ -13,3 +13,9 @@ test_that("find_modules normalizes ridge dictionary diagnostics without changing
   expect_match(body_text, "original_coefs", fixed = TRUE)
   expect_match(body_text, "original_fit", fixed = TRUE)
 })
+
+test_that("ridge GOF rows expose legacy nvariables for plot_gof compatibility", {
+  body_text <- paste(deparse(body(.condition_ridge_target)), collapse = "\n")
+  expect_match(body_text, "nvariables = nrow(edges)", fixed = TRUE)
+  expect_match(body_text, "nvariables_dictionary = nrow(edges)", fixed = TRUE)
+})
