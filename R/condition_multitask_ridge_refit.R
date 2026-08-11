@@ -152,6 +152,7 @@
             cv_mse = cv$cv_mse,
             cv_se = cv$cv_se,
             design_rank_deficient = raw_rank_deficient[[i]],
+            nvariables = nrow(edges),
             nvariables_dictionary = nrow(edges),
             nvariables_estimable = sum(informative_here),
             n_zero_variance = sum(fit$zero_variance[i, ]),
