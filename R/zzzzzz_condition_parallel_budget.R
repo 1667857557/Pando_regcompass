@@ -1,10 +1,9 @@
 # Bounded target-level BiocParallel routing for condition GRNs.
 #
-# The canonical condition-GRN implementation intentionally keeps cell-type and
-# target scheduling separate.  This late-loaded adapter lets a caller provide a
-# BiocParallelParam for the target scope without changing the statistical model
-# or the candidate/screen/refit barriers.  The same pool is reused by every
-# target-parallel map_par() call during one infer_condition_grn() invocation.
+# The canonical condition-GRN direct definition remains in R/condition_grn.R.
+# This adapter installs an extended method through an alias so the source tree
+# keeps exactly one direct S3 method definition while target-scope BPPARAM can be
+# reused across candidate discovery and multi-task ridge fitting.
 
 .pando_condition_parallel_method_impl <- infer_condition_grn.GRNData
 .pando_condition_parallel_map_impl <- map_par
@@ -33,7 +32,7 @@ map_par <- function(x, fun, parallel = FALSE, verbose = TRUE) {
     out
 }
 
-infer_condition_grn.GRNData <- function(
+.pando_condition_target_parallel_method <- function(
     object, cell_type_col = NULL, condition_col = NULL, cell_type = NULL,
     genes = NULL, network_name = "condition_grn",
     peak_to_gene_method = c("Signac", "GREAT"), upstream = 100000,
@@ -65,10 +64,10 @@ infer_condition_grn.GRNData <- function(
         }
         options(Pando.condition_target_BPPARAM = BPPARAM)
         if (started_here) {
-            on.exit(
-                try(BiocParallel::bpstop(BPPARAM), silent = TRUE),
-                add = TRUE
-            )
+            on.exit({
+                try(BiocParallel::bpstop(BPPARAM), silent = TRUE)
+                invisible(gc(verbose = FALSE, full = TRUE))
+            }, add = TRUE)
         }
     }
 
@@ -111,8 +110,11 @@ infer_condition_grn.GRNData <- function(
             workers = as.integer(BiocParallel::bpnworkers(BPPARAM)),
             backend = class(BPPARAM)[[1L]],
             pool_reused_across_target_stages = TRUE,
-            nested_pool_created_by_pando = started_here
+            nested_pool_created_by_pando = started_here,
+            pool_release_policy = "stop_on_method_exit_if_started_here"
         )
     }
     answer
 }
+
+infer_condition_grn.GRNData <- .pando_condition_target_parallel_method
