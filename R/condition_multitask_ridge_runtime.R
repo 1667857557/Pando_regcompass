@@ -188,9 +188,9 @@
             model_schema = .condition_multitask_ridge_schema,
             fit_engine = "two_stage_exact_edge_union_multitask_ridge",
             coefficient_scale = "raw_tf_atac_interaction_units",
-            internal_predictor_scale = "pooled_conditions_common_zscore",
+            internal_predictor_scale = "equal_condition_within_condition_rms",
             inference_scope =
-                "ridge_wald_conditional_on_dictionary_cv_lambda_and_fusion",
+                "approximate_ridge_wald_diagnostic_conditional_on_dictionary_cv_lambda_and_fusion",
             cell_type = type_label,
             condition_levels = eligible,
             condition_col = condition_col,
@@ -198,6 +198,7 @@
             condition_cell_ids = cells_by_condition,
             edge_dictionary = dictionary,
             coefficients = NULL,
+            contrasts = NULL,
             fit = NULL,
             network_names = network_names,
             padj_threshold = padj_threshold,
@@ -205,7 +206,7 @@
             scale = FALSE,
             interaction = ":",
             projection_effect_column = "penalty_effect",
-            projection_policy = "padj_significant_effects_only",
+            projection_policy = "continuous_estimable_ridge_effects",
             target_genes = unique(as.character(dictionary$target)),
             rna_assay = prepared$params$rna_assay,
             atac_assay = prepared$params$peak_assay,
@@ -237,7 +238,10 @@
                 network_name = network_names[[condition]],
                 n_cells = length(cells_by_condition[[condition]]),
                 n_dictionary_edges = nrow(dictionary),
-                n_significant_edges = sum(one$significant %in% TRUE),
+                n_projection_edges = sum(
+                    one$estimable %in% TRUE & is.finite(one$estimate)
+                ),
+                n_significant_diagnostic_edges = sum(one$significant %in% TRUE),
                 stringsAsFactors = FALSE
             )
         }
@@ -258,6 +262,8 @@
         .condition_multitask_ridge_schema
     object@grn@params$condition_grn_method <-
         "two_stage_exact_edge_union_multitask_ridge"
+    object@grn@params$condition_projection_policy <-
+        "continuous_estimable_ridge_effects"
     object@grn@params$condition_ridge_control <- control
     object@grn@params$condition_grn_fits <- fits
     object@grn@params$condition_network_index <- do.call(rbind, network_index)
