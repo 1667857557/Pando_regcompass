@@ -15,6 +15,17 @@
 .condition_fit_dictionary_policy <-
     "preliminary_joint_ridge_bh_significant_union_then_joint_refit"
 
+.condition_validate_adjust_method <- function(adjust_method) {
+    value <- toupper(as.character(adjust_method))
+    if (length(value) != 1L || is.na(value) || !identical(value, "BH")) {
+        stop(
+            "Multi-condition ridge significance screening requires ",
+            "`adjust_method = \"BH\"`.", call. = FALSE
+        )
+    }
+    "BH"
+}
+
 .condition_validate_padj_threshold <- function(padj_threshold) {
     if (!is.numeric(padj_threshold) || length(padj_threshold) != 1L ||
         !is.finite(padj_threshold) || padj_threshold <= 0 ||
@@ -54,6 +65,7 @@
 }
 
 .condition_dictionary_screen <- function(fit) {
+    .condition_validate_adjust_method(fit$adjust_method)
     threshold <- .condition_validate_padj_threshold(fit$padj_threshold)
     coefficient <- as.data.frame(fit$coefficients, stringsAsFactors = FALSE)
     required <- c("edge_id", "condition", "estimate", "estimable", "pval", "padj")
@@ -121,6 +133,7 @@
 .condition_ridge_refit_contract <- function(
     object, fit, prepared, control, rank_action = "mark",
     min_residual_df = 1L, parallel = FALSE, verbose = TRUE) {
+    fit$adjust_method <- .condition_validate_adjust_method(fit$adjust_method)
     fit$padj_threshold <- .condition_validate_padj_threshold(fit$padj_threshold)
     candidate_dictionary <- fit$edge_dictionary
 
