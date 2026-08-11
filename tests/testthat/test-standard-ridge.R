@@ -22,3 +22,17 @@ test_that("standard ridge accepts Gaussian identity only", {
   expect_true(.pando_standard_ridge_family_ok(stats::gaussian()))
   expect_false(.pando_standard_ridge_family_ok(stats::poisson()))
 })
+
+test_that("standard ridge routing lives in canonical infer_grn method", {
+  body_text <- paste(deparse(body(infer_grn.GRNData)), collapse = "\n")
+  expect_match(body_text, "identical(method, \"ridge\")", fixed = TRUE)
+  expect_match(body_text, ".pando_standard_ridge_fit", fixed = TRUE)
+  expect_false(exists(
+    ".pando_standard_ridge_infer_impl",
+    envir = asNamespace("Pando"), inherits = FALSE
+  ))
+  expect_false(exists(
+    ".pando_standard_ridge_method",
+    envir = asNamespace("Pando"), inherits = FALSE
+  ))
+})
