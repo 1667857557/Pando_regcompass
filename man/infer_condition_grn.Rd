@@ -52,7 +52,7 @@ infer_condition_grn(object, ...)
 \item{tf_cor, peak_cor}{Candidate-discovery correlation thresholds.}
 \item{min_cells_per_condition}{Minimum paired cells per fitted condition.}
 \item{small_condition_action}{Action for undersized conditions.}
-\item{adjust_method, padj_threshold}{Multiple-testing method and adjusted-P threshold used first to construct the significant-union fit dictionary and again to decide which final condition-specific coefficients can contribute downstream. The default is 0.05; the multi-condition ridge path permits values in \code{(0, 0.1]}.}
+\item{adjust_method, padj_threshold}{Multiple-testing method and adjusted-P threshold used first to construct the significant-union fit dictionary and again to decide which final condition-specific coefficients can contribute downstream. Multi-condition ridge requires BH adjustment. The threshold defaults to 0.05 and is user-configurable over \code{(0, 1)} with no additional condition-specific upper cap.}
 \item{rank_action}{With the default \code{"mark"}, raw rank deficiency is retained as a diagnostic because the regularized system remains identifiable. \code{"error"} requests strict failure when a raw condition design is rank deficient.}
 \item{min_residual_df}{Minimum effective residual degrees of freedom for the joint regularized fit.}
 \item{parallel}{Enable parallel execution.}
@@ -71,7 +71,7 @@ For edge \eqn{e} in condition \eqn{k}, the predictor remains the original Pando 
 
 A preliminary joint multi-task ridge is fitted on the candidate dictionary. Within each condition, ridge-Wald P values are BH adjusted. The actual common fit dictionary is
 \deqn{D_{fit}=\bigcup_k\{e: padj^{screen}_{e,k}<\tau\},}
-where \eqn{\tau} is \code{padj_threshold}. Thus every edge in the final fit dictionary has preliminary statistical support in at least one condition, while every condition is subsequently fitted on exactly the same edge set. Screening provenance is retained on the fit dictionary, including minimum screening padj and supporting conditions. If no edge passes the threshold in any condition, the multi-condition fit stops rather than silently reverting to the unscreened candidate dictionary.
+where \eqn{\tau} is the user-configured \code{padj_threshold} in \eqn{(0,1)} and defaults to 0.05. Thus every edge in the final fit dictionary has preliminary statistical support in at least one condition, while every condition is subsequently fitted on exactly the same edge set. Screening provenance is retained on the fit dictionary, including minimum screening padj and supporting conditions. If no edge passes the threshold in any condition, the multi-condition fit stops rather than silently reverting to the unscreened candidate dictionary.
 
 The model has a separate intercept in every condition, so between-condition shifts in the mean predictor do not identify the slope. Accordingly, the common predictor scale is the equal-condition RMS within-condition standard deviation,
 \deqn{s_e^2=K^{-1}\sum_k n_k^{-1}\sum_c(x_{cek}-\bar{x}_{ek})^2,}
@@ -91,7 +91,7 @@ The raw design rank, raw condition number, regularized condition number, effecti
 
 For the final refit, condition-specific ridge-Wald P values are BH adjusted again. The exported \code{penalty_effect} is
 \deqn{penalty\_effect_{e,k}=\begin{cases}\beta_{e,k},& estimable_{e,k}\ \&\ padj_{e,k}<\tau,\\0,& otherwise.\end{cases}}
-Thus the shared fit dictionary is the union of statistically supported screening edges, while a particular edge contributes to a particular condition only when the final refit also supports that condition-edge at the configured threshold. The default \eqn{\tau} is 0.05 and values up to 0.1 are allowed for a more permissive edge-inclusion rule.
+Thus the shared fit dictionary is the union of statistically supported screening edges, while a particular edge contributes to a particular condition only when the final refit also supports that condition-edge at the configured threshold. The threshold defaults to 0.05 but remains freely configurable within the valid adjusted-P threshold interval \eqn{(0,1)}.
 
 Pairwise differential-GRN contrasts remain a separate calculation. For conditions A and B, Pando reports \eqn{\Delta\beta_e=\beta_{e,A}-\beta_{e,B}} with a covariance-based approximate ridge-Wald standard error, P value, and BH-adjusted P value. A coefficient being significant in one condition and nonsignificant in another is not used as a substitute for the direct contrast.
 
