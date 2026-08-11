@@ -52,7 +52,7 @@ infer_condition_grn(object, ...)
 \item{tf_cor, peak_cor}{Candidate-discovery correlation thresholds.}
 \item{min_cells_per_condition}{Minimum paired cells per fitted condition.}
 \item{small_condition_action}{Action for undersized conditions.}
-\item{adjust_method, padj_threshold}{Multiple-testing method and threshold defining \code{penalty_effect}.}
+\item{adjust_method, padj_threshold}{Multiple-testing method and threshold used for coefficient and pairwise-contrast diagnostic flags. They do not hard-threshold the quantitative projection effect.}
 \item{rank_action}{With the default \code{"mark"}, raw rank deficiency is retained as a diagnostic because the regularized system remains identifiable. \code{"error"} requests strict failure when a raw condition design is rank deficient.}
 \item{min_residual_df}{Minimum effective residual degrees of freedom for the joint regularized fit.}
 \item{parallel}{Enable parallel execution.}
@@ -67,7 +67,9 @@ infer_condition_grn(object, ...)
 \description{For each multi-condition cell type, Pando keeps the existing global-plus-condition candidate discovery and exact TF-peak-target union, then fits the complete frozen dictionary with one joint multi-task ridge model per target.}
 \details{
 For edge \eqn{e} in condition \eqn{k}, the predictor remains the original Pando interaction
-\eqn{x_{cek}=RNA_{TF_e,c} ATAC_{peak_e,c}}. The exact union dictionary is not pruned because of collinearity. Predictor centering and scaling are learned from the pooled cells of all fitted conditions; cross-validation relearns those transforms within each training fold. Stored coefficients are back-transformed to the original TF-by-ATAC units before projection.
+\eqn{x_{cek}=RNA_{TF_e,c} ATAC_{peak_e,c}}. The exact union dictionary is not pruned because of collinearity. The model has a separate intercept in every condition, so between-condition shifts in the mean predictor do not identify the slope. Accordingly, the common predictor scale is the equal-condition RMS within-condition standard deviation,
+\deqn{s_e^2=K^{-1}\sum_k n_k^{-1}\sum_c(x_{cek}-\bar{x}_{ek})^2,}
+which matches the equal-condition loss and prevents between-condition mean shifts from changing ridge shrinkage. Cross-validation relearns this scale within each training fold. Stored coefficients are back-transformed to the original TF-by-ATAC units before projection.
 
 For \eqn{K} conditions, the numerical objective is proportional to
 \deqn{
@@ -79,9 +81,9 @@ Each condition therefore contributes equal total loss weight. The positive ridge
 
 One \eqn{\lambda} is selected for all conditions of a target by condition-stratified cross-validation. The default one-standard-error rule chooses the largest lambda within one standard error of minimum equal-condition validation MSE. The public target-condition \code{rsq} field is dictionary-conditional out-of-fold R-squared; candidate discovery still precedes CV on the complete cell type, so this is not a fully nested estimate. \code{rsq_in_sample} is retained separately.
 
-The raw design rank, raw condition number, regularized condition number, effective degrees of freedom, condition-specific zero-variance flags, common lambda and CV loss are retained as diagnostics. A predictor that varies in the pooled common reference but is constant within one condition may receive a finite coefficient through the fusion penalty, but that condition-edge is marked non-estimable, receives no P value, and cannot enter \code{penalty_effect}. This separates partial-pooling information from condition-local evidence.
+The raw design rank, raw condition number, regularized condition number, effective degrees of freedom, condition-specific zero-variance flags, common lambda and CV loss are retained as diagnostics. A predictor that varies in the common dictionary but is constant within one condition may receive a finite coefficient through the fusion penalty, but that condition-edge is marked non-estimable and has zero quantitative projection contribution. This separates partial-pooling information from condition-local estimability.
 
-Approximate ridge-Wald standard errors use a residual sandwich covariance conditional on the selected dictionary, lambda, and fusion penalty. P values are BH-adjusted separately in every condition. The external RegCompass-compatible contract remains \code{estimable & padj < padj_threshold}; \code{penalty_effect} is the raw-unit coefficient for significant edges and zero otherwise. The external fit contract retains \code{scale = FALSE} because the exported coefficient is already back-transformed to raw TF-by-ATAC units.
+Approximate ridge-Wald coefficient P values and pairwise condition-contrast P values use the joint residual sandwich covariance conditional on the selected dictionary, lambda, and fusion penalty. They are BH-adjusted as diagnostic summaries only; they are not exact post-selection inference and are not used to hard-threshold the quantitative RegCompass handoff. The exported \code{penalty_effect} equals the raw-unit ridge coefficient for every finite estimable condition-edge and zero otherwise. This avoids artificial between-condition differences caused solely by one adjusted P value crossing 0.05. The external fit contract retains \code{scale = FALSE} because the exported coefficient is already back-transformed to raw TF-by-ATAC units.
 
 When the condition column is absent or has fewer than two levels, the original per-cell-type Pando \code{infer_grn()} fallback is unchanged.
 }
