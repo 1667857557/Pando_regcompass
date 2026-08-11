@@ -56,7 +56,7 @@
              call. = FALSE)
     }
 
-    candidates <- .condition_discover_edges_prepared(
+    candidates <- .condition_discover_edges_compact(
         prepared = prepared,
         cells = cells,
         source_label = "standard",
@@ -118,7 +118,9 @@
         rank_action = rank_action,
         min_residual_df = min_residual_df,
         parallel = parallel,
-        verbose = verbose
+        verbose = verbose,
+        progress_phase = "ridge_standard",
+        progress_label = network_name
     )
     answer <- refitted$object
     fit <- refitted$fit
