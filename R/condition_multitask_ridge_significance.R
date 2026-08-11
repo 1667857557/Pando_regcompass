@@ -10,7 +10,6 @@
 # supported edge set, while the downstream condition-specific projection still
 # requires significance in that condition.
 
-.condition_max_padj_threshold <- 0.1
 .condition_significant_projection_policy <- "padj_significant_ridge_effects"
 .condition_fit_dictionary_policy <-
     "preliminary_joint_ridge_bh_significant_union_then_joint_refit"
@@ -29,9 +28,9 @@
 .condition_validate_padj_threshold <- function(padj_threshold) {
     if (!is.numeric(padj_threshold) || length(padj_threshold) != 1L ||
         !is.finite(padj_threshold) || padj_threshold <= 0 ||
-        padj_threshold > .condition_max_padj_threshold) {
+        padj_threshold >= 1) {
         stop(
-            "`padj_threshold` must be one finite number in (0, 0.1].",
+            "`padj_threshold` must be one finite number in (0, 1).",
             call. = FALSE
         )
     }
