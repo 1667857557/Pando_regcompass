@@ -174,12 +174,17 @@
     beta_z <- beta
     se <- matrix(NA_real_, k, p_full, dimnames = dimnames(beta))
     statistic <- pval <- se
-    zero_variance <- t(vapply(seq_along(x), function(i) {
-        v <- apply(x[[i]], 2L, stats::var)
-        !is.finite(v) | v <= scaling$floor^2
-    }, logical(p_full)))
-    rownames(zero_variance) <- conditions
-    colnames(zero_variance) <- colnames(beta)
+    zero_variance_values <- vapply(seq_along(x), function(i) {
+        value <- apply(x[[i]], 2L, stats::var)
+        !is.finite(value) | value <= scaling$floor^2
+    }, logical(p_full))
+    zero_variance <- matrix(
+        as.logical(zero_variance_values),
+        nrow = k,
+        ncol = p_full,
+        byrow = TRUE,
+        dimnames = list(conditions, colnames(beta))
+    )
 
     if (!any(informative)) {
         intercept <- vapply(y, mean, numeric(1))

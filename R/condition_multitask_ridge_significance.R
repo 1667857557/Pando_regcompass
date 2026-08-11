@@ -124,24 +124,31 @@
     out
 }
 
-# Preserve the numerical one-pass estimator from
-# condition_multitask_ridge_refit.R. The canonical wrapper runs a preliminary
-# screen and, when required, a second fit on the significant-union dictionary.
-.condition_ridge_refit_contract_one_pass <- .condition_ridge_refit_contract
-
 .condition_ridge_refit_contract <- function(
     object, fit, prepared, control, rank_action = "mark",
     min_residual_df = 1L, parallel = FALSE, verbose = TRUE) {
     fit$adjust_method <- .condition_validate_adjust_method(fit$adjust_method)
     fit$padj_threshold <- .condition_validate_padj_threshold(fit$padj_threshold)
     candidate_dictionary <- fit$edge_dictionary
+    progress_label <- fit$cell_type %||% ""
 
     preliminary <- .condition_ridge_refit_contract_one_pass(
         object = object, fit = fit, prepared = prepared, control = control,
         rank_action = rank_action, min_residual_df = min_residual_df,
-        parallel = parallel, verbose = verbose
+        parallel = parallel, verbose = verbose,
+        progress_phase = "ridge_preliminary",
+        progress_label = progress_label
     )
     screen <- .condition_dictionary_screen(preliminary$fit)
+    if (isTRUE(verbose)) {
+        message(
+            "Pando condition phase=bh_dictionary_screen",
+            " | cell_type=", as.character(progress_label),
+            ";candidate_edges=", nrow(candidate_dictionary),
+            ";supported_edges=", length(screen$keep_edge_ids),
+            ";threshold=", format(screen$threshold, trim = TRUE)
+        )
+    }
     if (!length(screen$keep_edge_ids)) {
         stop(
             "No condition-GRN edge passes BH padj < ",
@@ -159,6 +166,14 @@
                   sort(as.character(candidate_dictionary$edge_id)))) {
         final <- preliminary
         final$fit$edge_dictionary <- final_dictionary
+        if (isTRUE(verbose)) {
+            message(
+                "Pando condition phase=ridge_final_reuse",
+                " | cell_type=", as.character(progress_label),
+                ";targets=", length(unique(as.character(final_dictionary$target))),
+                ";fit_edges=", nrow(final_dictionary)
+            )
+        }
     } else {
         final_skeleton <- fit
         final_skeleton$edge_dictionary <- final_dictionary
@@ -170,7 +185,9 @@
             object = object, fit = final_skeleton, prepared = prepared,
             control = control, rank_action = rank_action,
             min_residual_df = min_residual_df,
-            parallel = parallel, verbose = verbose
+            parallel = parallel, verbose = verbose,
+            progress_phase = "ridge_final",
+            progress_label = progress_label
         )
     }
 
@@ -182,5 +199,14 @@
     final$fit$dictionary_screening_summary <- screen$summary
     final$fit$edge_dictionary <- final_dictionary
     final$object <- .condition_update_network_significance(final$object, final$fit)
+    if (isTRUE(verbose)) {
+        message(
+            "Pando condition phase=condition_fit_complete",
+            " | cell_type=", as.character(progress_label),
+            ";candidate_edges=", nrow(candidate_dictionary),
+            ";fit_edges=", nrow(final_dictionary),
+            ";targets=", length(unique(as.character(final_dictionary$target)))
+        )
+    }
     final
 }

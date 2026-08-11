@@ -1,10 +1,10 @@
 # Multi-task ridge integration behind the canonical infer_condition_grn.GRNData
-# definition in condition_grn.R. This file loads after condition_grn.R and
-# changes only the internal multi-condition estimator.
+# definition in condition_grn.R. Candidate discovery and refitting call the
+# canonical compact target helpers directly; no late-bound replacement is used.
 
 .condition_ridge_fallback_key <- "condition_ridge_control"
 
-.pando_infer_condition_grn_one <- function(
+.pando_infer_condition_grn_multitask_ridge_one <- function(
     object, cell_type_col = NULL, condition_col = NULL, cell_type = NULL,
     genes = NULL, network_name = "condition_grn",
     peak_to_gene_method = c("Signac", "GREAT"), upstream = 100000,
@@ -149,7 +149,7 @@
         global_cells <- unlist(cells_by_condition, use.names = FALSE)
         log_message("Discovering global candidates for cell type ", type_label,
                     verbose = verbose)
-        global_edges <- .condition_discover_edges_prepared(
+        global_edges <- .condition_discover_edges_compact(
             prepared, global_cells, source_label = "global",
             source_type = "global", tf_cor = tf_cor, peak_cor = peak_cor,
             parallel = parallel, verbose = verbose
@@ -157,7 +157,7 @@
         condition_edges <- lapply(eligible, function(condition) {
             log_message("Discovering candidates for ", type_label, " / ",
                         condition, verbose = verbose)
-            .condition_discover_edges_prepared(
+            .condition_discover_edges_compact(
                 prepared, cells_by_condition[[condition]],
                 source_label = condition, source_type = "condition",
                 tf_cor = tf_cor, peak_cor = peak_cor,

@@ -1,14 +1,8 @@
-# Optional single-task ridge for standard Pando.
+# Canonical single-task ridge helpers for standard Pando.
 #
-# This is the K = 1 special case of the condition-GRN ridge solver. The fusion
-# Laplacian is exactly zero for K = 1, so the numerical path, predictor scaling,
-# CV lambda selection, effective degrees of freedom and ridge-Wald diagnostics
-# are identical to the condition implementation without introducing a second
-# ridge backend. Original Gaussian GLM remains the default standard-Pando path.
-# The canonical direct infer_grn.GRNData definition stays in R/grn.R; this file
-# installs the extended method through an alias after defining its helpers.
-
-.pando_standard_ridge_infer_impl <- infer_grn.GRNData
+# Standard ridge is the K = 1 specialization of the condition multi-task ridge
+# solver. Public method routing remains in the original infer_grn.GRNData
+# definition in grn.R; this file contains only numerical/helper implementation.
 
 .pando_standard_ridge_family_ok <- function(family) {
     if (is.character(family) && length(family) == 1L) {
@@ -56,7 +50,7 @@
              call. = FALSE)
     }
 
-    candidates <- .condition_discover_edges_prepared(
+    candidates <- .condition_discover_edges_compact(
         prepared = prepared,
         cells = cells,
         source_label = "standard",
@@ -118,7 +112,9 @@
         rank_action = rank_action,
         min_residual_df = min_residual_df,
         parallel = parallel,
-        verbose = verbose
+        verbose = verbose,
+        progress_phase = "ridge_standard",
+        progress_label = network_name
     )
     answer <- refitted$object
     fit <- refitted$fit
@@ -153,125 +149,3 @@
     )
     answer
 }
-
-.pando_standard_ridge_method <- function(
-    object,
-    genes = NULL,
-    network_name = paste0(method, "_network"),
-    peak_to_gene_method = c("Signac", "GREAT"),
-    upstream = 100000,
-    downstream = 0,
-    extend = 1000000,
-    only_tss = FALSE,
-    parallel = FALSE,
-    tf_cor = 0.1,
-    peak_cor = 0,
-    aggregate_rna_col = NULL,
-    aggregate_peaks_col = NULL,
-    method = c("glm", "ridge", "glmnet", "cv.glmnet", "brms", "xgb",
-               "bagging_ridge", "bayesian_ridge"),
-    alpha = 0.5,
-    family = "gaussian",
-    interaction_term = ":",
-    adjust_method = "fdr",
-    scale = FALSE,
-    verbose = TRUE,
-    BPPARAM = NULL,
-    ridge_control = list(),
-    rank_action = c("mark", "error"),
-    min_residual_df = 1L,
-    padj_threshold = 0.05,
-    ...) {
-    method <- match.arg(method)
-    peak_to_gene_method <- match.arg(peak_to_gene_method)
-    if (!identical(method, "ridge")) {
-        ridge_requested <- length(ridge_control) ||
-            !identical(match.arg(rank_action), "mark") ||
-            !identical(as.integer(min_residual_df), 1L) ||
-            !isTRUE(all.equal(as.numeric(padj_threshold), 0.05)) ||
-            (!is.null(BPPARAM) && !identical(BPPARAM, FALSE))
-        if (ridge_requested) {
-            stop(
-                "`BPPARAM`, `ridge_control`, `rank_action`, `min_residual_df` ",
-                "and `padj_threshold` are standard-ridge controls; set ",
-                "`method = \"ridge\"` or remove them.", call. = FALSE
-            )
-        }
-        return(.pando_standard_ridge_infer_impl(
-            object = object,
-            genes = genes,
-            network_name = network_name,
-            peak_to_gene_method = peak_to_gene_method,
-            upstream = upstream,
-            downstream = downstream,
-            extend = extend,
-            only_tss = only_tss,
-            parallel = parallel,
-            tf_cor = tf_cor,
-            peak_cor = peak_cor,
-            aggregate_rna_col = aggregate_rna_col,
-            aggregate_peaks_col = aggregate_peaks_col,
-            method = method,
-            alpha = alpha,
-            family = family,
-            interaction_term = interaction_term,
-            adjust_method = adjust_method,
-            scale = scale,
-            verbose = verbose,
-            ...
-        ))
-    }
-
-    if (!is.null(aggregate_rna_col) || !is.null(aggregate_peaks_col)) {
-        stop(
-            "Standard `method = \"ridge\"` uses paired single-cell RNA and ATAC; ",
-            "aggregate_rna_col/aggregate_peaks_col are not supported.",
-            call. = FALSE
-        )
-    }
-    if (!.pando_standard_ridge_family_ok(family) ||
-        !identical(interaction_term, ":") || !identical(scale, FALSE)) {
-        stop(
-            "Standard ridge requires Gaussian identity, interaction_term=':', ",
-            "and scale=FALSE.", call. = FALSE
-        )
-    }
-    .pando_validate_bpparam(BPPARAM)
-    old_target_param <- getOption("Pando.condition_target_BPPARAM", NULL)
-    started_here <- FALSE
-    if (isTRUE(parallel) && !is.null(BPPARAM) &&
-        !identical(BPPARAM, FALSE)) {
-        if (!isTRUE(BiocParallel::bpisup(BPPARAM))) {
-            BPPARAM <- BiocParallel::bpstart(BPPARAM)
-            started_here <- TRUE
-        }
-        options(Pando.condition_target_BPPARAM = BPPARAM)
-    }
-    on.exit({
-        options(Pando.condition_target_BPPARAM = old_target_param)
-        if (started_here) try(BiocParallel::bpstop(BPPARAM), silent = TRUE)
-        invisible(gc(verbose = FALSE, full = TRUE))
-    }, add = TRUE)
-
-    .pando_standard_ridge_fit(
-        object = object,
-        genes = genes,
-        network_name = network_name,
-        peak_to_gene_method = peak_to_gene_method,
-        upstream = upstream,
-        downstream = downstream,
-        extend = extend,
-        only_tss = only_tss,
-        tf_cor = tf_cor,
-        peak_cor = peak_cor,
-        adjust_method = adjust_method,
-        padj_threshold = padj_threshold,
-        rank_action = rank_action,
-        min_residual_df = min_residual_df,
-        ridge_control = ridge_control,
-        parallel = parallel,
-        verbose = verbose
-    )
-}
-
-infer_grn.GRNData <- .pando_standard_ridge_method

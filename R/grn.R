@@ -23,6 +23,7 @@ NULL
 #' @param peak_cor Threshold for binding peak - target gene correlation.
 #' @param method A character string indicating the method to fit the model.
 #' * \code{'glm'} - Generalized Liner Model with \code{\link[glm]{stats}}.
+#' * \code{'ridge'} - Single-task ridge using the same solver as condition ridge with K=1.
 #' * \code{'glmnet'}, \code{'cv.glmnet'} - Regularized Generalized Liner Model with \code{\link[glmnet]{glmnet}}.
 #' * \code{'brms'} - Bayesian Regression Models using \code{\link[brms-package]{brms}}.
 #' * \code{'xgb'} - Gradient Boosting Regression using \code{\link[xgboost]{xgboost}}.
@@ -38,6 +39,11 @@ NULL
 #' For more info, see \code{\link[formula]{stats}}
 #' @param scale Logical. Whether to z-transform the expression and accessibility matrices.
 #' @param adjust_method Method for adjusting p-values.
+#' @param BPPARAM Optional BiocParallel parameter used by standard ridge target work.
+#' @param ridge_control Controls for the standard ridge solver.
+#' @param rank_action How standard ridge handles raw rank deficiency.
+#' @param min_residual_df Minimum effective residual degrees of freedom for ridge.
+#' @param padj_threshold Adjusted-P threshold stored for ridge diagnostics.
 #' @param verbose Logical. Display messages. Set verbose to '2' to print errors for all model fits.
 #' @param ... Other parameters for the model fitting function.
 #'
@@ -60,7 +66,7 @@ infer_grn.GRNData <- function(
     peak_cor = 0.,
     aggregate_rna_col = NULL,
     aggregate_peaks_col = NULL,
-    method = c('glm', 'glmnet', 'cv.glmnet', 'brms', 'xgb',
+    method = c('glm', 'ridge', 'glmnet', 'cv.glmnet', 'brms', 'xgb',
      'bagging_ridge', 'bayesian_ridge'),
     alpha = 0.5,
     family = 'gaussian',
@@ -68,11 +74,90 @@ infer_grn.GRNData <- function(
     adjust_method = 'fdr',
     scale = FALSE,
     verbose = TRUE,
+    BPPARAM = NULL,
+    ridge_control = list(),
+    rank_action = c('mark', 'error'),
+    min_residual_df = 1L,
+    padj_threshold = 0.05,
     ...
 ) {
     method <- match.arg(method)
     peak_to_gene_method <- match.arg(peak_to_gene_method)
+    rank_action <- match.arg(rank_action)
     if (missing(network_name)) network_name <- paste0(method, "_network")
+
+    if (identical(method, "ridge")) {
+        if (!is.null(aggregate_rna_col) || !is.null(aggregate_peaks_col)) {
+            stop(
+                "Standard `method = \"ridge\"` uses paired single-cell RNA and ATAC; ",
+                "aggregate_rna_col/aggregate_peaks_col are not supported.",
+                call. = FALSE
+            )
+        }
+        if (!.pando_standard_ridge_family_ok(family) ||
+            !identical(interaction_term, ":") || !identical(scale, FALSE)) {
+            stop(
+                "Standard ridge requires Gaussian identity, interaction_term=':', ",
+                "and scale=FALSE.", call. = FALSE
+            )
+        }
+        dots <- list(...)
+        if (length(dots)) {
+            label <- names(dots)
+            if (is.null(label)) label <- rep("<unnamed>", length(dots))
+            label[!nzchar(label)] <- "<unnamed>"
+            stop("Unused standard-ridge argument(s): ",
+                 paste(label, collapse = ", "), call. = FALSE)
+        }
+        .pando_validate_bpparam(BPPARAM)
+        old_target_param <- getOption("Pando.condition_target_BPPARAM", NULL)
+        started_here <- FALSE
+        if (isTRUE(parallel) && !is.null(BPPARAM) &&
+            !identical(BPPARAM, FALSE)) {
+            if (!isTRUE(BiocParallel::bpisup(BPPARAM))) {
+                BPPARAM <- BiocParallel::bpstart(BPPARAM)
+                started_here <- TRUE
+            }
+            options(Pando.condition_target_BPPARAM = BPPARAM)
+        }
+        on.exit({
+            options(Pando.condition_target_BPPARAM = old_target_param)
+            if (started_here) try(BiocParallel::bpstop(BPPARAM), silent = TRUE)
+            invisible(gc(verbose = FALSE, full = TRUE))
+        }, add = TRUE)
+        return(.pando_standard_ridge_fit(
+            object = object,
+            genes = genes,
+            network_name = network_name,
+            peak_to_gene_method = peak_to_gene_method,
+            upstream = upstream,
+            downstream = downstream,
+            extend = extend,
+            only_tss = only_tss,
+            tf_cor = tf_cor,
+            peak_cor = peak_cor,
+            adjust_method = adjust_method,
+            padj_threshold = padj_threshold,
+            rank_action = rank_action,
+            min_residual_df = min_residual_df,
+            ridge_control = ridge_control,
+            parallel = parallel,
+            verbose = verbose
+        ))
+    }
+
+    ridge_requested <- (!is.null(BPPARAM) && !identical(BPPARAM, FALSE)) ||
+        length(ridge_control) || !identical(rank_action, "mark") ||
+        !identical(as.integer(min_residual_df), 1L) ||
+        !isTRUE(all.equal(as.numeric(padj_threshold), 0.05))
+    if (ridge_requested) {
+        stop(
+            "`BPPARAM`, `ridge_control`, `rank_action`, `min_residual_df` and ",
+            "`padj_threshold` are standard-ridge controls; set method='ridge' ",
+            "or remove them.", call. = FALSE
+        )
+    }
+
     routed <- .pando_sanitize_standard_infer_dots(list(...), warn = verbose)
     do.call(fit_grn_models, c(list(
         object = object,
@@ -507,7 +592,11 @@ format_coefs <- function(coefs, term=':', adjust_method='fdr'){
     fit_method <- NetworkParams(object)$method
     xgb_method <- match.arg(xgb_method)
 
-    if (!fit_method %in% c('glm', 'cv.glmnet', 'glmnet', 'brms', 'xgb')){
+    supported_methods <- c(
+        'glm', 'ridge', 'multitask_ridge',
+        'cv.glmnet', 'glmnet', 'brms', 'xgb'
+    )
+    if (!fit_method %in% supported_methods){
         stop(paste0('find_modules() is not yet implemented for "', fit_method, '" models'))
     }
 
@@ -626,23 +715,32 @@ find_modules.Network <- function(
     xgb_method = c("tf", "target"),
     xgb_top = 50,
     verbose = TRUE) {
-    fixed_dictionary <- identical(
-        NetworkParams(object)$fit_mode,
-        "fixed_edge_dictionary"
-    )
-    original_coefs <- if (fixed_dictionary) object@coefs else NULL
-    original_fit <- if (fixed_dictionary) object@fit else NULL
-    if (fixed_dictionary) {
+    params <- NetworkParams(object)
+    fit_method <- as.character(params$method %||% "")
+    fit_mode <- as.character(params$fit_mode %||% "")
+    compatibility_mode <- fit_method %in% c("ridge", "multitask_ridge") ||
+        fit_mode %in% c(
+            "fixed_edge_dictionary",
+            "single_task_ridge",
+            "fixed_edge_dictionary_joint_conditions"
+        )
+
+    original_coefs <- if (compatibility_mode) object@coefs else NULL
+    original_fit <- if (compatibility_mode) object@fit else NULL
+    if (compatibility_mode) {
         if (!"nvariables" %in% colnames(object@fit) &&
             "nvariables_dictionary" %in% colnames(object@fit)) {
             object@fit$nvariables <- as.integer(
                 object@fit$nvariables_dictionary
             )
         }
-        excluded <- (!is.na(object@coefs$estimable) &
-                     !object@coefs$estimable) |
-            !is.finite(object@coefs$estimate)
-        object@coefs$padj[excluded] <- 1
+        if ("estimable" %in% colnames(object@coefs) &&
+            "padj" %in% colnames(object@coefs)) {
+            excluded <- (!is.na(object@coefs$estimable) &
+                         !object@coefs$estimable) |
+                !is.finite(object@coefs$estimate)
+            object@coefs$padj[excluded] <- 1
+        }
     }
     answer <- .find_modules_network_core(
         object = object,
@@ -654,7 +752,7 @@ find_modules.Network <- function(
         xgb_top = xgb_top,
         verbose = verbose
     )
-    if (fixed_dictionary) {
+    if (compatibility_mode) {
         answer@coefs <- original_coefs
         answer@fit <- original_fit
         if (!"nvariables" %in% colnames(answer@fit) &&
