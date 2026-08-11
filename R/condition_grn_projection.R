@@ -190,9 +190,11 @@ project_condition_grn_cells <- function(
             paste(coefficient$edge_id, coefficient$condition, sep = "@@")
         )
     )
-    # `significant_only` is retained for API compatibility. In multi-task
-    # ridge v2 the default `penalty_effect` is continuous for every finite
-    # estimable condition-edge; BH significance remains diagnostic only.
+    # In the multi-task ridge condition path, `penalty_effect` is the final
+    # condition-specific coefficient only when that edge is estimable and its
+    # final BH-adjusted ridge-Wald P value is below fit$padj_threshold; it is
+    # zero otherwise. `significant_only = FALSE` remains an explicit diagnostic
+    # option that projects all fitted coefficients from the shared dictionary.
     effect <- if (isTRUE(significant_only)) {
         coefficient$penalty_effect
     } else {
