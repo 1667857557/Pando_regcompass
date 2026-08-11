@@ -52,7 +52,7 @@ infer_condition_grn(object, ...)
 \item{tf_cor, peak_cor}{Candidate-discovery correlation thresholds.}
 \item{min_cells_per_condition}{Minimum paired cells per fitted condition.}
 \item{small_condition_action}{Action for undersized conditions.}
-\item{adjust_method, padj_threshold}{Multiple-testing method and threshold used for coefficient and pairwise-contrast diagnostic flags. They do not hard-threshold the quantitative projection effect.}
+\item{adjust_method, padj_threshold}{Multiple-testing method and adjusted-P threshold used first to construct the significant-union fit dictionary and again to decide which final condition-specific coefficients can contribute downstream. The default is 0.05; the multi-condition ridge path permits values in \code{(0, 0.1]}.}
 \item{rank_action}{With the default \code{"mark"}, raw rank deficiency is retained as a diagnostic because the regularized system remains identifiable. \code{"error"} requests strict failure when a raw condition design is rank deficient.}
 \item{min_residual_df}{Minimum effective residual degrees of freedom for the joint regularized fit.}
 \item{parallel}{Enable parallel execution.}
@@ -63,11 +63,17 @@ infer_condition_grn(object, ...)
 \item{verbose}{Display progress messages.}
 \item{...}{Must be empty.}
 }
-\value{A \code{GRNData} containing standard Pando \code{Network} objects and common-dictionary condition fit contracts.}
-\description{For each multi-condition cell type, Pando keeps the existing global-plus-condition candidate discovery and exact TF-peak-target union, then fits the complete frozen dictionary with one joint multi-task ridge model per target.}
+\value{A \code{GRNData} containing standard Pando \code{Network} objects and statistically screened common-dictionary condition fit contracts.}
+\description{For each multi-condition cell type, Pando performs global-plus-condition candidate discovery, exact TF-peak-target candidate union, preliminary joint multi-task ridge screening, a BH-significant edge union across conditions, and a final joint multi-task ridge refit on that shared screened dictionary.}
 \details{
 For edge \eqn{e} in condition \eqn{k}, the predictor remains the original Pando interaction
-\eqn{x_{cek}=RNA_{TF_e,c} ATAC_{peak_e,c}}. The exact union dictionary is not pruned because of collinearity. The model has a separate intercept in every condition, so between-condition shifts in the mean predictor do not identify the slope. Accordingly, the common predictor scale is the equal-condition RMS within-condition standard deviation,
+\eqn{x_{cek}=RNA_{TF_e,c} ATAC_{peak_e,c}}. Global and condition-specific candidate sets are exact-unioned first so a condition-specific edge cannot be lost before statistical estimation. This first exact union is a candidate dictionary, not the final fit dictionary.
+
+A preliminary joint multi-task ridge is fitted on the candidate dictionary. Within each condition, ridge-Wald P values are BH adjusted. The actual common fit dictionary is
+\deqn{D_{fit}=\bigcup_k\{e: padj^{screen}_{e,k}<\tau\},}
+where \eqn{\tau} is \code{padj_threshold}. Thus every edge in the final fit dictionary has preliminary statistical support in at least one condition, while every condition is subsequently fitted on exactly the same edge set. Screening provenance is retained on the fit dictionary, including minimum screening padj and supporting conditions. If no edge passes the threshold in any condition, the multi-condition fit stops rather than silently reverting to the unscreened candidate dictionary.
+
+The model has a separate intercept in every condition, so between-condition shifts in the mean predictor do not identify the slope. Accordingly, the common predictor scale is the equal-condition RMS within-condition standard deviation,
 \deqn{s_e^2=K^{-1}\sum_k n_k^{-1}\sum_c(x_{cek}-\bar{x}_{ek})^2,}
 which matches the equal-condition loss and prevents between-condition mean shifts from changing ridge shrinkage. Cross-validation relearns this scale within each training fold. Stored coefficients are back-transformed to the original TF-by-ATAC units before projection.
 
@@ -77,13 +83,19 @@ For \eqn{K} conditions, the numerical objective is proportional to
 \lambda\left\{\sum_k||\beta_k||_2^2 +
 \frac{\gamma}{K-1}\sum_{k<l}||\beta_k-\beta_l||_2^2\right\}.
 }
-Each condition therefore contributes equal total loss weight. The positive ridge term makes the penalized system identifiable even when the raw common-dictionary design is rank deficient. The normalized fusion term borrows strength across conditions but does not force equality or delete an edge.
+Each condition therefore contributes equal total loss weight. The positive ridge term makes the penalized system identifiable even when the raw common-dictionary design is rank deficient. The normalized fusion term borrows strength across conditions but does not force equality.
 
-One \eqn{\lambda} is selected for all conditions of a target by condition-stratified cross-validation. The default one-standard-error rule chooses the largest lambda within one standard error of minimum equal-condition validation MSE. The public target-condition \code{rsq} field is dictionary-conditional out-of-fold R-squared; candidate discovery still precedes CV on the complete cell type, so this is not a fully nested estimate. \code{rsq_in_sample} is retained separately.
+After the significant-union dictionary has been constructed, the model is refitted on that shared dictionary and lambda is reselected by condition-stratified cross-validation. One lambda is shared across conditions for each target. The default one-standard-error rule chooses the largest lambda within one standard error of minimum equal-condition validation MSE. The public target-condition \code{rsq} field is dictionary-conditional out-of-fold R-squared; candidate discovery and significance screening precede the final CV refit, so this is not a fully nested estimate. \code{rsq_in_sample} is retained separately.
 
-The raw design rank, raw condition number, regularized condition number, effective degrees of freedom, condition-specific zero-variance flags, common lambda and CV loss are retained as diagnostics. A predictor that varies in the common dictionary but is constant within one condition may receive a finite coefficient through the fusion penalty, but that condition-edge is marked non-estimable and has zero quantitative projection contribution. This separates partial-pooling information from condition-local estimability.
+The raw design rank, raw condition number, regularized condition number, effective degrees of freedom, condition-specific zero-variance flags, common lambda and CV loss are retained as diagnostics. A predictor that varies in the common fit dictionary but is constant within one condition may receive a finite coefficient through the fusion penalty, but that condition-edge is marked non-estimable and contributes zero downstream.
 
-Approximate ridge-Wald coefficient P values and pairwise condition-contrast P values use the joint residual sandwich covariance conditional on the selected dictionary, lambda, and fusion penalty. They are BH-adjusted as diagnostic summaries only; they are not exact post-selection inference and are not used to hard-threshold the quantitative RegCompass handoff. The exported \code{penalty_effect} equals the raw-unit ridge coefficient for every finite estimable condition-edge and zero otherwise. This avoids artificial between-condition differences caused solely by one adjusted P value crossing 0.05. The external fit contract retains \code{scale = FALSE} because the exported coefficient is already back-transformed to raw TF-by-ATAC units.
+For the final refit, condition-specific ridge-Wald P values are BH adjusted again. The exported \code{penalty_effect} is
+\deqn{penalty\_effect_{e,k}=\begin{cases}\beta_{e,k},& estimable_{e,k}\ \&\ padj_{e,k}<\tau,\\0,& otherwise.\end{cases}}
+Thus the shared fit dictionary is the union of statistically supported screening edges, while a particular edge contributes to a particular condition only when the final refit also supports that condition-edge at the configured threshold. The default \eqn{\tau} is 0.05 and values up to 0.1 are allowed for a more permissive edge-inclusion rule.
+
+Pairwise differential-GRN contrasts remain a separate calculation. For conditions A and B, Pando reports \eqn{\Delta\beta_e=\beta_{e,A}-\beta_{e,B}} with a covariance-based approximate ridge-Wald standard error, P value, and BH-adjusted P value. A coefficient being significant in one condition and nonsignificant in another is not used as a substitute for the direct contrast.
+
+All coefficient and contrast P values remain approximate and conditional on data-dependent candidate discovery, screening, CV-selected lambda, and fusion regularization. They are not exact post-selection or donor-level population inference.
 
 When the condition column is absent or has fewer than two levels, the original per-cell-type Pando \code{infer_grn()} fallback is unchanged.
 }
