@@ -61,6 +61,7 @@ test_that("ridge fits a raw rank-deficient common dictionary", {
     expect_true(all(is.finite(fit$beta)))
     expect_true(all(is.finite(fit$beta_z)))
     expect_true(is.finite(fit$regularized_kappa))
+    expect_true(is.matrix(fit$covariance_z))
 })
 
 test_that("fusion penalty shrinks cross-condition coefficient differences", {
@@ -141,6 +142,29 @@ test_that("condition-stratified CV selects one lambda for every condition", {
     expect_identical(names(cv$rsq_oof), c("Control", "Drug"))
     expect_true(all(is.finite(cv$rsq_oof)))
     expect_equal(nrow(cv$curve), length(control$lambda_grid))
+})
+
+test_that("joint covariance yields finite pairwise ridge contrasts", {
+    fixture <- .rank_deficient_multitask_fixture()
+    scaling <- Pando:::.condition_ridge_scaling(fixture$x, 1e-8)
+    fit <- Pando:::.condition_ridge_fit(
+        fixture$x, fixture$y, scaling,
+        lambda = 0.1, fusion_ratio = 1,
+        min_residual_df = 1L, inference = TRUE
+    )
+    edges <- data.frame(
+        tf = paste0("TF", 1:3), target = rep("G", 3),
+        region = paste0("P", 1:3), edge_id = colnames(fixture$x$Control),
+        atac_feature_id = paste0("A", 1:3), stringsAsFactors = FALSE
+    )
+    informative <- sweep(!fit$zero_variance, 2L, fit$informative, "&")
+    contrast <- Pando:::.condition_ridge_contrasts(
+        fit, edges, informative, scaling
+    )
+    expect_equal(nrow(contrast), 3L)
+    expect_true(all(contrast$contrast_estimable))
+    expect_true(all(is.finite(contrast$contrast_estimate)))
+    expect_true(all(is.finite(contrast$contrast_se)))
 })
 
 test_that("rank action can retain strict raw-design auditing", {
