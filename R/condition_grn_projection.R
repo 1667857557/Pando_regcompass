@@ -190,6 +190,9 @@ project_condition_grn_cells <- function(
             paste(coefficient$edge_id, coefficient$condition, sep = "@@")
         )
     )
+    # `significant_only` is retained for API compatibility. In multi-task
+    # ridge v2 the default `penalty_effect` is continuous for every finite
+    # estimable condition-edge; BH significance remains diagnostic only.
     effect <- if (isTRUE(significant_only)) {
         coefficient$penalty_effect
     } else {
@@ -215,6 +218,11 @@ project_condition_grn_cells <- function(
             edge_contribution[, index, drop = FALSE]
         )
     }
+    default_policy <- if (
+        is.character(fit$projection_policy) &&
+        length(fit$projection_policy) == 1L &&
+        !is.na(fit$projection_policy) && nzchar(fit$projection_policy)
+    ) fit$projection_policy else "penalty_effect"
     answer <- list(
         schema_version = "pando_condition_projection_common_dictionary_v1",
         gene_score = gene_score,
@@ -232,7 +240,7 @@ project_condition_grn_cells <- function(
         ) fit$fit_engine else "condition_fit_engine_unspecified",
         coefficient_scale = fit$coefficient_scale,
         projection_policy = if (isTRUE(significant_only)) {
-            "BH_adjusted_p_below_threshold_penalty_effect"
+            default_policy
         } else "all_estimable_condition_coefficients"
     )
     class(answer) <- c("PandoConditionProjection", "list")
