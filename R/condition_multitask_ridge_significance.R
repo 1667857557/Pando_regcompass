@@ -113,29 +113,9 @@
     out
 }
 
-.condition_update_network_significance <- function(object, fit) {
-    for (condition in fit$condition_levels) {
-        network_name <- fit$network_names[[condition]]
-        network <- object@grn@networks[[network_name]]
-        if (is.null(network)) next
-        coefs_one <- fit$coefficients[
-            as.character(fit$coefficients$condition) == condition,
-            , drop = FALSE
-        ]
-        methods::slot(network, "coefs") <- coefs_one
-        params <- methods::slot(network, "params")
-        params$padj_threshold <- fit$padj_threshold
-        params$projection_policy <- .condition_significant_projection_policy
-        params$fit_dictionary_policy <- .condition_fit_dictionary_policy
-        methods::slot(network, "params") <- params
-        object@grn@networks[[network_name]] <- network
-    }
-    object
-}
-
-# Preserve the numerical one-pass estimator. The wrapper below intentionally
-# runs it twice when screening removes any candidate: first for statistical
-# screening, then for the actual shared fit dictionary.
+# Preserve the numerical one-pass estimator from
+# condition_multitask_ridge_refit.R. The canonical wrapper runs a preliminary
+# screen and, when required, a second fit on the significant-union dictionary.
 .condition_ridge_refit_contract_one_pass <- .condition_ridge_refit_contract
 
 .condition_ridge_refit_contract <- function(
@@ -191,90 +171,4 @@
     final$fit$edge_dictionary <- final_dictionary
     final$object <- .condition_update_network_significance(final$object, final$fit)
     final
-}
-
-# The pre-existing runtime accepts any threshold in (0, 1). The canonical
-# multi-condition ridge workflow caps the supported FDR threshold at 0.1:
-# 0.05 remains the default and 0.1 is the most permissive supported value.
-.pando_infer_condition_grn_one_without_padj_cap <-
-    .pando_infer_condition_grn_one
-
-.pando_infer_condition_grn_one <- function(
-    object, cell_type_col = NULL, condition_col = NULL, cell_type = NULL,
-    genes = NULL, network_name = "condition_grn",
-    peak_to_gene_method = c("Signac", "GREAT"), upstream = 100000,
-    downstream = 0, extend = 1000000, only_tss = FALSE,
-    peak_to_gene_domains = NULL, rna_layer = "data", peak_layer = "data",
-    peak_value_type = c("normalized", "probability", "other"),
-    tf_cor = 0.1, peak_cor = 0,
-    min_cells_per_condition = 50L,
-    small_condition_action = c("error", "drop_condition", "skip_cell_type"),
-    adjust_method = "BH", padj_threshold = 0.05,
-    rank_action = c("mark", "error"), min_residual_df = 1L,
-    parallel = FALSE, overwrite = FALSE, fallback_args = list(),
-    verbose = TRUE, ...) {
-    threshold <- .condition_validate_padj_threshold(padj_threshold)
-    object <- .pando_infer_condition_grn_one_without_padj_cap(
-        object = object,
-        cell_type_col = cell_type_col,
-        condition_col = condition_col,
-        cell_type = cell_type,
-        genes = genes,
-        network_name = network_name,
-        peak_to_gene_method = peak_to_gene_method,
-        upstream = upstream,
-        downstream = downstream,
-        extend = extend,
-        only_tss = only_tss,
-        peak_to_gene_domains = peak_to_gene_domains,
-        rna_layer = rna_layer,
-        peak_layer = peak_layer,
-        peak_value_type = peak_value_type,
-        tf_cor = tf_cor,
-        peak_cor = peak_cor,
-        min_cells_per_condition = min_cells_per_condition,
-        small_condition_action = small_condition_action,
-        adjust_method = adjust_method,
-        padj_threshold = threshold,
-        rank_action = rank_action,
-        min_residual_df = min_residual_df,
-        parallel = parallel,
-        overwrite = overwrite,
-        fallback_args = fallback_args,
-        verbose = verbose,
-        ...
-    )
-
-    params <- object@grn@params
-    if (!identical(params$analysis_mode, "condition_grn")) return(object)
-
-    params$condition_projection_policy <-
-        .condition_significant_projection_policy
-    params$condition_fit_dictionary_policy <- .condition_fit_dictionary_policy
-    fits <- params$condition_grn_fits
-    index <- params$condition_network_index
-    if (is.list(fits) && length(fits) && is.data.frame(index) && nrow(index) &&
-        all(c("cell_type", "condition") %in% colnames(index))) {
-        n_projection <- integer(nrow(index))
-        n_dictionary <- integer(nrow(index))
-        for (i in seq_len(nrow(index))) {
-            type <- as.character(index$cell_type[[i]])
-            condition <- as.character(index$condition[[i]])
-            fit <- fits[[type]]
-            if (is.null(fit)) next
-            coefficient <- as.data.frame(fit$coefficients, stringsAsFactors = FALSE)
-            n_projection[[i]] <- sum(
-                as.character(coefficient$condition) == condition &
-                    coefficient$significant %in% TRUE,
-                na.rm = TRUE
-            )
-            n_dictionary[[i]] <- nrow(fit$edge_dictionary)
-        }
-        index$n_dictionary_edges <- n_dictionary
-        index$n_projection_edges <- n_projection
-        index$n_significant_edges <- n_projection
-        params$condition_network_index <- index
-    }
-    object@grn@params <- params
-    object
 }
