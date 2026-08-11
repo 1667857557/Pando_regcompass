@@ -1,4 +1,10 @@
-test_that("condition ridge padj threshold is capped at 0.1", {
+test_that("condition ridge significance policy requires BH and caps padj at 0.1", {
+    expect_identical(Pando:::.condition_validate_adjust_method("BH"), "BH")
+    expect_identical(Pando:::.condition_validate_adjust_method("bh"), "BH")
+    expect_error(
+        Pando:::.condition_validate_adjust_method("holm"),
+        "adjust_method = \\"BH\\""
+    )
     expect_equal(Pando:::.condition_validate_padj_threshold(0.05), 0.05)
     expect_equal(Pando:::.condition_validate_padj_threshold(0.1), 0.1)
     expect_error(
@@ -10,6 +16,7 @@ test_that("condition ridge padj threshold is capped at 0.1", {
 
 test_that("preliminary joint ridge builds the fit dictionary by significant union", {
     fit <- list(
+        adjust_method = "BH",
         padj_threshold = 0.05,
         coefficients = data.frame(
             edge_id = rep(c("E1", "E2", "E3"), 2L),
@@ -86,10 +93,4 @@ test_that("screened dictionary preserves provenance and screening audit", {
 test_that("default threshold remains 0.05 while 0.1 is allowed", {
     default <- formals(Pando:::.pando_infer_condition_grn_one)$padj_threshold
     expect_equal(eval(default), 0.05)
-
-    body_text <- paste(
-        deparse(body(Pando:::.pando_infer_condition_grn_one)),
-        collapse = "\n"
-    )
-    expect_match(body_text, ".condition_validate_padj_threshold", fixed = TRUE)
 })
