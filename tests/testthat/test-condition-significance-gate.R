@@ -1,4 +1,4 @@
-test_that("condition ridge significance policy requires BH and caps padj at 0.1", {
+test_that("condition ridge significance policy requires BH and any valid padj threshold", {
     expect_identical(Pando:::.condition_validate_adjust_method("BH"), "BH")
     expect_identical(Pando:::.condition_validate_adjust_method("bh"), "BH")
     expect_error(
@@ -7,9 +7,11 @@ test_that("condition ridge significance policy requires BH and caps padj at 0.1"
     )
     expect_equal(Pando:::.condition_validate_padj_threshold(0.05), 0.05)
     expect_equal(Pando:::.condition_validate_padj_threshold(0.1), 0.1)
+    expect_equal(Pando:::.condition_validate_padj_threshold(0.5), 0.5)
+    expect_equal(Pando:::.condition_validate_padj_threshold(0.999), 0.999)
     expect_error(
-        Pando:::.condition_validate_padj_threshold(0.10001),
-        "\\(0, 0.1\\]"
+        Pando:::.condition_validate_padj_threshold(1),
+        "\\(0, 1\\)"
     )
     expect_error(Pando:::.condition_validate_padj_threshold(0))
 })
@@ -90,7 +92,7 @@ test_that("screened dictionary preserves provenance and screening audit", {
     expect_true(isTRUE(attr(out, "preprocessing_provenance_verified")))
 })
 
-test_that("default threshold remains 0.05 while 0.1 is allowed", {
+test_that("default threshold remains 0.05 and alternatives remain configurable", {
     default <- formals(Pando:::.pando_infer_condition_grn_one)$padj_threshold
     expect_equal(eval(default), 0.05)
 })
