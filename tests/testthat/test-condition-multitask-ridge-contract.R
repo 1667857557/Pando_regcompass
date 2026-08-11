@@ -8,9 +8,9 @@ test_that("public condition API remains canonical and explicit", {
     expect_false("ridge_control" %in% args)
 })
 
-test_that("multi-condition internal path goes directly from exact union to ridge", {
+test_that("multi-condition internal path goes from exact candidate union to screened ridge refit", {
     body_text <- paste(
-        deparse(body(Pando:::.pando_infer_condition_grn_one_without_padj_cap)),
+        deparse(body(Pando:::.pando_infer_condition_grn_one)),
         collapse = "\n"
     )
     expect_match(body_text, "union_grn_edges", fixed = TRUE)
@@ -85,14 +85,24 @@ test_that("condition projection reports the actual fitted engine", {
                        fixed = TRUE))
 })
 
-test_that("quantitative penalty is BH-gated after joint ridge fitting", {
-    body_text <- paste(
+test_that("fit dictionary and quantitative penalty are BH-gated after joint ridge", {
+    refit_text <- paste(
+        deparse(body(Pando:::.condition_ridge_refit_contract)),
+        collapse = "\n"
+    )
+    gate_text <- paste(
         deparse(body(Pando:::.condition_apply_significance_gate)),
         collapse = "\n"
     )
-    expect_match(body_text, "padj < threshold", fixed = TRUE)
-    expect_match(body_text, "coefficient$significant", fixed = TRUE)
-    expect_match(body_text, "coefficient$penalty_effect", fixed = TRUE)
+    expect_match(refit_text, ".condition_dictionary_screen", fixed = TRUE)
+    expect_match(refit_text, ".condition_subset_dictionary", fixed = TRUE)
+    expect_match(gate_text, "padj < threshold", fixed = TRUE)
+    expect_match(gate_text, "coefficient$significant", fixed = TRUE)
+    expect_match(gate_text, "coefficient$penalty_effect", fixed = TRUE)
+    expect_identical(
+        Pando:::.condition_fit_dictionary_policy,
+        "preliminary_joint_ridge_bh_significant_union_then_joint_refit"
+    )
     expect_identical(
         Pando:::.condition_significant_projection_policy,
         "padj_significant_ridge_effects"
