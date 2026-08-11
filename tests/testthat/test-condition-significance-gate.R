@@ -3,7 +3,8 @@ test_that("condition ridge significance policy requires BH and any valid padj th
     expect_identical(Pando:::.condition_validate_adjust_method("bh"), "BH")
     expect_error(
         Pando:::.condition_validate_adjust_method("holm"),
-        "adjust_method = \\"BH\\""
+        'adjust_method = "BH"',
+        fixed = TRUE
     )
     expect_equal(Pando:::.condition_validate_padj_threshold(0.05), 0.05)
     expect_equal(Pando:::.condition_validate_padj_threshold(0.1), 0.1)
