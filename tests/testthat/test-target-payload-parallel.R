@@ -108,6 +108,16 @@ test_that("parallel target dispatcher is namespace-level and does not capture ma
     expect_false(grepl("worker(task$payload)", body_text, fixed = TRUE))
 })
 
+test_that("candidate target worker cannot recurse into a progress-producing mapper", {
+    worker_text <- paste(
+        deparse(body(Pando:::.pando_discovery_target_worker)), collapse = "\n"
+    )
+    expect_match(worker_text, ".condition_discover_one_target_prepared", fixed = TRUE)
+    expect_false(grepl(".condition_discover_edges_prepared", worker_text, fixed = TRUE))
+    expect_false(grepl("map_par", worker_text, fixed = TRUE))
+    expect_false(grepl("pblapply", worker_text, fixed = TRUE))
+})
+
 test_that("target payload mapper preserves target names without one-pass alias overrides", {
     keys <- stats::setNames(c("a", "b", "c"), c("a", "b", "c"))
     result <- Pando:::.pando_target_payload_map(
