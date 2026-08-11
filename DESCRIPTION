@@ -1,5 +1,5 @@
 Package: Pando
-Version: 2.0.7
+Version: 2.0.8
 Type: Package
 Title: Inferring regulomes from multi-modal single-cell genomics data
 Authors@R: person(given = "Jonas Simon",
@@ -52,9 +52,12 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     lambda selection, within-task RMS predictor scaling, effective degrees of
     freedom and ridge-Wald diagnostics are retained. BiocParallel target pools
     can be supplied for both condition and standard ridge paths and are stopped
-    after the corresponding fit when Pando started them. Independent cell-type
-    jobs can also be dispatched through BiocParallel, and bundled reference
-    datasets are installed as standalone RData files.
+    after the corresponding fit when Pando started them. Target-parallel
+    candidate discovery and ridge refits dispatch only target-specific RNA,
+    ATAC, motif and edge-dictionary slices in worker-sized batches; worker-local
+    and completed batch temporaries are released immediately after use.
+    Independent cell-type jobs can also be dispatched through BiocParallel, and
+    bundled reference datasets are installed as standalone RData files.
 License: MIT
 Encoding: UTF-8
 LazyData: false
@@ -113,4 +116,5 @@ Config/Pando/ConditionProjectionPolicy: padj-significant-ridge-effects
 Config/Pando/ConditionInference: approximate-ridge-Wald-screen-and-refit
 Config/Pando/StandardRidgeSchema: pando_standard_grn_single_task_ridge_v1
 Config/Pando/StandardRidgeMethod: condition-ridge-k1
+Config/Pando/TargetParallelMemoryPolicy: target-specific-worker-sized-payload-batches
 Config/Pando/DataStorage: standalone-RData
