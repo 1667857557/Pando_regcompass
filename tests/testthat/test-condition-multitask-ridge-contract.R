@@ -20,14 +20,14 @@ test_that("multi-condition internal path goes directly from exact union to ridge
     expect_false(grepl("stats::glm", body_text, fixed = TRUE))
 })
 
-test_that("multi-task model retains the external common-dictionary schema", {
+test_that("multi-task model retains the external dictionary schema", {
     expect_identical(
         Pando:::.condition_common_dictionary_schema,
         "pando_condition_grn_common_dictionary_v1"
     )
     expect_identical(
         Pando:::.condition_multitask_ridge_schema,
-        "pando_condition_grn_multitask_ridge_v1"
+        "pando_condition_grn_multitask_ridge_v2"
     )
 })
 
@@ -52,6 +52,29 @@ test_that("ridge penalty is positive definite", {
     expect_true(all(eigenvalues > 0))
 })
 
+test_that("scaling matches the condition-intercept loss geometry", {
+    x <- list(
+        A = cbind(edge = c(-1, 0, 1)),
+        B = cbind(edge = c(99, 100, 101))
+    )
+    scaling <- Pando:::.condition_ridge_scaling(x, 1e-8)
+    expected <- sqrt(mean(c(
+        mean((x$A[, 1] - mean(x$A[, 1]))^2),
+        mean((x$B[, 1] - mean(x$B[, 1]))^2)
+    )))
+    expect_equal(unname(scaling$scale[["edge"]]), expected)
+    expect_identical(
+        scaling$reference,
+        "equal_condition_within_condition_rms"
+    )
+    shifted <- x
+    shifted$B[, 1] <- shifted$B[, 1] + 1e6
+    expect_equal(
+        Pando:::.condition_ridge_scaling(shifted, 1e-8)$scale,
+        scaling$scale
+    )
+})
+
 test_that("condition projection reports the actual fitted engine", {
     body_text <- paste(
         deparse(body(Pando:::project_condition_grn_cells)),
@@ -60,4 +83,18 @@ test_that("condition projection reports the actual fitted engine", {
     expect_match(body_text, "fit$fit_engine", fixed = TRUE)
     expect_false(grepl("full_condition_fixed_dictionary_glm", body_text,
                        fixed = TRUE))
+})
+
+test_that("quantitative penalty is not condition-wise significance thresholded", {
+    body_text <- paste(
+        deparse(body(Pando:::.condition_ridge_refit_contract)),
+        collapse = "\n"
+    )
+    expect_match(
+        body_text,
+        "coefficient$estimable & is.finite(coefficient$estimate)",
+        fixed = TRUE
+    )
+    expect_match(body_text, "continuous_estimable_ridge_effects", fixed = TRUE)
+    expect_match(body_text, "contrast_padj", fixed = TRUE)
 })
