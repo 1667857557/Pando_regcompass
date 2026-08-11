@@ -4,7 +4,7 @@
 
 .condition_ridge_fallback_key <- "condition_ridge_control"
 
-.pando_infer_condition_grn_one <- function(
+.pando_infer_condition_grn_multitask_ridge_one <- function(
     object, cell_type_col = NULL, condition_col = NULL, cell_type = NULL,
     genes = NULL, network_name = "condition_grn",
     peak_to_gene_method = c("Signac", "GREAT"), upstream = 100000,
