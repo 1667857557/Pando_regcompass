@@ -82,12 +82,8 @@
         stop("`min_cells_per_condition` must be an integer >= 3.",
              call. = FALSE)
     }
-    if (!is.numeric(padj_threshold) || length(padj_threshold) != 1L ||
-        !is.finite(padj_threshold) || padj_threshold <= 0 ||
-        padj_threshold > 0.1) {
-        stop("`padj_threshold` must be one number in (0, 0.1] for multi-condition ridge fitting.",
-             call. = FALSE)
-    }
+    .condition_validate_adjust_method(adjust_method)
+    padj_threshold <- .condition_validate_padj_threshold(padj_threshold)
 
     available_types <- unique(as.character(metadata[[cell_type_col]]))
     requested_types <- if (is.null(cell_type)) {
@@ -202,7 +198,7 @@
             fit = NULL,
             network_names = network_names,
             padj_threshold = padj_threshold,
-            adjust_method = adjust_method,
+            adjust_method = "BH",
             scale = FALSE,
             interaction = ":",
             projection_effect_column = "penalty_effect",
