@@ -190,6 +190,11 @@ project_condition_grn_cells <- function(
             paste(coefficient$edge_id, coefficient$condition, sep = "@@")
         )
     )
+    # In the multi-task ridge condition path, `penalty_effect` is the final
+    # condition-specific coefficient only when that edge is estimable and its
+    # final BH-adjusted ridge-Wald P value is below fit$padj_threshold; it is
+    # zero otherwise. `significant_only = FALSE` remains an explicit diagnostic
+    # option that projects all fitted coefficients from the shared dictionary.
     effect <- if (isTRUE(significant_only)) {
         coefficient$penalty_effect
     } else {
@@ -215,6 +220,11 @@ project_condition_grn_cells <- function(
             edge_contribution[, index, drop = FALSE]
         )
     }
+    default_policy <- if (
+        is.character(fit$projection_policy) &&
+        length(fit$projection_policy) == 1L &&
+        !is.na(fit$projection_policy) && nzchar(fit$projection_policy)
+    ) fit$projection_policy else "penalty_effect"
     answer <- list(
         schema_version = "pando_condition_projection_common_dictionary_v1",
         gene_score = gene_score,
@@ -226,10 +236,13 @@ project_condition_grn_cells <- function(
         effect_column = if (isTRUE(significant_only)) {
             "penalty_effect"
         } else "estimate",
-        projection_origin = "full_condition_fixed_dictionary_glm",
+        projection_origin = if (
+            is.character(fit$fit_engine) && length(fit$fit_engine) == 1L &&
+            !is.na(fit$fit_engine) && nzchar(fit$fit_engine)
+        ) fit$fit_engine else "condition_fit_engine_unspecified",
         coefficient_scale = fit$coefficient_scale,
         projection_policy = if (isTRUE(significant_only)) {
-            "BH_adjusted_p_below_threshold_penalty_effect"
+            default_policy
         } else "all_estimable_condition_coefficients"
     )
     class(answer) <- c("PandoConditionProjection", "list")

@@ -1,5 +1,5 @@
 Package: Pando
-Version: 2.0.4
+Version: 2.0.6
 Type: Package
 Title: Inferring regulomes from multi-modal single-cell genomics data
 Authors@R: person(given = "Jonas Simon",
@@ -11,29 +11,46 @@ Maintainer: Jonas Simon Fleck <jonas.fleck@bsse.ethz.ch>
 Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     regulatory relationships between TF-binding site pairs and target genes.
     For two or more conditions within a broad cell type, infer_condition_grn
-    uses one canonical two-stage procedure. Candidate edges are discovered on
-    the complete cell type and separately in each condition using the original
-    Pando peak-to-gene, motif, peak-target-correlation and TF-target-correlation
-    steps. Exact TF-peak-target triples are unioned into one frozen dictionary.
-    Every condition is then refitted with the same Gaussian identity Pando
-    interaction model, the same predictor columns and the same globally
-    preprocessed RNA and ATAC layers, with scale set to FALSE. The selected
-    layers, peak-value semantics and a stable preprocessing fingerprint are
-    stored in every condition fit and verified again during projection.
-    Condition effects are the resulting coefficients; no pooled-coefficient
-    calibration is applied. Coefficients retain standard errors, P values and
-    network-wide adjusted P values. Only adjusted-P values below the configured
-    threshold enter the exported penalty effect, while the complete coefficient
-    table is retained for audit. Zero-variance and aliased edges remain
-    unavailable rather than being silently converted to fitted zeros. When no
-    condition column is supplied, the column is absent, or fewer than two levels
-    are observed, the original per-cell-type infer_grn Gaussian interaction
-    workflow is used and no condition coefficient is created. Independent
-    cell-type jobs can be dispatched through BiocParallel without nested worker
-    pools, and condition-only controls are removed before standard infer_grn
-    model arguments are forwarded to regression backends. Bundled reference
-    datasets are installed as standalone RData files so worker processes do not
-    retain promises to an installation-specific lazy-data database.
+    uses a statistically screened common-dictionary multi-task procedure.
+    Candidate edges are discovered on the complete cell type and separately in
+    every condition using the original Pando peak-to-gene, motif,
+    peak-target-correlation and TF-target-correlation steps, and exact
+    TF-peak-target triples are unioned into a broad candidate dictionary. A
+    preliminary joint multi-task ridge fit is used to compute condition-wise
+    ridge-Wald P values and BH-adjusted P values. Edges significant in at least
+    one condition are unioned to form the actual common fit dictionary. The
+    default adjusted-P threshold is 0.05 and remains user-configurable over the
+    ordinary adjusted-P threshold domain (0, 1), without an additional
+    condition-specific upper cap. All conditions are then refitted jointly on
+    this same significant-union dictionary. TF-by-ATAC predictors use one common
+    equal-condition within-condition RMS scale, matching the
+    condition-specific intercepts and equal-condition loss while preventing
+    between-condition mean shifts from changing the ridge penalty. Exported
+    coefficients are back-transformed to the original TF-by-ATAC units for
+    downstream projection. A positive ridge term makes the fitted system
+    identifiable under collinearity or raw rank deficiency, and a symmetric
+    fusion penalty shrinks condition coefficients toward one another without
+    forcing equality. Each fitted condition receives equal total loss weight so
+    large conditions do not dominate the joint coefficient solution. One
+    target-specific lambda is selected for all conditions by
+    condition-stratified cross-validation, using the one-standard-error rule by
+    default. Raw design rank, condition-specific zero variance, regularized
+    condition number and effective degrees of freedom remain available as
+    diagnostics. The public target-condition rsq field uses
+    dictionary-conditional out-of-fold R-squared, while in-sample R-squared is
+    retained separately. In the final refit, a condition-specific edge is
+    active for downstream projection only when its coefficient is estimable and
+    its BH-adjusted ridge-Wald P value is below the configured threshold.
+    Pairwise condition contrasts are calculated directly from the joint
+    coefficient covariance rather than inferred from asymmetric significance
+    calls. The coefficient and contrast P values remain approximate and
+    conditional on data-dependent candidate discovery, significance screening,
+    CV-selected lambda and fusion regularization. When no condition column is
+    supplied, the column is absent, or fewer than two levels are observed, the
+    original per-cell-type infer_grn Gaussian interaction workflow is used.
+    Independent cell-type jobs can be dispatched through BiocParallel without
+    nested worker pools, and bundled reference datasets are installed as
+    standalone RData files.
 License: MIT
 Encoding: UTF-8
 LazyData: false
@@ -86,6 +103,8 @@ Suggests:
 Remotes:
     github::immunogenomics/presto
 Config/Pando/ConditionGRNSchema: pando_condition_grn_common_dictionary_v1
-Config/Pando/ConditionGRNMethod: two-stage-exact-edge-union-fixed-dictionary-glm
-Config/Pando/ConditionEffectFilter: BH-adjusted-p-below-0.05
+Config/Pando/ConditionGRNModelSchema: pando_condition_grn_multitask_ridge_v2
+Config/Pando/ConditionGRNMethod: significant-union-multitask-ridge-refit
+Config/Pando/ConditionProjectionPolicy: padj-significant-ridge-effects
+Config/Pando/ConditionInference: approximate-ridge-Wald-screen-and-refit
 Config/Pando/DataStorage: standalone-RData
