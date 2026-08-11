@@ -6,6 +6,13 @@
 # diagnostic context; namespace-level worker functions avoid serializing the
 # mapper frame, accumulated outputs, or full prepared multiome matrices.
 
+.pando_condition_target_bpparam <- function() {
+    value <- getOption("Pando.condition_target_BPPARAM", NULL)
+    if (identical(value, FALSE) || is.null(value)) return(NULL)
+    .pando_validate_bpparam(value)
+    value
+}
+
 .pando_target_worker_limit <- function(parallel = FALSE) {
     if (!isTRUE(parallel)) return(1L)
     BPPARAM <- tryCatch(.pando_condition_target_bpparam(), error = function(e) NULL)
@@ -106,13 +113,21 @@
         names(tasks) <- key_names[index]
 
         chunk <- if (isTRUE(parallel)) {
-            map_par(
-                tasks, .pando_target_execute_task,
-                parallel = TRUE, verbose = FALSE
-            )
+            BPPARAM <- .pando_condition_target_bpparam()
+            if (!is.null(BPPARAM)) {
+                BiocParallel::bplapply(
+                    tasks, .pando_target_execute_task, BPPARAM = BPPARAM
+                )
+            } else {
+                map_par(
+                    tasks, .pando_target_execute_task,
+                    parallel = TRUE, verbose = FALSE
+                )
+            }
         } else {
             lapply(tasks, .pando_target_execute_task)
         }
+        names(chunk) <- names(tasks)
         out[index] <- chunk
 
         if (isTRUE(verbose)) {
