@@ -592,7 +592,11 @@ format_coefs <- function(coefs, term=':', adjust_method='fdr'){
     fit_method <- NetworkParams(object)$method
     xgb_method <- match.arg(xgb_method)
 
-    if (!fit_method %in% c('glm', 'cv.glmnet', 'glmnet', 'brms', 'xgb')){
+    supported_methods <- c(
+        'glm', 'ridge', 'multitask_ridge',
+        'cv.glmnet', 'glmnet', 'brms', 'xgb'
+    )
+    if (!fit_method %in% supported_methods){
         stop(paste0('find_modules() is not yet implemented for "', fit_method, '" models'))
     }
 
@@ -711,23 +715,32 @@ find_modules.Network <- function(
     xgb_method = c("tf", "target"),
     xgb_top = 50,
     verbose = TRUE) {
-    fixed_dictionary <- identical(
-        NetworkParams(object)$fit_mode,
-        "fixed_edge_dictionary"
-    )
-    original_coefs <- if (fixed_dictionary) object@coefs else NULL
-    original_fit <- if (fixed_dictionary) object@fit else NULL
-    if (fixed_dictionary) {
+    params <- NetworkParams(object)
+    fit_method <- as.character(params$method %||% "")
+    fit_mode <- as.character(params$fit_mode %||% "")
+    compatibility_mode <- fit_method %in% c("ridge", "multitask_ridge") ||
+        fit_mode %in% c(
+            "fixed_edge_dictionary",
+            "single_task_ridge",
+            "fixed_edge_dictionary_joint_conditions"
+        )
+
+    original_coefs <- if (compatibility_mode) object@coefs else NULL
+    original_fit <- if (compatibility_mode) object@fit else NULL
+    if (compatibility_mode) {
         if (!"nvariables" %in% colnames(object@fit) &&
             "nvariables_dictionary" %in% colnames(object@fit)) {
             object@fit$nvariables <- as.integer(
                 object@fit$nvariables_dictionary
             )
         }
-        excluded <- (!is.na(object@coefs$estimable) &
-                     !object@coefs$estimable) |
-            !is.finite(object@coefs$estimate)
-        object@coefs$padj[excluded] <- 1
+        if ("estimable" %in% colnames(object@coefs) &&
+            "padj" %in% colnames(object@coefs)) {
+            excluded <- (!is.na(object@coefs$estimable) &
+                         !object@coefs$estimable) |
+                !is.finite(object@coefs$estimate)
+            object@coefs$padj[excluded] <- 1
+        }
     }
     answer <- .find_modules_network_core(
         object = object,
@@ -739,7 +752,7 @@ find_modules.Network <- function(
         xgb_top = xgb_top,
         verbose = verbose
     )
-    if (fixed_dictionary) {
+    if (compatibility_mode) {
         answer@coefs <- original_coefs
         answer@fit <- original_fit
         if (!"nvariables" %in% colnames(answer@fit) &&
