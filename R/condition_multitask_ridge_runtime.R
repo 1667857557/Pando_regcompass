@@ -84,8 +84,8 @@
     }
     if (!is.numeric(padj_threshold) || length(padj_threshold) != 1L ||
         !is.finite(padj_threshold) || padj_threshold <= 0 ||
-        padj_threshold >= 1) {
-        stop("`padj_threshold` must be one number in (0, 1).",
+        padj_threshold > 0.1) {
+        stop("`padj_threshold` must be one number in (0, 0.1] for multi-condition ridge fitting.",
              call. = FALSE)
     }
 
@@ -206,7 +206,7 @@
             scale = FALSE,
             interaction = ":",
             projection_effect_column = "penalty_effect",
-            projection_policy = "continuous_estimable_ridge_effects",
+            projection_policy = "padj_significant_ridge_effects",
             target_genes = unique(as.character(dictionary$target)),
             rna_assay = prepared$params$rna_assay,
             atac_assay = prepared$params$peak_assay,
@@ -237,11 +237,9 @@
                 condition = condition,
                 network_name = network_names[[condition]],
                 n_cells = length(cells_by_condition[[condition]]),
-                n_dictionary_edges = nrow(dictionary),
-                n_projection_edges = sum(
-                    one$estimable %in% TRUE & is.finite(one$estimate)
-                ),
-                n_significant_diagnostic_edges = sum(one$significant %in% TRUE),
+                n_dictionary_edges = nrow(refitted$fit$edge_dictionary),
+                n_projection_edges = sum(one$significant %in% TRUE),
+                n_significant_edges = sum(one$significant %in% TRUE),
                 stringsAsFactors = FALSE
             )
         }
@@ -261,9 +259,9 @@
     object@grn@params$condition_grn_model_schema <-
         .condition_multitask_ridge_schema
     object@grn@params$condition_grn_method <-
-        "two_stage_exact_edge_union_multitask_ridge"
+        .condition_fit_dictionary_policy
     object@grn@params$condition_projection_policy <-
-        "continuous_estimable_ridge_effects"
+        .condition_significant_projection_policy
     object@grn@params$condition_ridge_control <- control
     object@grn@params$condition_grn_fits <- fits
     object@grn@params$condition_network_index <- do.call(rbind, network_index)
