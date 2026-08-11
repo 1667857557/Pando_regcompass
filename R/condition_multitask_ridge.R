@@ -3,7 +3,7 @@
 # Candidate discovery and exact dictionary union remain in condition_grn.R.
 # This file only replaces the post-dictionary estimator.
 
-.condition_multitask_ridge_schema <- "pando_condition_grn_multitask_ridge_v1"
+.condition_multitask_ridge_schema <- "pando_condition_grn_multitask_ridge_v2"
 
 .condition_ridge_control <- function(control = list()) {
     if (is.null(control)) control <- list()
@@ -105,14 +105,33 @@
         stop("Conditions do not share one finite ordered predictor dictionary.",
              call. = FALSE)
     }
+
+    # The fitted model contains one intercept per condition, so between-condition
+    # shifts in mean(TF*ATAC) contain no information about a within-condition
+    # slope. Using the ordinary pooled SD would nevertheless let those mean
+    # shifts change the ridge penalty. Instead use the same condition weighting
+    # as the loss: the RMS within-condition predictor SD, with each condition
+    # contributing equally. Then a standardized predictor has unit variance
+    # under the exact metric optimized by the multi-task loss.
     pooled <- do.call(rbind, x)
     center <- colMeans(pooled)
-    centered <- sweep(pooled, 2L, center, "-")
-    scale <- sqrt(colSums(centered^2) / max(1, nrow(pooled) - 1L))
+    within_variance <- vapply(seq_len(ncol(x[[1L]])), function(j) {
+        mean(vapply(x, function(one) {
+            value <- as.numeric(one[, j])
+            mean((value - mean(value))^2)
+        }, numeric(1)))
+    }, numeric(1))
+    names(within_variance) <- columns
+    scale <- sqrt(within_variance)
     informative <- is.finite(scale) & scale > floor
     scale[!informative] <- 1
-    list(center = center, scale = scale, informative = informative,
-         floor = floor)
+    list(
+        center = center,
+        scale = scale,
+        informative = informative,
+        floor = floor,
+        reference = "equal_condition_within_condition_rms"
+    )
 }
 
 .condition_ridge_penalty <- function(k, p, fusion_ratio) {
@@ -178,7 +197,8 @@
             residual_df = n_total - k,
             raw_kappa = setNames(rep(NA_real_, k), conditions),
             regularized_kappa = NA_real_, zero_variance = zero_variance,
-            informative = informative, weight = weight
+            informative = informative, informative_index = integer(),
+            covariance_z = NULL, weight = weight
         ))
     }
 
@@ -247,6 +267,7 @@
     intercept <- unlist(intercept, use.names = FALSE)
     names(intercept) <- names(prediction) <- names(sse) <- names(rsq) <- conditions
 
+    covariance <- NULL
     if (isTRUE(inference)) {
         meat <- matrix(0, k * p, k * p)
         for (i in seq_len(k)) {
@@ -274,7 +295,7 @@
         effective_df = df, residual_df = residual_df, raw_kappa = raw_kappa,
         regularized_kappa = .condition_ridge_kappa(system),
         zero_variance = zero_variance, informative = informative,
-        weight = weight
+        informative_index = keep, covariance_z = covariance, weight = weight
     )
 }
 
