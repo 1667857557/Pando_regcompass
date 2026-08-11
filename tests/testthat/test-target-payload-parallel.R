@@ -34,17 +34,13 @@ test_that("candidate target payload keeps only target-relevant multiome data", {
             region = c("r1", "r2", "r3"),
             atac_feature_id = c("p1", "p2", "p3"),
             stringsAsFactors = FALSE
-        ),
-        rna_layer = "data",
-        peak_layer = "data",
-        peak_value_type = "normalized",
-        preprocessing_fingerprint = "fp"
+        )
     )
 
     payload <- Pando:::.pando_discovery_target_payload(
         prepared = prepared, cells = cells, target = "TARGET1",
         source_label = "standard", source_type = "global",
-        tf_cor = 0.1, peak_cor = 0.05, verbose = FALSE
+        tf_cor = 0.1, peak_cor = 0.05
     )
 
     expect_false(payload$skip)
@@ -99,19 +95,33 @@ test_that("ridge target payload excludes other targets and regions", {
     expect_false("r2" %in% colnames(payload$prepared$peak_data))
 })
 
-test_that("target payload mapper preserves target order in bounded batches", {
+test_that("parallel target dispatcher is namespace-level and does not capture mapper frame", {
+    expect_identical(
+        environment(Pando:::.pando_target_execute_task),
+        asNamespace("Pando")
+    )
+    body_text <- paste(
+        deparse(body(Pando:::.pando_target_payload_map)), collapse = "\n"
+    )
+    expect_match(body_text, ".pando_target_execute_task", fixed = TRUE)
+    expect_false(grepl("run_one <-", body_text, fixed = TRUE))
+    expect_false(grepl("worker(task$payload)", body_text, fixed = TRUE))
+})
+
+test_that("target payload mapper preserves target names without one-pass alias overrides", {
     keys <- stats::setNames(c("a", "b", "c"), c("a", "b", "c"))
     result <- Pando:::.pando_target_payload_map(
         keys = keys,
-        build_payload = function(key) list(value = key),
-        worker = function(payload) toupper(payload$value),
+        build_payload = function(key) list(skip = TRUE, target = key),
+        worker_name = ".pando_discovery_target_worker",
         parallel = FALSE,
-        verbose = FALSE
+        verbose = FALSE,
+        phase = "unit"
     )
     expect_identical(names(result), names(keys))
-    expect_identical(unlist(result, use.names = FALSE), c("A", "B", "C"))
-    expect_identical(
-        Pando:::.condition_ridge_refit_contract_one_pass,
-        Pando:::.condition_ridge_refit_contract_compact
-    )
+    expect_true(is.function(Pando:::.condition_ridge_refit_contract_one_pass))
+    expect_false(exists(
+        ".condition_ridge_refit_contract_compact",
+        envir = asNamespace("Pando"), inherits = FALSE
+    ))
 })
