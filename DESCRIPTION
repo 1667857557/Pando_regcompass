@@ -1,5 +1,5 @@
 Package: Pando
-Version: 2.0.5
+Version: 2.0.6
 Type: Package
 Title: Inferring regulomes from multi-modal single-cell genomics data
 Authors@R: person(given = "Jonas Simon",
@@ -17,28 +17,31 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     TF-target-correlation steps, and exact TF-peak-target triples are unioned
     into one frozen dictionary. Instead of independent unregularized Gaussian
     GLMs, every target is then fitted jointly across conditions by multi-task
-    ridge regression. TF-by-ATAC predictors use one pooled training reference
-    for centering and scaling, while exported coefficients are back-transformed
-    to the original TF-by-ATAC units for downstream projection. A positive
-    ridge term makes the fitted system identifiable under collinearity or raw
-    rank deficiency, and a symmetric fusion penalty shrinks condition
-    coefficients toward one another without deleting dictionary edges. Each
-    fitted condition receives equal total loss weight so large conditions do
-    not dominate the joint coefficient solution. One target-specific lambda is
-    selected for all conditions by condition-stratified cross-validation, using
-    the one-standard-error rule by default. Raw design rank,
-    condition-specific zero variance, regularized condition number and effective
-    degrees of freedom remain available as diagnostics. The public
-    target-condition rsq field uses out-of-fold R-squared, while in-sample
-    R-squared is retained separately; raw rank deficiency no longer invalidates
-    a target when the regularized fit succeeds. Approximate ridge-Wald standard
-    errors and P values are retained for the existing BH coefficient contract,
-    and only adjusted-P values below the configured threshold enter
-    penalty_effect. When no condition column is supplied, the column is absent,
-    or fewer than two levels are observed, the original per-cell-type infer_grn
-    Gaussian interaction workflow is used. Independent cell-type jobs can be
-    dispatched through BiocParallel without nested worker pools, and bundled
-    reference datasets are installed as standalone RData files.
+    ridge regression. TF-by-ATAC predictors use one common equal-condition
+    within-condition RMS scale, matching the condition-specific intercepts and
+    equal-condition loss while preventing between-condition mean shifts from
+    changing the ridge penalty. Exported coefficients are back-transformed to
+    the original TF-by-ATAC units for downstream projection. A positive ridge
+    term makes the fitted system identifiable under collinearity or raw rank
+    deficiency, and a symmetric fusion penalty shrinks condition coefficients
+    toward one another without deleting dictionary edges. Each fitted condition
+    receives equal total loss weight so large conditions do not dominate the
+    joint coefficient solution. One target-specific lambda is selected for all
+    conditions by condition-stratified cross-validation, using the
+    one-standard-error rule by default. Raw design rank, condition-specific
+    zero variance, regularized condition number and effective degrees of
+    freedom remain available as diagnostics. The public target-condition rsq
+    field uses dictionary-conditional out-of-fold R-squared, while in-sample
+    R-squared is retained separately. Approximate ridge-Wald coefficient and
+    pairwise condition-contrast P values are retained only as diagnostics.
+    Quantitative projection uses every finite estimable regularized coefficient
+    continuously; condition-wise adjusted-P thresholding is not used to create
+    artificial beta-versus-zero differences between conditions. When no
+    condition column is supplied, the column is absent, or fewer than two
+    levels are observed, the original per-cell-type infer_grn Gaussian
+    interaction workflow is used. Independent cell-type jobs can be dispatched
+    through BiocParallel without nested worker pools, and bundled reference
+    datasets are installed as standalone RData files.
 License: MIT
 Encoding: UTF-8
 LazyData: false
@@ -91,7 +94,8 @@ Suggests:
 Remotes:
     github::immunogenomics/presto
 Config/Pando/ConditionGRNSchema: pando_condition_grn_common_dictionary_v1
-Config/Pando/ConditionGRNModelSchema: pando_condition_grn_multitask_ridge_v1
+Config/Pando/ConditionGRNModelSchema: pando_condition_grn_multitask_ridge_v2
 Config/Pando/ConditionGRNMethod: two-stage-exact-edge-union-multitask-ridge
-Config/Pando/ConditionEffectFilter: BH-adjusted-ridge-Wald-p-below-0.05
+Config/Pando/ConditionProjectionPolicy: continuous-estimable-ridge-effects
+Config/Pando/ConditionInference: approximate-ridge-Wald-diagnostics
 Config/Pando/DataStorage: standalone-RData
