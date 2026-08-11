@@ -23,43 +23,44 @@ test_that("single-edge multi-task ridge keeps condition-by-edge dimensions", {
     expect_equal(dim(fit$se), c(2L, 1L))
 })
 
-test_that("target payload errors identify phase and target", {
-    old <- getOption("Pando.target_progress_context", NULL)
-    options(Pando.target_progress_context = list(
-        stage = "unit_phase", label = "celltype"
-    ))
-    on.exit(options(Pando.target_progress_context = old), add = TRUE)
-    keys <- stats::setNames(c("good", "bad"), c("good", "bad"))
+test_that("target payload errors identify phase and target without local worker closures", {
+    keys <- stats::setNames("bad", "bad")
     expect_error(
         .pando_target_payload_map(
             keys = keys,
-            build_payload = function(key) list(key = key),
-            worker = function(payload) {
-                if (identical(payload$key, "bad")) stop("boom")
-                payload$key
-            },
+            build_payload = function(key) list(),
+            worker_name = ".pando_ridge_target_worker",
             parallel = FALSE,
-            verbose = FALSE
+            verbose = FALSE,
+            phase = "unit_phase",
+            label = "celltype"
         ),
         "phase=unit_phase:celltype; target=bad"
     )
 })
 
 test_that("target payload progress reports semantic phase and completion", {
-    old <- getOption("Pando.target_progress_context", NULL)
-    options(Pando.target_progress_context = list(
-        stage = "unit_phase", label = "celltype"
-    ))
-    on.exit(options(Pando.target_progress_context = old), add = TRUE)
     keys <- stats::setNames(c("a", "b"), c("a", "b"))
     expect_message(
         .pando_target_payload_map(
             keys = keys,
-            build_payload = function(key) list(key = key),
-            worker = function(payload) payload$key,
+            build_payload = function(key) list(skip = TRUE, target = key),
+            worker_name = ".pando_discovery_target_worker",
             parallel = FALSE,
-            verbose = TRUE
+            verbose = TRUE,
+            phase = "unit_phase",
+            label = "celltype"
         ),
         "Pando target phase=unit_phase:celltype"
     )
+})
+
+test_that("canonical source owns the single-edge fix", {
+    body_text <- paste(deparse(body(.condition_ridge_fit)), collapse = "\n")
+    expect_match(body_text, "zero_variance_values", fixed = TRUE)
+    expect_match(body_text, "nrow = k", fixed = TRUE)
+    expect_false(exists(
+        ".pando_compact_ridge_one_pass_progress_impl",
+        envir = asNamespace("Pando"), inherits = FALSE
+    ))
 })
