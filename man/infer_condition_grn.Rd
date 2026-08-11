@@ -56,8 +56,8 @@ infer_condition_grn(object, ...)
 \item{rank_action}{With the default \code{"mark"}, raw rank deficiency is retained as a diagnostic because the regularized system remains identifiable. \code{"error"} requests strict failure when a raw condition design is rank deficient.}
 \item{min_residual_df}{Minimum effective residual degrees of freedom for the joint regularized fit.}
 \item{parallel}{Enable parallel execution.}
-\item{BPPARAM}{\code{NULL}, \code{FALSE}, or a \code{BiocParallelParam}. When multiple cell types are requested, this controls independent cell-type jobs.}
-\item{parallel_scope}{Parallelization level. \code{"auto"} uses cell-type jobs when more than one cell type is available; \code{"cell_type"} requests that behavior explicitly; \code{"target"} retains target-level execution.}
+\item{BPPARAM}{\code{NULL}, \code{FALSE}, or a \code{BiocParallelParam}. With cell-type scope it controls independent cell-type jobs. With \code{parallel_scope = "target"} it directly controls target-gene work used by candidate discovery and multi-task ridge fitting; the same pool is reused across target-parallel stages and is stopped on return when Pando started it.}
+\item{parallel_scope}{Parallelization level. \code{"auto"} uses cell-type jobs when more than one cell type is available; \code{"cell_type"} requests that behavior explicitly; \code{"target"} uses \code{BPPARAM} for target-gene candidate and ridge work inside one cell-type fit.}
 \item{overwrite}{Replace generated networks with matching names.}
 \item{fallback_args}{Additional arguments for the original single-condition \code{infer_grn()} fallback. In the multi-condition path, the reserved element \code{condition_ridge_control} is consumed by the multi-task ridge engine and removed before any standard fallback. It can contain \code{lambda_grid} (default \code{10^seq(-3, 2, length.out = 9)}), \code{lambda_rule} (\code{"1se"} or \code{"min"}), \code{fusion_ratio} (default 1), \code{cv_folds} (default 5), \code{seed} (default 1), and \code{scale_floor} (default \code{1e-8}).}
 \item{verbose}{Display progress messages.}
