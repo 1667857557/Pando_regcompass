@@ -19,9 +19,10 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     preliminary joint multi-task ridge fit is used to compute condition-wise
     ridge-Wald P values and BH-adjusted P values. Edges significant in at least
     one condition are unioned to form the actual common fit dictionary. The
-    default adjusted-P threshold is 0.05 and the multi-condition ridge workflow
-    permits values up to 0.1. All conditions are then refitted jointly on this
-    same significant-union dictionary. TF-by-ATAC predictors use one common
+    default adjusted-P threshold is 0.05 and remains user-configurable over the
+    ordinary adjusted-P threshold domain (0, 1), without an additional
+    condition-specific upper cap. All conditions are then refitted jointly on
+    this same significant-union dictionary. TF-by-ATAC predictors use one common
     equal-condition within-condition RMS scale, matching the
     condition-specific intercepts and equal-condition loss while preventing
     between-condition mean shifts from changing the ridge penalty. Exported
