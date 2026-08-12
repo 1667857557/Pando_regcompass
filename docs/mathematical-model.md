@@ -21,19 +21,21 @@ For condition \(c\), define
 \rho^{TF}_{e,c}=cor_c(RNA_f,RNA_g).
 \]
 
-An edge has local Pando support in condition \(c\) when the two configured Pando gates are satisfied in that same condition:
+Pando uses strict threshold comparisons in the implementation. An edge has local Pando support in condition \(c\) when both configured gates are satisfied in that same condition:
 
 \[
-L_{e,c}=\mathbf 1\left(|\rho^{peak}_{e,c}|\ge \tau_{peak}\right)
-\mathbf 1\left(|\rho^{TF}_{e,c}|\ge \tau_{TF}\right).
+L_{e,c}=\mathbf 1\left(|\rho^{peak}_{e,c}|>\tau_{peak}\right)
+\mathbf 1\left(|\rho^{TF}_{e,c}|>\tau_{TF}\right).
 \]
 
 The same correlations are also calculated on all eligible-condition cells pooled within the cell type. Let
 
 \[
-G_e=\mathbf 1\left(|\rho^{peak}_{e,global}|\ge \tau_{peak}\right)
-\mathbf 1\left(|\rho^{TF}_{e,global}|\ge \tau_{TF}\right).
+G_e=\mathbf 1\left(|\rho^{peak}_{e,global}|>\tau_{peak}\right)
+\mathbf 1\left(|\rho^{TF}_{e,global}|>\tau_{TF}\right).
 \]
+
+The defaults are \(\tau_{TF}=0.05\) and \(\tau_{peak}=0.05\), but these are adjustable parameters rather than fixed parts of the statistical model. The same user-supplied values are used for pooled/global and condition-specific candidate discovery and are stored with the fit.
 
 The frozen common dictionary is
 
@@ -89,7 +91,7 @@ There is **no cross-condition fusion penalty**. Algebraically the penalized norm
 \left(X_c^TX_c+\lambda I\right)^{-1}X_c^Ty_c
 \]
 
-for each condition block after the common scaling and equal-condition weighting are applied. Ridge keeps the system identifiable under severe collinearity or raw rank deficiency, but does not make individual coefficients uniquely attributable when several highly correlated TF-peak predictors encode nearly the same signal.
+up to the equal-condition weighting and the implementation's common multiplicative normalization. Ridge keeps the system identifiable under severe collinearity or raw rank deficiency, but does not make individual coefficients uniquely attributable when several highly correlated TF-peak predictors encode nearly the same signal.
 
 One target-specific \(\lambda_g\) is selected by condition-stratified cross-validation and used for every condition of that target. The default one-standard-error rule chooses the largest lambda within one standard error of minimum equal-condition validation MSE.
 
@@ -109,7 +111,7 @@ The active condition GRN is
 A_{e,c}=S_{e,c}\,(G_e\lor L_{e,c}).
 \]
 
-Because every fitted edge belongs to the frozen dictionary, \(G_e\lor L_{e,c}\) records why the candidate was allowed into the shared model. Importantly, pooled/global correlation support alone cannot make an edge active: the condition-specific ridge coefficient must itself pass the BH gate.
+Because every fitted edge belongs to the frozen dictionary, \(G_e\lor L_{e,c}\) records whether the candidate was supported globally or in the specific condition. Importantly, pooled/global correlation support alone cannot make an edge active: the condition-specific ridge coefficient must itself pass the BH gate. Conversely, an edge admitted only by another condition's local screen is not active in condition \(c\) unless it also has global support or local support in \(c\).
 
 The downstream regulatory effect is
 
@@ -129,22 +131,22 @@ Because the dictionary, column identities, scaling convention, and target-specif
 
 Pairwise contrasts use the covariance of the no-fusion ridge estimator to form approximate Wald statistics and BH-adjusted contrast P values. Significance in one condition and nonsignificance in another is not used as a substitute for the direct contrast.
 
-## 7. Paired-cell projection
+## 7. Pando paired-cell projection
 
-For paired cell \(i\) in condition \(c\), the target regulatory score is
+For paired cell \(i\) in condition \(c\), Pando's cell-level target regulatory score is
 
 \[
 G_{i,g,c}=\sum_{e\in D_g}
 penalty\_effect_{e,c}\,RNA_{TF(e),i}\,ATAC_{peak(e),i}.
 \]
 
-For aggregation group \(u\) with membership set \(M_u\),
+For aggregation group \(u\) with membership set \(M_u\), the Pando projection helper can aggregate these cell-level scores as
 
 \[
 G_{u,g}=\frac{1}{|M_u|}\sum_{i\in M_u}G_{i,g,c(i)}.
 \]
 
-Projection is performed on paired cells before aggregation so the coefficient and both molecular measurements preserve the fitted condition and preprocessing reference.
+RegCompass Layer 1 uses a distinct downstream metacell estimand, \(\beta\,\overline{TF}\,\overline{ATAC}\), documented in the RegCompass mathematical specification; it must not be confused with \(\beta\,\overline{TF\times ATAC}\).
 
 ## 8. Inference scope
 
