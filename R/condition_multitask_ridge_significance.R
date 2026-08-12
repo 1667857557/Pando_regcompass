@@ -2,14 +2,14 @@
 #
 # The frozen dictionary is the exact union of TF-peak-target edges passing the
 # Pando peak-target and TF-target correlation gates either in the pooled/global
-# cell set or in at least one condition. Ridge is fitted once. An edge is active
-# in condition c only when beta_c is BH-supported and the edge has either global
-# Pando support or condition-c local Pando support. Global support therefore
-# protects candidate admission against small-condition correlation instability,
-# but never makes a condition edge active without condition-specific beta evidence.
+# cell set or in at least one condition. Ridge is fitted once on this identical
+# dictionary for every condition. Correlation support determines dictionary
+# admission and is retained as provenance only. Once an edge is in the frozen
+# dictionary, activity in condition c is determined by that condition's own
+# estimable BH-supported ridge coefficient.
 
 .condition_significant_projection_policy <-
-    "active_global_or_local_pando_support_and_condition_bh_ridge_effects"
+    "condition_bh_supported_common_dictionary_ridge_effects"
 .condition_fit_dictionary_policy <-
     "global_and_condition_union_pando_correlation_supported_frozen_dictionary"
 
@@ -96,7 +96,12 @@
         as.numeric(global$tf_target_cor[global_index[global_support]])
     coefficient$local_support <- local_support
     coefficient$global_support <- global_support
-    coefficient$dictionary_support <- local_support | global_support
+    # Every coefficient row exists only because the exact edge belongs to the
+    # frozen common dictionary. Global/local flags describe where that admission
+    # evidence came from; they do not veto a condition-specific fitted effect.
+    coefficient$dictionary_support <- TRUE
+    coefficient$current_scope_correlation_support <-
+        local_support | global_support
     coefficient$peak_cor_pass <- local_support
     coefficient$tf_cor_pass <- local_support
 
@@ -104,7 +109,7 @@
     padj <- suppressWarnings(as.numeric(coefficient$padj))
     statistically_supported <- coefficient$estimable %in% TRUE &
         is.finite(estimate) & is.finite(padj) & padj < threshold
-    active <- statistically_supported & coefficient$dictionary_support
+    active <- statistically_supported
     coefficient$statistically_supported <- statistically_supported
     coefficient$active <- active
     # Compatibility alias for existing Network consumers. The explicit
@@ -115,13 +120,13 @@
     fit$projection_effect_column <- "penalty_effect"
     fit$projection_policy <- .condition_significant_projection_policy
     fit$dictionary_support_role <-
-        "pooled_global_or_condition_local_pando_correlation_candidate_support"
+        "membership_in_global_plus_condition_correlation_screened_common_dictionary"
     fit$local_support_role <-
-        "condition_specific_pando_correlation_support_annotation"
+        "condition_specific_pando_correlation_provenance_only"
     fit$global_support_role <-
-        "pooled_all_eligible_conditions_pando_correlation_support_annotation"
+        "pooled_all_eligible_conditions_pando_correlation_provenance_only"
     fit$statistical_support_role <-
-        "condition_wise_BH_adjusted_approximate_ridge_wald"
+        "condition_wise_BH_adjusted_approximate_ridge_wald_defines_activity"
     fit
 }
 
