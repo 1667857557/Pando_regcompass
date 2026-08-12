@@ -97,7 +97,7 @@
     downstream = 0, extend = 1000000, only_tss = FALSE,
     peak_to_gene_domains = NULL, rna_layer = "data", peak_layer = "data",
     peak_value_type = c("normalized", "probability", "other"),
-    tf_cor = 0.1, peak_cor = 0,
+    tf_cor = 0.05, peak_cor = 0.05,
     min_cells_per_condition = 50L,
     small_condition_action = c("error", "drop_condition", "skip_cell_type"),
     adjust_method = "BH", padj_threshold = 0.05,
