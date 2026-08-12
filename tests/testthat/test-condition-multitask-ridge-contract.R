@@ -103,11 +103,11 @@ test_that("scaling matches the condition-intercept loss geometry", {
     )
 })
 
-test_that("global support can rescue dictionary admission without local support", {
+test_that("candidate provenance never vetoes a BH-supported dictionary edge", {
     fit <- list(
         padj_threshold = 0.05,
         dictionary_support_table = data.frame(
-            edge_id = c("G||TF1||P1", "G||TF2||P2", "G||TF1||P1"),
+            edge_id = c("G||TF1||P1", "G||TF2||P2", "G||TF3||P3"),
             source_type = c("global", "global", "condition"),
             condition = c(NA, NA, "A"),
             peak_target_cor = c(0.2, 0.3, 0.25),
@@ -115,25 +115,29 @@ test_that("global support can rescue dictionary admission without local support"
             stringsAsFactors = FALSE
         ),
         coefficients = data.frame(
-            edge_id = rep(c("G||TF1||P1", "G||TF2||P2"), 2L),
-            condition = rep(c("A", "B"), each = 2L),
-            estimate = c(0.5, 0.4, 0.6, 0.7),
+            edge_id = rep(c("G||TF1||P1", "G||TF2||P2", "G||TF3||P3"), 2L),
+            condition = rep(c("A", "B"), each = 3L),
+            estimate = c(0.5, 0.4, 0.3, 0.6, 0.7, 0.8),
             estimable = TRUE,
-            padj = c(0.01, 0.02, 0.01, 0.01),
+            padj = c(0.01, 0.02, 0.03, 0.01, 0.01, 0.01),
             stringsAsFactors = FALSE
         )
     )
     class(fit) <- c("ConditionGRNFit", "list")
     gated <- Pando:::.condition_apply_activity_gate(fit)
     expect_identical(gated$coefficients$statistically_supported,
-                     rep(TRUE, 4L))
-    expect_identical(gated$coefficients$global_support,
-                     rep(TRUE, 4L))
-    expect_identical(gated$coefficients$local_support,
-                     c(TRUE, FALSE, FALSE, FALSE))
-    expect_identical(gated$coefficients$active, rep(TRUE, 4L))
+                     rep(TRUE, 6L))
+    expect_identical(
+        gated$coefficients$global_support,
+        c(TRUE, TRUE, FALSE, TRUE, TRUE, FALSE)
+    )
+    expect_identical(
+        gated$coefficients$local_support,
+        c(FALSE, FALSE, TRUE, FALSE, FALSE, FALSE)
+    )
+    expect_identical(gated$coefficients$active, rep(TRUE, 6L))
     expect_equal(gated$coefficients$penalty_effect,
-                 c(0.5, 0.4, 0.6, 0.7))
+                 c(0.5, 0.4, 0.3, 0.6, 0.7, 0.8))
 })
 
 test_that("fit dictionary policy is global-plus-condition and frozen", {
@@ -143,6 +147,6 @@ test_that("fit dictionary policy is global-plus-condition and frozen", {
     )
     expect_identical(
         Pando:::.condition_significant_projection_policy,
-        "active_global_or_local_pando_support_and_condition_bh_ridge_effects"
+        "condition_bh_supported_common_dictionary_ridge_effects"
     )
 })
