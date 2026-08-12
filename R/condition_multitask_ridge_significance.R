@@ -1,15 +1,17 @@
-# Activity and inference contract for condition-union common-dictionary ridge.
+# Activity and inference contract for global-plus-condition common-dictionary ridge.
 #
-# The dictionary is frozen before coefficient estimation. It is the exact union
-# of TF-peak-target edges that pass the original Pando peak-target and TF-target
-# correlation gates in at least one condition. Ridge is fitted once. Condition
-# activity then requires both condition-local Pando support and condition-wise
-# BH-supported ridge evidence; activity never changes the fitted coefficient.
+# The frozen dictionary is the exact union of TF-peak-target edges passing the
+# Pando peak-target and TF-target correlation gates either in the pooled/global
+# cell set or in at least one condition. Ridge is fitted once. An edge is active
+# in condition c only when beta_c is BH-supported and the edge has either global
+# Pando support or condition-c local Pando support. Global support therefore
+# protects candidate admission against small-condition correlation instability,
+# but never makes a condition edge active without condition-specific beta evidence.
 
 .condition_significant_projection_policy <-
-    "active_condition_pando_support_and_bh_ridge_effects"
+    "active_global_or_local_pando_support_and_condition_bh_ridge_effects"
 .condition_fit_dictionary_policy <-
-    "condition_union_pando_correlation_supported_frozen_dictionary"
+    "global_and_condition_union_pando_correlation_supported_frozen_dictionary"
 
 .condition_validate_adjust_method <- function(adjust_method) {
     value <- toupper(as.character(adjust_method))
@@ -46,55 +48,78 @@
         "edge_id", "condition", "estimate", "estimable", "padj"
     )
     required_support <- c(
-        "edge_id", "condition", "peak_target_cor", "tf_target_cor"
+        "edge_id", "source_type", "condition",
+        "peak_target_cor", "tf_target_cor"
     )
     if (!all(required_coefficient %in% colnames(coefficient)) ||
         !is.data.frame(support) ||
         !all(required_support %in% colnames(support))) {
-        stop("Condition-union Pando support metadata are incomplete.",
+        stop("Global/condition Pando support metadata are incomplete.",
              call. = FALSE)
     }
-    support_key <- paste(
-        as.character(support$edge_id), as.character(support$condition),
-        sep = "\001"
+
+    global <- support[support$source_type == "global", , drop = FALSE]
+    local <- support[support$source_type == "condition", , drop = FALSE]
+    if (anyDuplicated(as.character(global$edge_id))) {
+        stop("Global Pando support rows must be unique by exact edge.",
+             call. = FALSE)
+    }
+    local_key <- paste(
+        as.character(local$edge_id), as.character(local$condition), sep = "\001"
     )
-    if (anyNA(support_key) || anyDuplicated(support_key)) {
+    if (anyNA(local_key) || anyDuplicated(local_key)) {
         stop("Condition-local Pando support rows must be unique.",
              call. = FALSE)
     }
+
     coefficient_key <- paste(
         as.character(coefficient$edge_id),
         as.character(coefficient$condition), sep = "\001"
     )
-    index <- match(coefficient_key, support_key)
-    local_support <- !is.na(index)
+    local_index <- match(coefficient_key, local_key)
+    global_index <- match(as.character(coefficient$edge_id),
+                          as.character(global$edge_id))
+    local_support <- !is.na(local_index)
+    global_support <- !is.na(global_index)
 
     coefficient$peak_target_cor <- NA_real_
     coefficient$tf_target_cor <- NA_real_
     coefficient$peak_target_cor[local_support] <-
-        as.numeric(support$peak_target_cor[index[local_support]])
+        as.numeric(local$peak_target_cor[local_index[local_support]])
     coefficient$tf_target_cor[local_support] <-
-        as.numeric(support$tf_target_cor[index[local_support]])
+        as.numeric(local$tf_target_cor[local_index[local_support]])
+    coefficient$global_peak_target_cor <- NA_real_
+    coefficient$global_tf_target_cor <- NA_real_
+    coefficient$global_peak_target_cor[global_support] <-
+        as.numeric(global$peak_target_cor[global_index[global_support]])
+    coefficient$global_tf_target_cor[global_support] <-
+        as.numeric(global$tf_target_cor[global_index[global_support]])
+    coefficient$local_support <- local_support
+    coefficient$global_support <- global_support
+    coefficient$dictionary_support <- local_support | global_support
     coefficient$peak_cor_pass <- local_support
     coefficient$tf_cor_pass <- local_support
-    coefficient$local_support <- local_support
 
     estimate <- suppressWarnings(as.numeric(coefficient$estimate))
     padj <- suppressWarnings(as.numeric(coefficient$padj))
     statistically_supported <- coefficient$estimable %in% TRUE &
         is.finite(estimate) & is.finite(padj) & padj < threshold
-    active <- statistically_supported & local_support
+    active <- statistically_supported & coefficient$dictionary_support
     coefficient$statistically_supported <- statistically_supported
     coefficient$active <- active
     # Compatibility alias for existing Network consumers. The explicit
-    # statistically_supported column retains the pure ridge-BH result.
+    # statistically_supported column is the condition-wise ridge-BH result.
     coefficient$significant <- active
     coefficient$penalty_effect <- ifelse(active, estimate, 0)
     fit$coefficients <- coefficient
     fit$projection_effect_column <- "penalty_effect"
     fit$projection_policy <- .condition_significant_projection_policy
+    fit$dictionary_support_role <-
+        "pooled_global_or_condition_local_pando_correlation_candidate_support"
     fit$local_support_role <-
-        "condition_specific_pando_peak_and_tf_correlation_activity_gate"
+        "condition_specific_pando_correlation_support_annotation"
+    fit$global_support_role <-
+        "pooled_all_eligible_conditions_pando_correlation_support_annotation"
     fit$statistical_support_role <-
         "condition_wise_BH_adjusted_approximate_ridge_wald"
     fit
@@ -133,7 +158,7 @@
     final$fit$candidate_tf_cor <- fit$candidate_tf_cor
     final$fit$candidate_peak_cor <- fit$candidate_peak_cor
     final$fit$inference_scope <-
-        "approximate_ridge_wald_conditional_on_condition_union_pando_screened_dictionary_and_cv_lambda"
+        "approximate_ridge_wald_conditional_on_global_or_condition_pando_screened_dictionary_and_cv_lambda"
     final$fit <- .condition_apply_activity_gate(final$fit)
     final$object <- .condition_update_network_significance(
         final$object, final$fit
