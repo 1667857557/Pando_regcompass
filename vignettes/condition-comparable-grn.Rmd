@@ -57,7 +57,9 @@ tf target region edge_id estimate std_err statistic pval padj
 statistically_supported global_support local_support active penalty_effect
 ```
 
-`global_support` means the exact edge passed pooled/global Pando correlation screening. `local_support` means it passed screening inside that condition. An edge is `active` when its condition-specific ridge coefficient is estimable, passes condition-wise BH, and has either global or local Pando candidate support. Thus pooled support can protect a real edge from a noisy small-condition correlation screen, but cannot make a condition edge active without condition-specific ridge evidence.
+`global_support` means the exact edge passed pooled/global Pando correlation screening. `local_support` means it passed screening inside that condition. These columns describe dictionary-admission provenance only. Once an edge is present in the common dictionary, it remains a fitted predictor in every condition.
+
+An edge is `active` when its own condition-specific ridge coefficient is estimable and passes condition-wise BH. Therefore an edge admitted by pooled/global support or by another condition can still be active in the current condition even if the current condition's marginal `tf_cor` or `peak_cor` did not pass. This avoids reapplying the same small-sample-sensitive marginal-correlation filter after the joint predictor model has already been fitted.
 
 `penalty_effect` is the active condition-specific ridge coefficient in the original TF-by-ATAC units and is zero otherwise. The full `estimate` is retained for diagnostics and contrasts.
 
