@@ -2,8 +2,7 @@
 
 # Pando
 
-This fork retains the original `infer_grn()` workflow and provides one canonical
-condition-specific extension based on the original Gaussian identity Pando model.
+This fork retains the original `infer_grn()` workflow and provides one canonical condition-comparable extension that preserves Pando's regulatory-domain, motif, peak-target-correlation, TF-target-correlation, and TF×ATAC predictor logic while using ridge regularization for a shared condition dictionary.
 
 ## Install
 
@@ -11,7 +10,7 @@ condition-specific extension based on the original Gaussian identity Pando model
 remotes::install_github("1667857557/Pando_regcompass")
 ```
 
-## Multiple conditions: two-stage common dictionary
+## Multiple conditions: pooled/global + condition common dictionary
 
 ```r
 library(BiocParallel)
@@ -27,12 +26,10 @@ condition_object <- infer_condition_grn(
   cell_type_col = "cell_type",
   condition_col = "condition",
   genes = metabolic_genes,
-  tf_cor = 0.1,
-  peak_cor = 0,
+  tf_cor = 0.05,
+  peak_cor = 0.05,
   min_cells_per_condition = 300L,
-  adjust_method = "BH",
   padj_threshold = 0.05,
-  rank_action = "mark",
   parallel = TRUE,
   BPPARAM = upstream_bp,
   parallel_scope = "cell_type"
@@ -44,32 +41,30 @@ fit <- condition_grn_fit(
 )
 ```
 
-With multiple requested broad cell types, `parallel_scope = "cell_type"` runs independent cell-type jobs through `BPPARAM`. Each worker runs candidate discovery and fixed-dictionary fitting serially, preventing nested worker pools and oversubscription. `parallel_scope = "target"` retains the original target-level Pando parallel path. The default `"auto"` chooses cell-type parallelism when multiple cell types are available.
+`tf_cor` and `peak_cor` both default to `0.05`. These are adjustable candidate-discovery thresholds, not fixed constants. The same supplied values are used for the pooled/global calculation and for every condition-specific calculation.
 
-For every broad cell type, Pando performs exactly these steps:
+With multiple requested broad cell types, `parallel_scope = "cell_type"` runs independent cell-type jobs through `BPPARAM`. `parallel_scope = "target"` uses target-level parallel work. The default `"auto"` chooses the available non-nested route.
 
-1. discover candidate edges on all eligible cells of that type;
-2. discover candidate edges separately in every condition;
-3. union exact `(target, TF, region)` triples;
-4. freeze that target-specific edge dictionary;
-5. refit every condition with the same predictor columns using
-   `target ~ TF:peak`, Gaussian identity GLM and `scale = FALSE`;
-6. calculate network-wide adjusted P values and expose `penalty_effect`, which is
-   the fitted coefficient only when `padj < padj_threshold`.
+For every broad cell type, the canonical condition workflow performs these steps:
 
-The unfiltered condition coefficient remains in `estimate`. Non-significant
-coefficients are not rewritten; only `penalty_effect` is zeroed for downstream
-penalty construction. Zero-variance and aliased coefficients remain `NA` with
-explicit diagnostics.
+1. restrict the structural candidate space by Pando regulatory domains, measured regulatory regions, and TF motif support;
+2. compute Pando `peak_cor` and `tf_cor` candidate support using all eligible-condition cells pooled together;
+3. compute the same candidate support independently within every condition;
+4. form `unique(D_global ∪ D_condition1 ∪ ...)` on the exact `(target, TF, region)` triple;
+5. freeze that deduplicated target-specific dictionary;
+6. build the original Pando interaction predictor `RNA(TF) × ATAC(peak)` for every dictionary edge in every condition;
+7. use one common predictor-scaling convention and one target-specific cross-validated ridge `lambda`, but fit independent condition coefficient blocks with **no cross-condition fusion penalty**;
+8. BH-adjust the approximate ridge-Wald P values within condition;
+9. mark an edge active in condition `c` only when its condition-specific ridge coefficient is supported and the exact edge has pooled/global support or support in condition `c`;
+10. expose `penalty_effect = estimate` for active edges and zero otherwise, while retaining the complete coefficient table for diagnostics and direct condition contrasts.
 
-Candidate discovery uses the original Pando peak-to-gene domain, motif mapping,
-peak-target correlation and TF-target correlation logic. Candidate coefficients
-from this first stage are never used as final condition effects. Global
-coefficients are not used to rescale condition coefficients.
+The common dictionary therefore provides comparable coefficient coordinates without forcing condition coefficients to be similar. Ridge stabilizes the penalized system under severe collinearity and raw rank deficiency, but highly correlated predictors can still make individual biological attribution uncertain.
 
-## Explicit APIs
+Pooled/global screening is specifically useful when a small condition misses a candidate because its marginal correlation is noisy. Global support can keep the edge in the shared dictionary, but it cannot make a condition edge active unless that condition's own ridge coefficient passes the statistical gate. Conversely, an edge admitted only by another condition's local screen is not active in the current condition unless it also has global or current-condition support.
 
-The automatic workflow is composed from three public functions:
+## Candidate dictionary inspection
+
+Candidate discovery and exact-union helpers can be used to inspect dictionary provenance directly:
 
 ```r
 edges_global <- discover_grn_edges(
@@ -77,7 +72,9 @@ edges_global <- discover_grn_edges(
   genes = metabolic_genes,
   cells = cells_of_one_cell_type,
   source_label = "global",
-  source_type = "global"
+  source_type = "global",
+  tf_cor = 0.05,
+  peak_cor = 0.05
 )
 
 edges_condition <- lapply(condition_levels, function(level) {
@@ -86,31 +83,24 @@ edges_condition <- lapply(condition_levels, function(level) {
     genes = metabolic_genes,
     cells = cells_by_condition[[level]],
     source_label = level,
-    source_type = "condition"
+    source_type = "condition",
+    tf_cor = 0.05,
+    peak_cor = 0.05
   )
 })
 names(edges_condition) <- condition_levels
 
 edge_dictionary <- union_grn_edges(edges_global, edges_condition)
-
-condition_object <- fit_grn_from_edges(
-  grn_object,
-  edge_dictionary = edge_dictionary,
-  cells = cells_by_condition[["Control"]],
-  condition_label = "Control",
-  adjust_method = "BH",
-  padj_threshold = 0.05
-)
+stopifnot(!anyDuplicated(edge_dictionary$edge_id))
 ```
+
+The canonical coefficient-fitting API for multiple conditions is `infer_condition_grn()`. Candidate tables are provenance/inspection objects and are not substituted for the final condition-specific ridge coefficients.
 
 ## No condition or one condition
 
-When `condition_col` is `NULL`, absent, or has fewer than two observed levels,
-`infer_condition_grn()` directly runs the original Pando Gaussian interaction
-GRN independently for every requested broad cell type. It creates no condition
-coefficient or condition fit contract.
+When `condition_col` is `NULL`, absent, or has fewer than two observed levels, `infer_condition_grn()` uses the standard Pando route rather than creating a multi-condition fit contract.
 
-Condition-GRN controls are never forwarded into standard `infer_grn()` model backends. Arguments such as `padj_threshold`, `rank_action`, `min_residual_df`, condition/layer controls, `BPPARAM`, and `parallel_scope` are removed before `stats::glm()` or another standard model receives `...`. This prevents one invalid condition-only argument from causing repeated per-gene model failures.
+Condition-GRN controls are not forwarded blindly into unrelated standard model backends. This prevents condition-only arguments from producing repeated per-target model failures.
 
 ## RegCompass handoff
 
@@ -128,16 +118,10 @@ metacell_projection <- aggregate_condition_grn_projection(
 )
 ```
 
-Projection reconstructs the paired-cell predictor `TF RNA × peak ATAC` from the
-same globally preprocessed assay layers used for fitting and applies
-`penalty_effect`. Projection occurs before exact metacell aggregation. Do not
-renormalize each condition, regenerate a different edge dictionary, or refit
-coefficients after aggregation.
+Pando's projection reconstructs the paired-cell predictor `TF RNA × peak ATAC` from the fitted assay layers and applies `penalty_effect`. RegCompass Layer 1 intentionally uses a different downstream metacell estimand, `beta × mean(TF) × mean(ATAC)`, using the same active condition coefficients. Do not confuse that product of means with `beta × mean(TF × ATAC)`.
 
-The reported P values are conditional on the selected edge dictionary; the
-workflow does not claim selective-inference correction for candidate discovery.
+The reported coefficient and contrast P values are approximate and conditional on data-dependent candidate discovery and CV-selected ridge regularization; the workflow does not claim exact selective inference.
 
 ## Citation
 
-Fleck, J.S., Jansen, S.M.J., Wollny, D. et al. Inferring and perturbing cell
-fate regulomes in human brain organoids. *Nature* 621, 365–372 (2023).
+Fleck, J.S., Jansen, S.M.J., Wollny, D. et al. Inferring and perturbing cell fate regulomes in human brain organoids. *Nature* 621, 365–372 (2023).
