@@ -85,26 +85,33 @@ test_that("condition projection reports the actual fitted engine", {
                        fixed = TRUE))
 })
 
-test_that("fit dictionary and quantitative penalty are BH-gated after joint ridge", {
+test_that("BH screens the shared dictionary and final refit disables inference", {
     refit_text <- paste(
         deparse(body(Pando:::.condition_ridge_refit_contract)),
         collapse = "\n"
     )
+    one_pass_text <- paste(
+        deparse(body(Pando:::.condition_ridge_refit_contract_one_pass)),
+        collapse = "\n"
+    )
     gate_text <- paste(
-        deparse(body(Pando:::.condition_apply_significance_gate)),
+        deparse(body(Pando:::.condition_apply_screen_support)),
         collapse = "\n"
     )
     expect_match(refit_text, ".condition_dictionary_screen", fixed = TRUE)
     expect_match(refit_text, ".condition_subset_dictionary", fixed = TRUE)
-    expect_match(gate_text, "padj < threshold", fixed = TRUE)
-    expect_match(gate_text, "coefficient$significant", fixed = TRUE)
+    expect_match(refit_text, "inference = TRUE", fixed = TRUE)
+    expect_match(refit_text, "inference = FALSE", fixed = TRUE)
+    expect_match(one_pass_text, ".pando_ridge_effect_target_worker", fixed = TRUE)
+    expect_match(gate_text, "screen_significant", fixed = TRUE)
+    expect_match(gate_text, "must not contain second-round", fixed = TRUE)
     expect_match(gate_text, "coefficient$penalty_effect", fixed = TRUE)
     expect_identical(
         Pando:::.condition_fit_dictionary_policy,
-        "preliminary_joint_ridge_bh_significant_union_then_joint_refit"
+        "preliminary_joint_ridge_bh_supported_union_then_effect_only_joint_refit"
     )
     expect_identical(
         Pando:::.condition_significant_projection_policy,
-        "padj_significant_ridge_effects"
+        "screen_bh_supported_refit_ridge_effects"
     )
 })
