@@ -26,7 +26,7 @@ fit_object <- infer_condition_grn(
   condition_col = "condition",
   genes = metabolic_genes,
   tf_cor = 0.1,
-  peak_cor = 0,
+  peak_cor = 0.05,
   min_cells_per_condition = 300L,
   small_condition_action = "error",
   adjust_method = "BH",
@@ -37,29 +37,34 @@ fit_object <- infer_condition_grn(
 )
 ```
 
-With at least two eligible conditions in a cell type, `infer_condition_grn()` discovers pooled and condition-specific candidates, freezes the exact TF–peak–target union, and fits every condition against that dictionary. With no usable condition column or one condition level, it runs the original per-cell-type `infer_grn()` route and does not create condition coefficients.
+With at least two eligible conditions in a cell type, `infer_condition_grn()` discovers pooled and condition-specific candidates and forms their exact TF-peak-target union. A preliminary joint multi-task ridge fit supplies the only edge-level ridge-Wald P values. BH-supported edges from any condition are then unioned into the final shared dictionary. Every condition is refit jointly on that same screened dictionary with inference disabled. With no usable condition column or one condition level, the function uses the standard per-cell-type route.
 
 Important parameters:
 
-- `tf_cor`, `peak_cor`: candidate-discovery thresholds.
+- `tf_cor`, `peak_cor`: candidate-discovery thresholds before joint ridge screening.
 - `min_cells_per_condition`: minimum paired cells required for a condition fit.
 - `small_condition_action`: action for undersized conditions.
-- `adjust_method`, `padj_threshold`: adjusted-P rule used for `significant` and `penalty_effect`.
-- `rank_action`, `min_residual_df`: estimability controls.
-- `rna_layer`, `peak_layer`, `peak_value_type`: recorded preprocessing reference used again during projection.
+- `adjust_method`, `padj_threshold`: preliminary ridge-Wald multiple-testing rule used only to screen the final common dictionary and define condition-specific edge support.
+- `rank_action`, `min_residual_df`: ridge estimability controls.
+- `rna_layer`, `peak_layer`, `peak_value_type`: preprocessing reference recorded for projection.
+
+`padj_threshold` is not a second post-selection significance threshold. The final common-dictionary refit does not calculate a new coefficient P value or BH adjustment.
 
 # Outputs
 
-Each fitted condition is stored as a standard Pando `Network`. The coefficient table includes:
+Each fitted condition is stored as a standard Pando `Network`. The final coefficient table separates screening evidence from the refit effect:
 
 ```text
-tf target region edge_id estimate std_err statistic pval padj
-significant penalty_effect direction estimable zero_variance aliased
+tf target region edge_id
+estimate shared_estimate condition_deviation
+screen_estimate screen_std_err screen_statistic screen_pval screen_padj
+screen_estimable screen_significant significant penalty_effect
+estimable zero_variance aliased
 ```
 
-`estimate` retains the fitted coefficient. `penalty_effect` contains only coefficients accepted by the configured adjusted-P rule. Unavailable coefficients remain `NA`.
+`screen_*` fields come from the preliminary full-candidate joint ridge. `screen_significant` records whether that condition passed the configured BH screen. `estimate` is the coefficient from the final joint refit on the screened common dictionary. The final `pval` and `padj` columns are retained only for table compatibility and are `NA`; they are not recomputed after selection. `significant` means that the edge had preliminary condition-specific support and remains estimable in the final refit. `penalty_effect` is the final refit `estimate` for those supported edges and zero otherwise.
 
-Use `condition_grn_fit()` to retrieve the cell-type contract and `condition_grn_subgraph()` to retrieve one condition's edge table.
+Use `condition_grn_fit()` to retrieve the cell-type contract and `condition_grn_subgraph()` to retrieve one condition's supported edge table.
 
 ```r
 fit <- condition_grn_fit(fit_object, cell_type = "T_cell")
@@ -70,7 +75,9 @@ edges <- condition_grn_subgraph(
 )
 ```
 
-# Manual dictionary route
+# Manual fixed-dictionary GLM route
+
+`fit_grn_from_edges()` is a separate fixed-dictionary Gaussian-GLM utility. It is not the multi-task condition route described above.
 
 ```r
 pooled_edges <- discover_grn_edges(
@@ -78,7 +85,9 @@ pooled_edges <- discover_grn_edges(
   genes = metabolic_genes,
   cells = cells_cell_type,
   source_label = "pooled",
-  source_type = "global"
+  source_type = "global",
+  tf_cor = 0.1,
+  peak_cor = 0.05
 )
 
 condition_edges <- setNames(lapply(condition_levels, function(level) {
@@ -87,7 +96,9 @@ condition_edges <- setNames(lapply(condition_levels, function(level) {
     genes = metabolic_genes,
     cells = cells_by_condition[[level]],
     source_label = level,
-    source_type = "condition"
+    source_type = "condition",
+    tf_cor = 0.1,
+    peak_cor = 0.05
   )
 }), condition_levels)
 
@@ -105,7 +116,7 @@ grn_object <- fit_grn_from_edges(
 )
 ```
 
-The dictionary union is always performed on complete TF–peak–target triples.
+The dictionary union is always performed on complete TF-peak-target triples.
 
 # Projection and aggregation
 
@@ -123,4 +134,4 @@ metacell_projection <- aggregate_condition_grn_projection(
 )
 ```
 
-Projection uses the fitted paired-cell RNA and ATAC layers and is aggregated only after cell-level target scores are calculated.
+Projection uses the final common-dictionary refit coefficient for edges supported by the preliminary condition-specific BH screen. Paired-cell target scores are calculated before metacell aggregation.
