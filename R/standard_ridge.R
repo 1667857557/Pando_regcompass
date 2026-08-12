@@ -1,8 +1,8 @@
 # Canonical single-task ridge helpers for standard Pando.
 #
-# Standard ridge is the K = 1 specialization of the condition multi-task ridge
-# solver. Public method routing remains in the original infer_grn.GRNData
-# definition in grn.R; this file contains only numerical/helper implementation.
+# Standard ridge is the K = 1 specialization of the condition ridge solver.
+# Public method routing remains in infer_grn.GRNData; this file contains only
+# numerical/helper implementation.
 
 .pando_standard_ridge_family_ok <- function(family) {
     if (is.character(family) && length(family) == 1L) {
@@ -104,7 +104,7 @@
     )
     class(skeleton) <- c("ConditionGRNFit", "list")
 
-    refitted <- .condition_ridge_refit_contract_one_pass(
+    fitted <- .condition_ridge_fit_contract_one_pass(
         object = object,
         fit = skeleton,
         prepared = prepared,
@@ -116,8 +116,8 @@
         progress_phase = "ridge_standard",
         progress_label = network_name
     )
-    answer <- refitted$object
-    fit <- refitted$fit
+    answer <- fitted$object
+    fit <- fitted$fit
 
     network <- answer@grn@networks[[network_name]]
     if (!is.null(network)) {
