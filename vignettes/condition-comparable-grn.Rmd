@@ -19,7 +19,7 @@ For RegCompass, the regulatory regions are normally initialized from the predefi
 
 # Condition GRN
 
-Only parameters that normally need analysis-specific adjustment are shown below.
+Only parameters that normally need analysis-specific adjustment are shown below. The default candidate thresholds are `tf_cor = 0.05` and `peak_cor = 0.05`; they are ordinary adjustable parameters rather than fixed parts of the model contract.
 
 ```r
 fit_object <- infer_condition_grn(
@@ -27,7 +27,7 @@ fit_object <- infer_condition_grn(
   cell_type_col = "cell_type",
   condition_col = "condition",
   genes = metabolic_genes,
-  tf_cor = 0.1,
+  tf_cor = 0.05,
   peak_cor = 0.05,
   min_cells_per_condition = 300L,
   parallel = TRUE
@@ -40,7 +40,7 @@ Every condition is then fitted once against exactly that same ordered dictionary
 
 Important adjustable parameters:
 
-- `tf_cor`, `peak_cor`: Pando candidate-discovery thresholds used independently in the pooled/global and condition-specific screens.
+- `tf_cor`, `peak_cor`: Pando candidate-discovery thresholds used independently in the pooled/global and condition-specific screens; both default to `0.05`, but valid user-supplied values are preserved.
 - `min_cells_per_condition`: minimum paired cells required for a condition fit.
 - `small_condition_action`: optional behavior for undersized conditions.
 - `padj_threshold`: condition-wise BH threshold used to activate fitted ridge effects; default `0.05`.
