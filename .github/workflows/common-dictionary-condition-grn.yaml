@@ -114,6 +114,39 @@ jobs:
               raise RuntimeError(
                   f"projection membership contract is incomplete: {missing}"
               )
+
+          significance = Path("R/condition_multitask_ridge_significance.R").read_text()
+          refit = Path("R/condition_multitask_ridge_refit.R").read_text()
+          required_significance = [
+              "preliminary_joint_ridge_bh_supported_union_then_effect_only_joint_refit",
+              "screen_bh_supported_refit_ridge_effects",
+              ".condition_dictionary_screen",
+              ".condition_apply_screen_support",
+              "must not contain second-round",
+              'inference = TRUE',
+              'inference = FALSE',
+          ]
+          missing = [value for value in required_significance if value not in significance]
+          if missing:
+              raise RuntimeError(f"screen-only condition inference contract missing: {missing}")
+          required_refit = [
+              ".pando_ridge_effect_target_worker",
+              "inference = isTRUE(inference)",
+              "post_screen_joint_ridge_effect_estimation_only_no_final_inference",
+          ]
+          missing = [value for value in required_refit if value not in refit]
+          if missing:
+              raise RuntimeError(f"effect-only final refit contract missing: {missing}")
+
+          description = Path("DESCRIPTION").read_text()
+          required_description = [
+              "Config/Pando/ConditionGRNMethod: screened-union-multitask-ridge-effect-refit",
+              "Config/Pando/ConditionProjectionPolicy: screen-bh-supported-refit-ridge-effects",
+              "Config/Pando/ConditionInference: preliminary-ridge-Wald-BH-screen-only-final-refit-no-inference",
+          ]
+          missing = [value for value in required_description if value not in description]
+          if missing:
+              raise RuntimeError(f"condition package metadata missing: {missing}")
       - name: Parse package sources
         shell: Rscript {0}
         run: |
