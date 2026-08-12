@@ -55,12 +55,13 @@ For every broad cell type, the canonical condition workflow performs these steps
 6. build the original Pando interaction predictor `RNA(TF) × ATAC(peak)` for every dictionary edge in every condition;
 7. use one common predictor-scaling convention and one target-specific cross-validated ridge `lambda`, but fit independent condition coefficient blocks with **no cross-condition fusion penalty**;
 8. BH-adjust the approximate ridge-Wald P values within condition;
-9. mark an edge active in condition `c` only when its condition-specific ridge coefficient is supported and the exact edge has pooled/global support or support in condition `c`;
-10. expose `penalty_effect = estimate` for active edges and zero otherwise, while retaining the complete coefficient table for diagnostics and direct condition contrasts.
+9. mark an edge active in condition `c` when that condition's coefficient is estimable and BH-supported;
+10. retain `global_support`, `local_support`, and the corresponding correlations as candidate provenance only;
+11. expose `penalty_effect = estimate` for active edges and zero otherwise, while retaining the complete coefficient table for diagnostics and direct condition contrasts.
 
 The common dictionary therefore provides comparable coefficient coordinates without forcing condition coefficients to be similar. Ridge stabilizes the penalized system under severe collinearity and raw rank deficiency, but highly correlated predictors can still make individual biological attribution uncertain.
 
-Pooled/global screening is specifically useful when a small condition misses a candidate because its marginal correlation is noisy. Global support can keep the edge in the shared dictionary, but it cannot make a condition edge active unless that condition's own ridge coefficient passes the statistical gate. Conversely, an edge admitted only by another condition's local screen is not active in the current condition unless it also has global or current-condition support.
+Pooled/global and condition-specific screening are used only to decide which exact edges are allowed into the common model space. This is important for small conditions: an edge can enter through pooled/global support or through another condition and still be estimated in every condition. If condition `B` has weak or noisy marginal `tf_cor`/`peak_cor` but its own ridge coefficient is estimable and BH-supported, the edge is allowed to be active in `B`. Thus the correlation screen is not applied a second time after ridge fitting.
 
 ## Candidate dictionary inspection
 
