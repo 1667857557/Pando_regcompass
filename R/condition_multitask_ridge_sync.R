@@ -21,7 +21,9 @@
         params$fit_dictionary_edge_count <- fit$fit_dictionary_edge_count
         params$candidate_tf_cor <- fit$candidate_tf_cor
         params$candidate_peak_cor <- fit$candidate_peak_cor
+        params$dictionary_support_role <- fit$dictionary_support_role
         params$local_support_role <- fit$local_support_role
+        params$global_support_role <- fit$global_support_role
         params$statistical_support_role <- fit$statistical_support_role
         params$inference_scope <- fit$inference_scope
         methods::slot(network, "params") <- params
