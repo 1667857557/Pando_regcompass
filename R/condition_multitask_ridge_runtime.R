@@ -1,57 +1,81 @@
-# Condition-union common-dictionary ridge integration behind the canonical
+# Global-plus-condition common-dictionary ridge integration behind the canonical
 # infer_condition_grn.GRNData definition in condition_grn.R.
 
 .condition_ridge_fallback_key <- "condition_ridge_control"
 
-.condition_candidate_support_table <- function(condition_edges) {
-    rows <- lapply(names(condition_edges), function(condition) {
-        one <- as.data.frame(condition_edges[[condition]], stringsAsFactors = FALSE)
+.condition_candidate_support_table <- function(
+    global_edges = NULL, condition_edges) {
+    required <- c(
+        "target", "tf", "region", "atac_feature_id",
+        "peak_target_cor", "tf_target_cor"
+    )
+    make_rows <- function(one, source_type, condition = NA_character_) {
+        one <- as.data.frame(one, stringsAsFactors = FALSE)
         if (!nrow(one)) return(NULL)
-        required <- c(
-            "target", "tf", "region", "atac_feature_id",
-            "peak_target_cor", "tf_target_cor"
-        )
         if (!all(required %in% colnames(one))) {
-            stop("Condition candidate table is missing Pando support columns.",
+            stop("Pando candidate table is missing support columns.",
                  call. = FALSE)
         }
         out <- one[, required, drop = FALSE]
         out$edge_id <- paste(out$target, out$tf, out$region, sep = "||")
+        out$source_type <- source_type
         out$condition <- condition
         out[, c(
             "edge_id", "target", "tf", "region", "atac_feature_id",
-            "condition", "peak_target_cor", "tf_target_cor"
+            "source_type", "condition", "peak_target_cor", "tf_target_cor"
         ), drop = FALSE]
-    })
+    }
+    rows <- list()
+    if (!is.null(global_edges)) {
+        rows[[length(rows) + 1L]] <- make_rows(global_edges, "global")
+    }
+    for (condition in names(condition_edges)) {
+        rows[[length(rows) + 1L]] <- make_rows(
+            condition_edges[[condition]], "condition", condition
+        )
+    }
     rows <- rows[!vapply(rows, is.null, logical(1))]
     if (!length(rows)) {
         return(data.frame(
             edge_id = character(), target = character(), tf = character(),
             region = character(), atac_feature_id = character(),
-            condition = character(), peak_target_cor = numeric(),
-            tf_target_cor = numeric(), stringsAsFactors = FALSE
+            source_type = character(), condition = character(),
+            peak_target_cor = numeric(), tf_target_cor = numeric(),
+            stringsAsFactors = FALSE
         ))
     }
-    out <- unique(do.call(rbind, rows))
-    key <- paste(out$edge_id, out$condition, sep = "\001")
-    if (anyDuplicated(key)) {
-        stop("A condition contributes the same candidate edge more than once.",
-             call. = FALSE)
-    }
-    out <- out[order(out$edge_id, out$condition), , drop = FALSE]
+    out <- do.call(rbind, rows)
+    key <- paste(
+        out$edge_id, out$source_type,
+        ifelse(is.na(out$condition), "__global__", out$condition), sep = "\001"
+    )
+    # Candidate discovery can encounter the same exact TF-peak-target triple by
+    # more than one motif path. The common dictionary and its provenance are
+    # exact-edge objects, so collapse those duplicates deterministically.
+    out <- out[!duplicated(key), , drop = FALSE]
+    out <- out[order(
+        out$edge_id, out$source_type,
+        ifelse(is.na(out$condition), "", out$condition)
+    ), , drop = FALSE]
     rownames(out) <- NULL
     out
 }
 
 .condition_candidate_support_summary <- function(dictionary, support) {
-    out <- as.data.frame(dictionary, stringsAsFactors = FALSE)
-    ids <- as.character(out$edge_id)
+    ids <- as.character(dictionary$edge_id)
     summary_rows <- lapply(ids, function(id) {
         one <- support[as.character(support$edge_id) == id, , drop = FALSE]
+        global <- one$source_type == "global"
+        condition <- one$source_type == "condition"
+        supported_conditions <- sort(unique(
+            as.character(one$condition[condition & !is.na(one$condition)])
+        ))
         data.frame(
             edge_id = id,
-            n_support_conditions = nrow(one),
-            support_conditions = paste(sort(unique(one$condition)), collapse = ";"),
+            source_global = any(global),
+            n_support_conditions = length(supported_conditions),
+            support_conditions = paste(supported_conditions, collapse = ";"),
+            n_sources = as.integer(any(global)) + length(supported_conditions),
             max_abs_peak_target_cor = if (nrow(one)) {
                 max(abs(as.numeric(one$peak_target_cor)))
             } else NA_real_,
@@ -208,6 +232,17 @@
         cells_by_condition <- stats::setNames(lapply(eligible, function(condition) {
             type_cells[as.character(metadata[type_cells, condition_col]) == condition]
         }), eligible)
+        global_cells <- unique(unlist(cells_by_condition, use.names = FALSE))
+        log_message(
+            "Discovering pooled/global Pando candidates for cell type ",
+            type_label, verbose = verbose
+        )
+        global_edges <- .condition_discover_edges_compact(
+            prepared, global_cells,
+            source_label = "global", source_type = "global",
+            tf_cor = tf_cor, peak_cor = peak_cor,
+            parallel = parallel, verbose = verbose
+        )
         condition_edges <- lapply(eligible, function(condition) {
             log_message("Discovering Pando candidates for ", type_label, " / ",
                         condition, verbose = verbose)
@@ -219,18 +254,36 @@
             )
         })
         names(condition_edges) <- eligible
+
         dictionary <- union_grn_edges(
-            global_edges = NULL, condition_edges = condition_edges
+            global_edges = global_edges, condition_edges = condition_edges
         )
-        support_table <- .condition_candidate_support_table(condition_edges)
+        # union_grn_edges() groups on the exact (target, tf, region) key. Keep an
+        # explicit assertion because duplicated dictionary edges would invalidate
+        # coefficient alignment across conditions.
+        if (anyDuplicated(as.character(dictionary$edge_id))) {
+            stop("Common condition dictionary contains duplicated exact edges.",
+                 call. = FALSE)
+        }
+        support_table <- .condition_candidate_support_table(
+            global_edges = global_edges, condition_edges = condition_edges
+        )
         support_summary <- .condition_candidate_support_summary(
             dictionary, support_table
         )
         if (!nrow(support_table) ||
             !setequal(as.character(dictionary$edge_id),
                       as.character(support_summary$edge_id)) ||
-            any(support_summary$n_support_conditions < 1L)) {
-            stop("Condition-union Pando support audit is inconsistent.",
+            any(support_summary$n_sources < 1L)) {
+            stop("Global/condition Pando support audit is inconsistent.",
+                 call. = FALSE)
+        }
+        index <- match(dictionary$edge_id, support_summary$edge_id)
+        if (!identical(
+            as.logical(dictionary$source_global),
+            as.logical(support_summary$source_global[index])
+        )) {
+            stop("Dictionary global-support provenance is inconsistent.",
                  call. = FALSE)
         }
 
@@ -253,7 +306,7 @@
             coefficient_scale = "raw_tf_atac_interaction_units",
             internal_predictor_scale = "equal_condition_within_condition_rms",
             inference_scope =
-                "approximate_ridge_wald_conditional_on_condition_union_pando_screened_dictionary_and_cv_lambda",
+                "approximate_ridge_wald_conditional_on_global_or_condition_pando_screened_dictionary_and_cv_lambda",
             cell_type = type_label,
             condition_levels = eligible,
             condition_col = condition_col,
@@ -308,6 +361,8 @@
                 n_dictionary_edges = nrow(fitted$fit$edge_dictionary),
                 n_statistically_supported_edges =
                     sum(one$statistically_supported %in% TRUE),
+                n_locally_supported_edges = sum(one$local_support %in% TRUE),
+                n_global_supported_edges = sum(one$global_support %in% TRUE),
                 n_projection_edges = sum(one$active %in% TRUE),
                 n_active_edges = sum(one$active %in% TRUE),
                 n_significant_edges = sum(one$active %in% TRUE),
