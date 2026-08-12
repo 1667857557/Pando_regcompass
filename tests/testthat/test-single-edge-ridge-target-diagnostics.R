@@ -1,4 +1,4 @@
-test_that("single-edge multi-task ridge keeps condition-by-edge dimensions", {
+test_that("single-edge condition ridge keeps condition-by-edge dimensions", {
     x <- list(
         A = matrix(seq_len(8), ncol = 1L,
                    dimnames = list(paste0("A", seq_len(8)), "edge1")),
@@ -12,8 +12,7 @@ test_that("single-edge multi-task ridge keeps condition-by-edge dimensions", {
     scaling <- .condition_ridge_scaling(x, 1e-8)
     fit <- .condition_ridge_fit(
         x = x, y = y, scaling = scaling,
-        lambda = 0.1, fusion_ratio = 1,
-        min_residual_df = 1L, inference = TRUE
+        lambda = 0.1, min_residual_df = 1L, inference = TRUE
     )
     expect_identical(fit$status, "ok")
     expect_equal(dim(fit$zero_variance), c(2L, 1L))
@@ -59,6 +58,7 @@ test_that("canonical source owns the single-edge fix", {
     body_text <- paste(deparse(body(.condition_ridge_fit)), collapse = "\n")
     expect_match(body_text, "zero_variance_values", fixed = TRUE)
     expect_match(body_text, "nrow = k", fixed = TRUE)
+    expect_false("fusion_ratio" %in% names(formals(.condition_ridge_fit)))
     expect_false(exists(
         ".pando_compact_ridge_one_pass_progress_impl",
         envir = asNamespace("Pando"), inherits = FALSE
