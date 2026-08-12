@@ -16,10 +16,11 @@ test_that("condition ridge inference requires BH and a valid threshold", {
     fit <- list(
         padj_threshold = padj_threshold,
         dictionary_support_table = data.frame(
-            edge_id = c("E1", "E2", "E1"),
-            condition = c("A", "A", "B"),
-            peak_target_cor = c(0.2, 0.3, 0.25),
-            tf_target_cor = c(0.4, 0.5, 0.35),
+            edge_id = c("E1", "E2", "E1", "E2"),
+            source_type = c("global", "global", "condition", "condition"),
+            condition = c(NA, NA, "A", "A"),
+            peak_target_cor = c(0.22, 0.31, 0.2, 0.3),
+            tf_target_cor = c(0.42, 0.51, 0.4, 0.5),
             stringsAsFactors = FALSE
         ),
         coefficients = data.frame(
@@ -35,32 +36,33 @@ test_that("condition ridge inference requires BH and a valid threshold", {
     fit
 }
 
-test_that("statistical support and local Pando support remain distinct", {
+test_that("global and local Pando support remain separately auditable", {
     fit <- Pando:::.condition_apply_activity_gate(.activity_fit_fixture())
     expect_identical(fit$coefficients$statistically_supported, rep(TRUE, 4L))
+    expect_identical(fit$coefficients$global_support, rep(TRUE, 4L))
     expect_identical(fit$coefficients$local_support,
-                     c(TRUE, TRUE, TRUE, FALSE))
-    expect_identical(fit$coefficients$active,
-                     c(TRUE, TRUE, TRUE, FALSE))
+                     c(TRUE, TRUE, FALSE, FALSE))
+    expect_identical(fit$coefficients$active, rep(TRUE, 4L))
     expect_identical(fit$coefficients$significant, fit$coefficients$active)
-    expect_equal(fit$coefficients$penalty_effect, c(0.5, 0.4, 0.6, 0))
+    expect_equal(fit$coefficients$penalty_effect, c(0.5, 0.4, 0.6, 0.7))
     expect_identical(
         fit$projection_policy,
-        "active_condition_pando_support_and_bh_ridge_effects"
+        "active_global_or_local_pando_support_and_condition_bh_ridge_effects"
     )
 })
 
-test_that("BH failure prevents activity even with local Pando support", {
+test_that("BH failure prevents activity even with global and local support", {
     fixture <- .activity_fit_fixture()
     fixture$coefficients$padj[[2L]] <- 0.2
     fit <- Pando:::.condition_apply_activity_gate(fixture)
     expect_false(fit$coefficients$statistically_supported[[2L]])
+    expect_true(fit$coefficients$global_support[[2L]])
     expect_true(fit$coefficients$local_support[[2L]])
     expect_false(fit$coefficients$active[[2L]])
     expect_equal(fit$coefficients$penalty_effect[[2L]], 0)
 })
 
-test_that("local support stores the condition-specific Pando correlations", {
+test_that("local and global support store their own Pando correlations", {
     fit <- Pando:::.condition_apply_activity_gate(.activity_fit_fixture())
     row_a1 <- which(fit$coefficients$edge_id == "E1" &
                     fit$coefficients$condition == "A")
@@ -68,8 +70,12 @@ test_that("local support stores the condition-specific Pando correlations", {
                     fit$coefficients$condition == "B")
     expect_equal(fit$coefficients$peak_target_cor[[row_a1]], 0.2)
     expect_equal(fit$coefficients$tf_target_cor[[row_a1]], 0.4)
+    expect_equal(fit$coefficients$global_peak_target_cor[[row_a1]], 0.22)
+    expect_equal(fit$coefficients$global_tf_target_cor[[row_a1]], 0.42)
     expect_true(is.na(fit$coefficients$peak_target_cor[[row_b2]]))
     expect_true(is.na(fit$coefficients$tf_target_cor[[row_b2]]))
+    expect_equal(fit$coefficients$global_peak_target_cor[[row_b2]], 0.31)
+    expect_equal(fit$coefficients$global_tf_target_cor[[row_b2]], 0.51)
 })
 
 test_that("obsolete significant-union refit helpers are absent", {
