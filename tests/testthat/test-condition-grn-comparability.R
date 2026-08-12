@@ -1,16 +1,11 @@
-test_that("exact union remains the common condition dictionary", {
-    global <- data.frame(
-        target = c("G", "G"),
-        tf = c("TF1", "TF2"),
-        region = c("P1", "P2"),
-        atac_feature_id = c("A1", "A2"),
-        peak_target_cor = c(0.4, 0.3),
-        tf_target_cor = c(0.5, 0.2),
-        stringsAsFactors = FALSE
-    )
+test_that("condition-wise Pando candidates form the exact common union", {
     control <- data.frame(
-        target = "G", tf = "TF3", region = "P3", atac_feature_id = "A3",
-        peak_target_cor = 0.6, tf_target_cor = 0.4,
+        target = c("G", "G"),
+        tf = c("TF1", "TF3"),
+        region = c("P1", "P3"),
+        atac_feature_id = c("A1", "A3"),
+        peak_target_cor = c(0.4, 0.6),
+        tf_target_cor = c(0.5, 0.4),
         stringsAsFactors = FALSE
     )
     drug <- data.frame(
@@ -18,18 +13,27 @@ test_that("exact union remains the common condition dictionary", {
         peak_target_cor = 0.7, tf_target_cor = 0.6,
         stringsAsFactors = FALSE
     )
-
     dictionary <- union_grn_edges(
-        global_edges = global,
+        global_edges = NULL,
         condition_edges = list(Control = control, Drug = drug)
     )
+    support <- Pando:::.condition_candidate_support_table(
+        list(Control = control, Drug = drug)
+    )
+    summary <- Pando:::.condition_candidate_support_summary(dictionary, support)
 
     expect_s3_class(dictionary, "PandoEdgeDictionary")
     expect_setequal(
         dictionary$edge_id,
-        c("G||TF1||P1", "G||TF2||P2", "G||TF3||P3")
+        c("G||TF1||P1", "G||TF3||P3")
     )
     expect_identical(anyDuplicated(dictionary$edge_id), 0L)
+    expect_equal(
+        summary$n_support_conditions[summary$edge_id == "G||TF1||P1"], 2L
+    )
+    expect_equal(
+        summary$n_support_conditions[summary$edge_id == "G||TF3||P3"], 1L
+    )
 })
 
 .rank_deficient_multitask_fixture <- function(n = 30L) {
@@ -52,8 +56,7 @@ test_that("ridge fits a raw rank-deficient common dictionary", {
     scaling <- Pando:::.condition_ridge_scaling(fixture$x, 1e-8)
     fit <- Pando:::.condition_ridge_fit(
         fixture$x, fixture$y, scaling,
-        lambda = 0.1, fusion_ratio = 1,
-        min_residual_df = 1L, inference = TRUE
+        lambda = 0.1, min_residual_df = 1L, inference = TRUE
     )
 
     expect_identical(fit$status, "ok")
@@ -64,27 +67,15 @@ test_that("ridge fits a raw rank-deficient common dictionary", {
     expect_true(is.matrix(fit$covariance_z))
 })
 
-test_that("fusion penalty shrinks cross-condition coefficient differences", {
+test_that("no-fusion ridge retains condition-specific coefficient differences", {
     fixture <- .rank_deficient_multitask_fixture()
     scaling <- Pando:::.condition_ridge_scaling(fixture$x, 1e-8)
-    independent <- Pando:::.condition_ridge_fit(
+    fit <- Pando:::.condition_ridge_fit(
         fixture$x, fixture$y, scaling,
-        lambda = 0.05, fusion_ratio = 0,
-        min_residual_df = 1L, inference = FALSE
+        lambda = 0.05, min_residual_df = 1L, inference = FALSE
     )
-    fused <- Pando:::.condition_ridge_fit(
-        fixture$x, fixture$y, scaling,
-        lambda = 0.05, fusion_ratio = 20,
-        min_residual_df = 1L, inference = FALSE
-    )
-
-    expect_identical(independent$status, "ok")
-    expect_identical(fused$status, "ok")
-    independent_gap <- sum((independent$beta["Control", ] -
-                            independent$beta["Drug", ])^2)
-    fused_gap <- sum((fused$beta["Control", ] -
-                      fused$beta["Drug", ])^2)
-    expect_lt(fused_gap, independent_gap)
+    expect_identical(fit$status, "ok")
+    expect_gt(sum((fit$beta["Control", ] - fit$beta["Drug", ])^2), 0)
 })
 
 test_that("condition-specific zero variance is diagnostic rather than fatal", {
@@ -105,7 +96,7 @@ test_that("condition-specific zero variance is diagnostic rather than fatal", {
     )
     scaling <- Pando:::.condition_ridge_scaling(x, 1e-8)
     fit <- Pando:::.condition_ridge_fit(
-        x, y, scaling, lambda = 0.1, fusion_ratio = 1,
+        x, y, scaling, lambda = 0.1,
         min_residual_df = 1L, inference = TRUE
     )
 
@@ -125,7 +116,6 @@ test_that("condition-stratified CV selects one lambda for every condition", {
     control <- Pando:::.condition_ridge_control(list(
         lambda_grid = c(0.01, 0.1, 1),
         lambda_rule = "1se",
-        fusion_ratio = 1,
         cv_folds = 4L,
         seed = 7L
     ))
@@ -144,13 +134,12 @@ test_that("condition-stratified CV selects one lambda for every condition", {
     expect_equal(nrow(cv$curve), length(control$lambda_grid))
 })
 
-test_that("joint covariance yields finite pairwise ridge contrasts", {
+test_that("joint block covariance yields finite pairwise ridge contrasts", {
     fixture <- .rank_deficient_multitask_fixture()
     scaling <- Pando:::.condition_ridge_scaling(fixture$x, 1e-8)
     fit <- Pando:::.condition_ridge_fit(
         fixture$x, fixture$y, scaling,
-        lambda = 0.1, fusion_ratio = 1,
-        min_residual_df = 1L, inference = TRUE
+        lambda = 0.1, min_residual_df = 1L, inference = TRUE
     )
     edges <- data.frame(
         tf = paste0("TF", 1:3), target = rep("G", 3),
@@ -167,13 +156,12 @@ test_that("joint covariance yields finite pairwise ridge contrasts", {
     expect_true(all(is.finite(contrast$contrast_se)))
 })
 
-test_that("rank action can retain strict raw-design auditing", {
+test_that("rank auditing remains available under ridge", {
     fixture <- .rank_deficient_multitask_fixture()
     scaling <- Pando:::.condition_ridge_scaling(fixture$x, 1e-8)
     fit <- Pando:::.condition_ridge_fit(
         fixture$x, fixture$y, scaling,
-        lambda = 0.1, fusion_ratio = 1,
-        min_residual_df = 1L, inference = FALSE
+        lambda = 0.1, min_residual_df = 1L, inference = FALSE
     )
     expect_identical(fit$status, "ok")
     expect_true(any(fit$raw_rank < sum(fit$informative)))
