@@ -23,8 +23,8 @@ infer_condition_grn(object, ...)
   rna_layer = "data",
   peak_layer = "data",
   peak_value_type = c("normalized", "probability", "other"),
-  tf_cor = 0.1,
-  peak_cor = 0,
+  tf_cor = 0.05,
+  peak_cor = 0.05,
   min_cells_per_condition = 50L,
   small_condition_action = c("error", "drop_condition", "skip_cell_type"),
   adjust_method = "BH",
@@ -49,7 +49,7 @@ infer_condition_grn(object, ...)
 \item{network_name}{Prefix for generated networks.}
 \item{peak_to_gene_method, upstream, downstream, extend, only_tss, peak_to_gene_domains}{Regulatory-domain controls.}
 \item{rna_layer, peak_layer, peak_value_type}{RNA and ATAC layers and peak-value semantics used consistently for discovery, fitting, and projection.}
-\item{tf_cor, peak_cor}{Absolute Pando candidate-discovery correlation thresholds. They are evaluated on all eligible-condition cells pooled together and independently within each condition.}
+\item{tf_cor, peak_cor}{Absolute Pando candidate-discovery correlation thresholds. Both default to 0.05, remain adjustable, and are evaluated on all eligible-condition cells pooled together and independently within each condition.}
 \item{min_cells_per_condition}{Minimum paired cells per fitted condition.}
 \item{small_condition_action}{Action for undersized conditions.}
 \item{adjust_method, padj_threshold}{Condition ridge inference requires BH adjustment. \code{padj_threshold}, default 0.05, determines whether a condition-specific ridge coefficient is statistically supported.}
@@ -68,7 +68,7 @@ infer_condition_grn(object, ...)
 \details{
 For exact edge \eqn{e=(g,f,r)}, candidate discovery preserves the original Pando peak-target and TF-target correlation gates. Let \eqn{G_e} denote that the edge passes both gates on all eligible-condition cells pooled together and \eqn{L_{e,c}} that it passes both gates within condition \eqn{c}. The fitted common dictionary is
 \deqn{D_g=\operatorname{unique}\{D_{g,global}\cup\bigcup_cD_{g,c}\}.}
-Deduplication uses the complete target-TF-region triple. Pooled/global support reduces candidate false negatives from unstable small-condition correlations; condition-local support is retained separately.
+Deduplication uses the complete target-TF-region triple. Pooled/global support reduces candidate false negatives from unstable small-condition correlations; condition-local support is retained separately. The configured \code{tf_cor} and \code{peak_cor} values are stored with the fit and are not fixed to their defaults.
 
 For edge \eqn{e} in condition \eqn{c}, the predictor remains the Pando interaction
 \deqn{x_{eic}=RNA_{TF(e),i}ATAC_{peak(e),i}.}
