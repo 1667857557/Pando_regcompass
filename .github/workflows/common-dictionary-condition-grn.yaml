@@ -63,6 +63,11 @@ jobs:
               ".condition_ridge_refit_contract_one_pass",
               ".condition_dictionary_screen",
               ".condition_subset_dictionary",
+              ".condition_fit_target_matrix",
+              ".condition_fit_dictionary_prepared",
+              ".pando_fixed_glm_target_payload",
+              ".pando_fixed_glm_target_worker",
+              "fit_grn_from_edges <- function",
               "aggregate_condition_grn_projection_strict",
               "zzzzz_condition_fit_contract",
           ]
@@ -76,11 +81,13 @@ jobs:
               "R/zzz_grn_runtime.R",
               "R/zzzz_grn_runtime_contract.R",
               "R/zzzzz_condition_fit_contract.R",
+              "R/condition_fixed_glm_target.R",
+              "man/fit_grn_from_edges.Rd",
           ]
           present_files = [path for path in obsolete_files if Path(path).exists()]
           if present_files:
               raise RuntimeError(
-                  f"late-loaded GRN runtime files remain: {present_files}"
+                  f"obsolete condition files remain: {present_files}"
               )
 
           namespace = Path("NAMESPACE").read_text()
@@ -88,6 +95,8 @@ jobs:
               raise RuntimeError("projection membership validator is not exported")
           if "export(aggregate_condition_grn_projection_strict)" in namespace:
               raise RuntimeError("strict aggregation variant is still exported")
+          if "export(fit_grn_from_edges)" in namespace:
+              raise RuntimeError("obsolete fixed-dictionary condition GLM is still exported")
 
           description = Path("DESCRIPTION").read_text()
           required_description = [
