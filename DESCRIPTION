@@ -25,20 +25,23 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     shrunk toward coefficients from other conditions. Ridge keeps the penalized
     system identifiable under severe collinearity and raw rank deficiency while
     preserving directly comparable condition coefficient coordinates. Robust
-    approximate ridge-Wald P values are BH adjusted within condition. An edge is
-    active when its condition-specific coefficient is estimable and BH-supported
-    and the exact edge has either pooled/global or that condition's local Pando
-    candidate support. Global support therefore protects dictionary admission
-    against unstable small-condition marginal correlations but cannot activate a
-    condition edge without condition-specific ridge evidence. Active
-    penalty_effect values are projected as beta times RNA(TF) times ATAC(peak).
-    Pairwise condition contrasts are computed directly from the no-fusion ridge
-    covariance. Coefficient and contrast P values remain approximate and
-    conditional on data-dependent candidate discovery and CV-selected ridge
-    regularization. Standard infer_grn retains the original Gaussian GLM as its
-    default method and additionally supports single-task ridge. Target-parallel
-    candidate discovery and ridge fitting use target-specific payload batches,
-    and independent cell-type jobs can be dispatched through BiocParallel.
+    approximate ridge-Wald P values are BH adjusted within condition. Once an
+    exact edge has entered the frozen common dictionary, its pooled/global and
+    condition-local correlation support are retained as candidate provenance and
+    do not veto a fitted condition effect. An edge is active in condition c when
+    its condition-specific ridge coefficient is estimable and BH-supported.
+    This allows a condition with noisy marginal correlations to recover an edge
+    admitted by pooled/global support or by another condition, while activity
+    still requires statistical evidence from that condition's own ridge fit.
+    Active penalty_effect values are projected as beta times RNA(TF) times
+    ATAC(peak). Pairwise condition contrasts are computed directly from the
+    no-fusion ridge covariance. Coefficient and contrast P values remain
+    approximate and conditional on data-dependent candidate discovery and
+    CV-selected ridge regularization. Standard infer_grn retains the original
+    Gaussian GLM as its default method and additionally supports single-task
+    ridge. Target-parallel candidate discovery and ridge fitting use target-
+    specific payload batches, and independent cell-type jobs can be dispatched
+    through BiocParallel.
 License: MIT
 Encoding: UTF-8
 LazyData: false
@@ -93,7 +96,7 @@ Remotes:
 Config/Pando/ConditionGRNSchema: pando_condition_grn_common_dictionary_v1
 Config/Pando/ConditionGRNModelSchema: pando_condition_grn_multitask_ridge_v3
 Config/Pando/ConditionGRNMethod: global-condition-union-single-no-fusion-ridge
-Config/Pando/ConditionProjectionPolicy: active-global-or-local-support-and-condition-BH-ridge
+Config/Pando/ConditionProjectionPolicy: condition-BH-supported-common-dictionary-ridge
 Config/Pando/ConditionInference: approximate-ridge-Wald-conditional-on-candidate-dictionary-and-CV-lambda
 Config/Pando/StandardRidgeSchema: pando_standard_grn_single_task_ridge_v1
 Config/Pando/StandardRidgeMethod: condition-ridge-k1
