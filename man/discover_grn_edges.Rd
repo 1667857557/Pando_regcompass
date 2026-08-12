@@ -10,14 +10,17 @@ discover_grn_edges(
   cells = NULL,
   source_label = "global",
   source_type = c("global", "condition"),
-  tf_cor = 0.1,
-  peak_cor = 0,
+  tf_cor = 0.05,
+  peak_cor = 0.05,
   peak_to_gene_method = c("Signac", "GREAT"),
   upstream = 1e+05,
   downstream = 0,
   extend = 1e+06,
   only_tss = FALSE,
   peak_to_gene_domains = NULL,
+  rna_layer = "data",
+  peak_layer = "data",
+  peak_value_type = c("normalized", "probability", "other"),
   parallel = FALSE,
   verbose = TRUE
 )
@@ -27,8 +30,9 @@ discover_grn_edges(
 \item{genes}{Target genes.}
 \item{cells}{Paired cells used for discovery.}
 \item{source_label, source_type}{Candidate-source provenance.}
-\item{tf_cor, peak_cor}{Absolute correlation thresholds.}
+\item{tf_cor, peak_cor}{Absolute correlation thresholds. Both default to 0.05 and remain adjustable over the supported range.}
 \item{peak_to_gene_method, upstream, downstream, extend, only_tss, peak_to_gene_domains}{Regulatory-domain controls.}
+\item{rna_layer, peak_layer, peak_value_type}{RNA/ATAC layers and peak-value semantics.}
 \item{parallel, verbose}{Execution controls.}
 }
 \value{A \code{PandoEdgeDictionary} candidate table.}
