@@ -1,5 +1,5 @@
 Package: Pando
-Version: 2.0.9
+Version: 2.0.10
 Type: Package
 Title: Inferring regulomes from multi-modal single-cell genomics data
 Authors@R: person(given = "Jonas Simon",
@@ -16,14 +16,21 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     every condition using the original Pando peak-to-gene, motif,
     peak-target-correlation and TF-target-correlation steps, and exact
     TF-peak-target triples are unioned into a broad candidate dictionary. A
-    preliminary joint multi-task ridge fit is used to compute condition-wise
-    ridge-Wald P values and BH-adjusted P values. Edges significant in at least
-    one condition are unioned to form the actual common fit dictionary. The
-    default adjusted-P threshold is 0.05 and remains user-configurable over the
-    ordinary adjusted-P threshold domain (0, 1), without an additional
-    condition-specific upper cap. All conditions are then refitted jointly on
-    this same significant-union dictionary. TF-by-ATAC predictors use one common
-    equal-condition within-condition RMS scale, matching the
+    preliminary joint multi-task ridge fit is used to compute the only
+    condition-wise coefficient ridge-Wald P values and BH-adjusted P values in
+    the condition workflow. Edges with preliminary BH support in at least one
+    condition are unioned to form the final shared fit dictionary, while the
+    condition-specific preliminary support mask is retained. The default
+    adjusted-P threshold is 0.05 and remains user-configurable over the ordinary
+    adjusted-P threshold domain (0, 1), without an additional condition-specific
+    upper cap. All conditions are then refitted jointly on this same screened
+    dictionary with coefficient inference disabled. The final refit supplies
+    quantitative condition coefficients on one common predictor space and does
+    not calculate a second coefficient standard error, Wald statistic, P value,
+    BH adjustment, or contrast P value. A final edge is active for projection
+    when it had preliminary BH support in that condition and its final refit
+    coefficient remains estimable and finite. TF-by-ATAC predictors use one
+    common equal-condition within-condition RMS scale, matching the
     condition-specific intercepts and equal-condition loss while preventing
     between-condition mean shifts from changing the ridge penalty. Exported
     coefficients are back-transformed to the original TF-by-ATAC units for
@@ -38,29 +45,26 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     condition number and effective degrees of freedom remain available as
     diagnostics. The public target-condition rsq field uses
     dictionary-conditional out-of-fold R-squared, while in-sample R-squared is
-    retained separately. In the final refit, a condition-specific edge is
-    active for downstream projection only when its coefficient is estimable and
-    its BH-adjusted ridge-Wald P value is below the configured threshold.
-    Pairwise condition contrasts are calculated directly from the joint
-    coefficient covariance rather than inferred from asymmetric significance
-    calls. The coefficient and contrast P values remain approximate and
-    conditional on data-dependent candidate discovery, significance screening,
-    CV-selected lambda and fusion regularization. Standard infer_grn retains
-    the original Gaussian GLM as its default method and additionally supports a
-    single-task ridge method. Standard ridge is the K=1 special case of the same
-    condition ridge solver, so the fusion term is exactly zero while the same CV
-    lambda selection, within-task RMS predictor scaling, effective degrees of
-    freedom and ridge-Wald diagnostics are retained. Condition and standard
-    ridge routing are implemented directly in their canonical S3 methods rather
-    than late-loaded method replacements. Target-parallel candidate discovery,
-    fixed-dictionary GLM fitting and ridge refits dispatch only target-specific
-    RNA, ATAC, motif and edge-dictionary slices in worker-sized batches through
-    namespace-level workers, avoiding serialization of the mapper frame or the
-    full prepared multiome object. BiocParallel target pools are reused across
-    target stages and stopped after the corresponding fit when Pando started
-    them. Independent cell-type jobs can also be dispatched through
-    BiocParallel, and bundled reference datasets are installed as standalone
-    RData files.
+    retained separately. Final pairwise condition contrasts are direct
+    differences between the jointly refitted coefficients and are quantitative
+    estimates only. Preliminary screen P values remain approximate and
+    conditional on data-dependent candidate discovery, CV-selected lambda and
+    fusion regularization; they are not P values for the post-screen final
+    coefficients. Standard infer_grn retains the original Gaussian GLM as its
+    default method and additionally supports a single-task ridge method. Standard
+    ridge is the K=1 special case of the same condition ridge solver, so the
+    fusion term is exactly zero while the same CV lambda selection, within-task
+    RMS predictor scaling, effective degrees of freedom and ridge-Wald
+    diagnostics are retained. Condition and standard ridge routing are
+    implemented directly in their canonical S3 methods rather than late-loaded
+    method replacements. Target-parallel candidate discovery, fixed-dictionary
+    GLM fitting and ridge fits dispatch only target-specific RNA, ATAC, motif and
+    edge-dictionary slices in worker-sized batches through namespace-level
+    workers, avoiding serialization of the mapper frame or the full prepared
+    multiome object. BiocParallel target pools are reused across target stages
+    and stopped after the corresponding fit when Pando started them. Independent
+    cell-type jobs can also be dispatched through BiocParallel, and bundled
+    reference datasets are installed as standalone RData files.
 License: MIT
 Encoding: UTF-8
 LazyData: false
@@ -114,9 +118,9 @@ Remotes:
     github::immunogenomics/presto
 Config/Pando/ConditionGRNSchema: pando_condition_grn_common_dictionary_v1
 Config/Pando/ConditionGRNModelSchema: pando_condition_grn_multitask_ridge_v2
-Config/Pando/ConditionGRNMethod: significant-union-multitask-ridge-refit
-Config/Pando/ConditionProjectionPolicy: padj-significant-ridge-effects
-Config/Pando/ConditionInference: approximate-ridge-Wald-screen-and-refit
+Config/Pando/ConditionGRNMethod: screened-union-multitask-ridge-effect-refit
+Config/Pando/ConditionProjectionPolicy: screen-bh-supported-refit-ridge-effects
+Config/Pando/ConditionInference: preliminary-ridge-Wald-BH-screen-only-final-refit-no-inference
 Config/Pando/StandardRidgeSchema: pando_standard_grn_single_task_ridge_v1
 Config/Pando/StandardRidgeMethod: condition-ridge-k1
 Config/Pando/TargetParallelMemoryPolicy: namespace-worker-target-specific-payload-batches
