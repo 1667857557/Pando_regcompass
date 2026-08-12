@@ -52,7 +52,7 @@ infer_condition_grn(object, ...)
 \item{tf_cor, peak_cor}{Absolute Pando candidate-discovery correlation thresholds. Both default to 0.05, remain adjustable, and are evaluated on all eligible-condition cells pooled together and independently within each condition.}
 \item{min_cells_per_condition}{Minimum paired cells per fitted condition.}
 \item{small_condition_action}{Action for undersized conditions.}
-\item{adjust_method, padj_threshold}{Condition ridge inference requires BH adjustment. \code{padj_threshold}, default 0.05, determines whether a condition-specific ridge coefficient is statistically supported.}
+\item{adjust_method, padj_threshold}{Condition ridge inference requires BH adjustment. \code{padj_threshold}, default 0.05, determines whether an estimable condition-specific ridge coefficient is active after the common dictionary has been frozen.}
 \item{rank_action}{With \code{"mark"}, raw rank deficiency is retained as a diagnostic because ridge remains identifiable. \code{"error"} requests strict failure.}
 \item{min_residual_df}{Minimum effective residual degrees of freedom for the regularized fit.}
 \item{parallel}{Enable parallel execution.}
@@ -70,6 +70,8 @@ For exact edge \eqn{e=(g,f,r)}, candidate discovery preserves the original Pando
 \deqn{D_g=\operatorname{unique}\{D_{g,global}\cup\bigcup_cD_{g,c}\}.}
 Deduplication uses the complete target-TF-region triple. Pooled/global support reduces candidate false negatives from unstable small-condition correlations; condition-local support is retained separately. The configured \code{tf_cor} and \code{peak_cor} values are stored with the fit and are not fixed to their defaults.
 
+The correlation gates determine dictionary admission only. Once an exact edge belongs to \eqn{D_g}, it is retained as a predictor in every fitted condition even when that condition did not itself pass the marginal-correlation gates.
+
 For edge \eqn{e} in condition \eqn{c}, the predictor remains the Pando interaction
 \deqn{x_{eic}=RNA_{TF(e),i}ATAC_{peak(e),i}.}
 Every condition uses the same ordered dictionary. Predictors use an equal-condition RMS within-condition scaling and stored coefficients are back-transformed to raw TF-by-ATAC units.
@@ -78,11 +80,12 @@ For \eqn{K} conditions the numerical objective is proportional to
 \deqn{\frac{1}{K}\sum_c\frac{||y_c-X_c\beta_c||_2^2}{n_c}+\lambda\sum_c||\beta_c||_2^2.}
 There is no cross-condition fusion term. Conditions therefore share dictionary coordinates, scaling convention, and one target-specific CV-selected lambda while retaining independently estimated coefficient blocks. Ridge keeps the penalized system identifiable under severe collinearity and raw rank deficiency.
 
-Condition-specific approximate ridge-Wald P values are BH adjusted. An edge is active in condition \eqn{c} when its coefficient is estimable, its adjusted P value is below \code{padj_threshold}, and it has pooled/global or condition-local Pando candidate support:
-\deqn{A_{e,c}=1\{estimable_{e,c}\land padj_{e,c}<\tau\}(G_e\lor L_{e,c}).}
+Condition-specific approximate ridge-Wald P values are BH adjusted. Because every coefficient row already belongs to the frozen common dictionary, an edge is active in condition \eqn{c} when its own coefficient is estimable and its adjusted P value is below \code{padj_threshold}:
+\deqn{A_{e,c}=1\{estimable_{e,c}\land padj_{e,c}<\tau\}.}
+The pooled/global and condition-local flags \eqn{G_e} and \eqn{L_{e,c}} remain candidate-provenance annotations and are not reapplied as a post-fit veto. Consequently an edge admitted globally or by another condition can still be active in condition \eqn{c} when that condition's own ridge coefficient is BH-supported.
+
 The exported effect is
 \deqn{penalty\_effect_{e,c}=A_{e,c}\widehat\beta_{e,c}.}
-Thus pooled/global correlation support can admit an edge that a small condition misses at the marginal-correlation stage, but cannot activate that condition edge without condition-specific ridge evidence.
 
 Direct contrasts use \eqn{\Delta\beta_e=\beta_{e,A}-\beta_{e,B}} on the same coefficient coordinate. Coefficient and contrast P values remain approximate and conditional on data-dependent candidate discovery and CV-selected ridge regularization; they are not exact post-selection inference.
 
