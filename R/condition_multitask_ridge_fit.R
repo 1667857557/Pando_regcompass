@@ -300,7 +300,8 @@
                 preprocessing_fingerprint = prepared$preprocessing_fingerprint,
                 adjust_method = fit$adjust_method,
                 padj_threshold = fit$padj_threshold,
-                projection_policy = "statistical_support_pending_local_pando_gate",
+                projection_policy =
+                    "condition_bh_supported_common_dictionary_ridge_effects",
                 ridge_control = control
             )
         )
@@ -319,7 +320,8 @@
     fit$fit <- fit_table
     fit$scale <- FALSE
     fit$projection_effect_column <- "penalty_effect"
-    fit$projection_policy <- "statistical_support_pending_local_pando_gate"
+    fit$projection_policy <-
+        "condition_bh_supported_common_dictionary_ridge_effects"
     fit$ridge_control <- control
     fit$target_cv <- lapply(result, function(one) {
         one$cv[c("lambda", "lambda_min", "cv_mse", "cv_se",
