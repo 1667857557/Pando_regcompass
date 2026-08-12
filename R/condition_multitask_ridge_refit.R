@@ -1,8 +1,9 @@
-# Joint multi-task ridge refit of one exact-union ConditionGRNFit skeleton.
+# Joint multi-task ridge fitting of one exact common-dictionary ConditionGRNFit.
 #
-# This file contains the canonical one-pass estimator. Target-level execution is
-# memory bounded through condition_target_parallel.R; no later-loaded function
-# replacement is required.
+# The same estimator is used in two roles. Preliminary screening requests
+# approximate ridge-Wald inference. The final statistically screened common
+# dictionary is refit with inference disabled so its coefficients are quantitative
+# condition effects rather than a second post-selection significance test.
 
 .condition_ridge_contrasts <- function(
     fit, edges, condition_informative, scaling) {
@@ -59,7 +60,7 @@
 
 .condition_ridge_target <- function(
     prepared, edges, cells_by_condition, folds, control,
-    min_residual_df, rank_action) {
+    min_residual_df, rank_action, inference = TRUE) {
     x <- .condition_ridge_predictors(prepared, edges, cells_by_condition)
     y <- lapply(cells_by_condition, function(cells) {
         as.numeric(prepared$gene_data[cells, edges$target[[1L]]])
@@ -69,10 +70,10 @@
     scaling <- .condition_ridge_scaling(x, control$scale_floor)
     fit <- .condition_ridge_fit(
         x, y, scaling, cv$lambda, control$fusion_ratio,
-        min_residual_df, inference = TRUE
+        min_residual_df, inference = isTRUE(inference)
     )
     if (!identical(fit$status, "ok")) {
-        stop("Final multi-task ridge failed for target `",
+        stop("Multi-task ridge failed for target `",
              edges$target[[1L]], "`: ", fit$status, ".", call. = FALSE)
     }
     raw_rank_deficient <- fit$raw_rank < sum(fit$informative)
@@ -159,6 +160,7 @@
             n_aliased = 0L,
             condition_weight = fit$weight[[i]],
             predictor_scale_reference = scaling$reference,
+            inference_performed = isTRUE(inference),
             stringsAsFactors = FALSE
         )
     }
@@ -173,10 +175,25 @@
     )
 }
 
+# Final post-screen refit worker. It deliberately disables covariance, Wald
+# statistics and P values while retaining CV-selected ridge/fusion coefficients.
+.pando_ridge_effect_target_worker <- function(payload) {
+    .condition_ridge_target(
+        prepared = payload$prepared,
+        edges = payload$edges,
+        cells_by_condition = payload$cells,
+        folds = payload$folds,
+        control = payload$control,
+        min_residual_df = payload$min_residual_df,
+        rank_action = payload$rank_action,
+        inference = FALSE
+    )
+}
+
 .condition_ridge_refit_contract_one_pass <- function(
     object, fit, prepared, control, rank_action = "mark",
     min_residual_df = 1L, parallel = FALSE, verbose = TRUE,
-    progress_phase = NULL, progress_label = NULL) {
+    progress_phase = NULL, progress_label = NULL, inference = TRUE) {
     .condition_validate_dictionary(fit$edge_dictionary, prepared)
     cells <- fit$condition_cell_ids[fit$condition_levels]
     if (any(lengths(cells) < 3L)) {
@@ -195,6 +212,11 @@
         }
     }
     if (is.null(progress_label)) progress_label <- fit$cell_type %||% ""
+    worker_name <- if (isTRUE(inference)) {
+        ".pando_ridge_target_worker"
+    } else {
+        ".pando_ridge_effect_target_worker"
+    }
 
     result <- .pando_target_payload_map(
         keys = targets,
@@ -210,7 +232,7 @@
                 rank_action = rank_action
             )
         },
-        worker_name = ".pando_ridge_target_worker",
+        worker_name = worker_name,
         parallel = parallel,
         verbose = verbose,
         phase = progress_phase,
@@ -224,19 +246,24 @@
     if (is.data.frame(contrast) && nrow(contrast)) rownames(contrast) <- NULL
 
     coefficient$padj <- NA_real_
-    for (condition in fit$condition_levels) {
-        index <- which(coefficient$condition == condition)
-        valid <- index[coefficient$estimable[index] %in% TRUE &
-                       is.finite(coefficient$pval[index])]
-        if (length(valid)) {
-            coefficient$padj[valid] <- stats::p.adjust(
-                coefficient$pval[valid], method = fit$adjust_method
-            )
+    if (isTRUE(inference)) {
+        for (condition in fit$condition_levels) {
+            index <- which(coefficient$condition == condition)
+            valid <- index[coefficient$estimable[index] %in% TRUE &
+                           is.finite(coefficient$pval[index])]
+            if (length(valid)) {
+                coefficient$padj[valid] <- stats::p.adjust(
+                    coefficient$pval[valid], method = fit$adjust_method
+                )
+            }
         }
     }
-    coefficient$significant <- coefficient$estimable &
-        is.finite(coefficient$padj) &
-        coefficient$padj < fit$padj_threshold
+    coefficient$significant <- if (isTRUE(inference)) {
+        coefficient$estimable & is.finite(coefficient$padj) &
+            coefficient$padj < fit$padj_threshold
+    } else {
+        rep(FALSE, nrow(coefficient))
+    }
     coefficient$penalty_effect <- ifelse(
         coefficient$estimable & is.finite(coefficient$estimate),
         coefficient$estimate,
@@ -247,29 +274,48 @@
         ifelse(coefficient$estimate > 0, "positive",
                ifelse(coefficient$estimate < 0, "negative", "zero"))
     )
-    coefficient$effect_definition <-
-        "multitask_ridge_condition_coefficient_raw_tf_atac_units"
-    coefficient$inference_scope <-
-        "approximate_ridge_wald_diagnostic_conditional_on_dictionary_cv_lambda_and_fusion"
+    coefficient$effect_definition <- if (isTRUE(inference)) {
+        "multitask_ridge_dictionary_screen_coefficient_raw_tf_atac_units"
+    } else {
+        "multitask_ridge_screened_dictionary_refit_coefficient_raw_tf_atac_units"
+    }
+    coefficient$inference_scope <- if (isTRUE(inference)) {
+        "approximate_ridge_wald_screen_conditional_on_candidate_dictionary_cv_lambda_and_fusion"
+    } else {
+        "post_screen_joint_ridge_effect_estimation_only_no_final_inference"
+    }
 
     if (is.data.frame(contrast) && nrow(contrast)) {
         contrast$contrast_padj <- NA_real_
-        pair_key <- paste(contrast$condition_a, contrast$condition_b, sep = "\001")
-        for (key in unique(pair_key)) {
-            index <- which(pair_key == key)
-            valid <- index[contrast$contrast_estimable[index] %in% TRUE &
-                           is.finite(contrast$contrast_pval[index])]
-            if (length(valid)) {
-                contrast$contrast_padj[valid] <- stats::p.adjust(
-                    contrast$contrast_pval[valid], method = fit$adjust_method
-                )
+        if (isTRUE(inference)) {
+            pair_key <- paste(
+                contrast$condition_a, contrast$condition_b, sep = "\001"
+            )
+            for (key in unique(pair_key)) {
+                index <- which(pair_key == key)
+                valid <- index[
+                    contrast$contrast_estimable[index] %in% TRUE &
+                    is.finite(contrast$contrast_pval[index])
+                ]
+                if (length(valid)) {
+                    contrast$contrast_padj[valid] <- stats::p.adjust(
+                        contrast$contrast_pval[valid], method = fit$adjust_method
+                    )
+                }
             }
         }
-        contrast$contrast_significant <- contrast$contrast_estimable &
-            is.finite(contrast$contrast_padj) &
-            contrast$contrast_padj < fit$padj_threshold
-        contrast$inference_scope <-
-            "approximate_joint_ridge_wald_contrast_diagnostic"
+        contrast$contrast_significant <- if (isTRUE(inference)) {
+            contrast$contrast_estimable &
+                is.finite(contrast$contrast_padj) &
+                contrast$contrast_padj < fit$padj_threshold
+        } else {
+            rep(FALSE, nrow(contrast))
+        }
+        contrast$inference_scope <- if (isTRUE(inference)) {
+            "approximate_joint_ridge_wald_contrast_screen_diagnostic"
+        } else {
+            "post_screen_joint_ridge_contrast_estimate_only_no_final_inference"
+        }
     }
 
     for (condition in fit$condition_levels) {
@@ -302,6 +348,8 @@
                 preprocessing_fingerprint = prepared$preprocessing_fingerprint,
                 adjust_method = fit$adjust_method,
                 padj_threshold = fit$padj_threshold,
+                inference_performed = isTRUE(inference),
+                inference_scope = unique(coefficient$inference_scope),
                 projection_policy = "continuous_estimable_ridge_effects",
                 ridge_control = control
             )
@@ -311,11 +359,15 @@
     }
 
     fit$model_schema <- .condition_multitask_ridge_schema
-    fit$fit_engine <- "two_stage_exact_edge_union_multitask_ridge"
+    fit$fit_engine <- if (isTRUE(inference)) {
+        "candidate_dictionary_multitask_ridge_screen"
+    } else {
+        "screened_dictionary_multitask_ridge_effect_refit"
+    }
     fit$coefficient_scale <- "raw_tf_atac_interaction_units"
     fit$internal_predictor_scale <- "equal_condition_within_condition_rms"
-    fit$inference_scope <-
-        "approximate_ridge_wald_diagnostic_conditional_on_dictionary_cv_lambda_and_fusion"
+    fit$inference_scope <- unique(coefficient$inference_scope)[[1L]]
+    fit$inference_performed <- isTRUE(inference)
     fit$coefficients <- coefficient
     fit$contrasts <- contrast
     fit$fit <- fit_table
