@@ -1,5 +1,5 @@
-# Keep each stored Pando Network synchronized with the screened ConditionGRNFit.
-# This file loads after condition_multitask_ridge_significance.R.
+# Keep each stored Pando Network synchronized with the final active
+# ConditionGRNFit after the single no-fusion ridge fit.
 
 .condition_update_network_significance <- function(object, fit) {
     for (condition in fit$condition_levels) {
@@ -14,10 +14,18 @@
         params <- methods::slot(network, "params")
         params$edge_dictionary <- fit$edge_dictionary
         params$padj_threshold <- fit$padj_threshold
-        params$projection_policy <- .condition_significant_projection_policy
-        params$fit_dictionary_policy <- .condition_fit_dictionary_policy
+        params$projection_policy <- fit$projection_policy
+        params$fit_dictionary_policy <- fit$fit_dictionary_policy
+        params$fit_engine <- fit$fit_engine
         params$candidate_edge_count <- fit$candidate_edge_count
         params$fit_dictionary_edge_count <- fit$fit_dictionary_edge_count
+        params$candidate_tf_cor <- fit$candidate_tf_cor
+        params$candidate_peak_cor <- fit$candidate_peak_cor
+        params$dictionary_support_role <- fit$dictionary_support_role
+        params$local_support_role <- fit$local_support_role
+        params$global_support_role <- fit$global_support_role
+        params$statistical_support_role <- fit$statistical_support_role
+        params$inference_scope <- fit$inference_scope
         methods::slot(network, "params") <- params
         object@grn@networks[[network_name]] <- network
     }

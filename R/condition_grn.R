@@ -159,8 +159,7 @@
     regions <- NetworkRegions(object)
     if (!length(regions@peaks) || is.null(regions@motifs) ||
         !nrow(regions@motifs@data)) {
-        stop("Pando regions lack measured-peak or motif mappings.",
-             call. = FALSE)
+        stop("Pando regions lack measured-peak or motif mappings.", call. = FALSE)
     }
     if (any(regions@peaks < 1L | regions@peaks > ncol(peak_data_all))) {
         stop("Pando region-to-peak indices are out of range.", call. = FALSE)
@@ -267,8 +266,6 @@
     )
 }
 
-# Canonical candidate-discovery entry. The heavy target loop lives in
-# condition_target_parallel.R and receives only target-specific payloads.
 .condition_discover_edges_prepared <- function(
     prepared, cells, source_label, source_type, tf_cor, peak_cor,
     parallel = FALSE, verbose = TRUE) {
@@ -295,13 +292,14 @@
 #' @param cells Paired cells used for candidate discovery.
 #' @param source_label Label stored with the candidate source.
 #' @param source_type Either `"global"` or `"condition"`.
-#' @param tf_cor,peak_cor Absolute correlation thresholds.
+#' @param tf_cor,peak_cor Absolute correlation thresholds; defaults are 0.05
+#'   for both and user-supplied values in [0, 1] are preserved.
 #' @param ... Regulatory-domain and execution arguments.
 #' @return A `PandoEdgeDictionary` data frame.
 #' @export
 discover_grn_edges <- function(
     object, genes = NULL, cells = NULL, source_label = "global",
-    source_type = c("global", "condition"), tf_cor = 0.1, peak_cor = 0,
+    source_type = c("global", "condition"), tf_cor = 0.05, peak_cor = 0.05,
     peak_to_gene_method = c("Signac", "GREAT"), upstream = 100000,
     downstream = 0, extend = 1000000, only_tss = FALSE,
     peak_to_gene_domains = NULL, rna_layer = "data", peak_layer = "data",
@@ -549,285 +547,6 @@ union_grn_edges <- function(global_edges = NULL, condition_edges) {
     invisible(TRUE)
 }
 
-.condition_fit_target_matrix <- function(
-    response, predictor, terms, rank_action = c("mark", "error"),
-    min_residual_df = 1L) {
-    rank_action <- match.arg(rank_action)
-    response <- as.numeric(response)
-    predictor <- as.matrix(predictor)
-    if (length(response) != nrow(predictor) || ncol(predictor) != length(terms)) {
-        stop("Target response and fixed-dictionary matrix are misaligned.",
-             call. = FALSE)
-    }
-    template <- data.frame(
-        term = terms, estimate = NA_real_, std_err = NA_real_,
-        statistic = NA_real_, pval = NA_real_, estimable = FALSE,
-        zero_variance = FALSE, aliased = FALSE,
-        stringsAsFactors = FALSE
-    )
-    if (!all(is.finite(response)) || !all(is.finite(predictor))) {
-        return(list(
-            coefs = template,
-            gof = data.frame(
-                rsq = NA_real_, rank = NA_integer_, residual_df = NA_integer_,
-                condition_number = NA_real_, fit_status = "nonfinite_input",
-                intercept = NA_real_, stringsAsFactors = FALSE
-            )
-        ))
-    }
-    variance <- apply(predictor, 2L, stats::var)
-    template$zero_variance <- !is.finite(variance) | variance <= 0
-    if (nrow(predictor) <= 1L ||
-        nrow(predictor) - 1L < as.integer(min_residual_df)) {
-        return(list(
-            coefs = template,
-            gof = data.frame(
-                rsq = NA_real_, rank = NA_integer_, residual_df = 0L,
-                condition_number = NA_real_, fit_status = "insufficient_df",
-                intercept = NA_real_, stringsAsFactors = FALSE
-            )
-        ))
-    }
-    colnames(predictor) <- terms
-    model_data <- data.frame(
-        target_response = response, predictor, check.names = FALSE
-    )
-    fit <- tryCatch(
-        stats::glm(
-            target_response ~ ., data = model_data,
-            family = stats::gaussian(link = "identity")
-        ),
-        error = function(error) error
-    )
-    if (inherits(fit, "error")) {
-        return(list(
-            coefs = template,
-            gof = data.frame(
-                rsq = NA_real_, rank = NA_integer_, residual_df = NA_integer_,
-                condition_number = NA_real_, fit_status = "failed",
-                intercept = NA_real_, stringsAsFactors = FALSE
-            )
-        ))
-    }
-    coefficient <- stats::coef(fit)
-    summary_matrix <- summary(fit)$coefficients
-    for (j in seq_along(terms)) {
-        term <- terms[[j]]
-        template$estimate[[j]] <- unname(coefficient[[term]])
-        if (term %in% rownames(summary_matrix)) {
-            template$std_err[[j]] <- summary_matrix[term, 2L]
-            template$statistic[[j]] <- summary_matrix[term, 3L]
-            template$pval[[j]] <- summary_matrix[term, 4L]
-        }
-    }
-    template$estimable <- is.finite(template$estimate)
-    template$aliased <- !template$estimable
-    if (identical(rank_action, "error") && any(template$aliased)) {
-        stop("The fixed dictionary is rank deficient for this target.",
-             call. = FALSE)
-    }
-    rsq <- if (is.finite(fit$null.deviance) && fit$null.deviance > 0) {
-        1 - fit$deviance / fit$null.deviance
-    } else NA_real_
-    condition_number <- if (ncol(predictor) <= 2000L) {
-        tryCatch(
-            as.numeric(kappa(stats::model.matrix(fit), exact = FALSE)),
-            error = function(error) NA_real_
-        )
-    } else NA_real_
-    status <- if (fit$df.residual < as.integer(min_residual_df)) {
-        "insufficient_df"
-    } else if (any(template$aliased)) {
-        "rank_deficient"
-    } else {
-        "ok"
-    }
-    if (identical(status, "insufficient_df")) {
-        template$estimate[] <- NA_real_
-        template$std_err[] <- NA_real_
-        template$statistic[] <- NA_real_
-        template$pval[] <- NA_real_
-        template$estimable[] <- FALSE
-        template$aliased[] <- TRUE
-        coefficient[["(Intercept)"]] <- NA_real_
-    }
-    list(
-        coefs = template,
-        gof = data.frame(
-            rsq = rsq, rank = as.integer(fit$rank),
-            residual_df = as.integer(fit$df.residual),
-            condition_number = condition_number, fit_status = status,
-            intercept = unname(coefficient[["(Intercept)"]]),
-            stringsAsFactors = FALSE
-        )
-    )
-}
-
-.condition_fit_dictionary_prepared <- function(
-    object, prepared, edge_dictionary, cells, condition_label,
-    network_name, adjust_method, padj_threshold, rank_action,
-    min_residual_df, parallel, verbose, overwrite) {
-    .condition_validate_dictionary(edge_dictionary, prepared)
-    cells <- intersect(as.character(cells), rownames(prepared$gene_data))
-    if (length(cells) < 3L) {
-        stop("Fixed-dictionary fitting requires at least three paired cells.",
-             call. = FALSE)
-    }
-    if (network_name %in% names(object@grn@networks) && !isTRUE(overwrite)) {
-        stop("Network `", network_name, "` already exists; set overwrite=TRUE.",
-             call. = FALSE)
-    }
-    targets <- unique(as.character(edge_dictionary$target))
-    names(targets) <- targets
-    result <- .pando_target_payload_map(
-        keys = targets,
-        build_payload = function(target) {
-            .pando_fixed_glm_target_payload(
-                prepared = prepared,
-                edge_dictionary = edge_dictionary,
-                target = target,
-                cells = cells,
-                rank_action = rank_action,
-                min_residual_df = min_residual_df
-            )
-        },
-        worker_name = ".pando_fixed_glm_target_worker",
-        parallel = parallel,
-        verbose = verbose,
-        phase = "fixed_dictionary_glm",
-        label = condition_label
-    )
-    coefficient <- do.call(rbind, lapply(result, `[[`, "coefs"))
-    fit_table <- do.call(rbind, lapply(result, `[[`, "gof"))
-    rownames(coefficient) <- rownames(fit_table) <- NULL
-    fit_table$nvariables <- as.integer(fit_table$nvariables_dictionary)
-    coefficient$padj <- NA_real_
-    valid <- is.finite(coefficient$pval)
-    coefficient$padj[valid] <- stats::p.adjust(
-        coefficient$pval[valid], method = adjust_method
-    )
-    coefficient$significant <- coefficient$estimable &
-        is.finite(coefficient$padj) & coefficient$padj < padj_threshold
-    coefficient$penalty_effect <- ifelse(
-        coefficient$significant, coefficient$estimate, 0
-    )
-    coefficient$direction <- ifelse(
-        !coefficient$estimable, "undefined",
-        ifelse(coefficient$estimate > 0, "positive",
-               ifelse(coefficient$estimate < 0, "negative", "zero"))
-    )
-    coefficient$condition <- condition_label
-    coefficient$effect_definition <- "fixed_dictionary_condition_glm_coefficient"
-    coefficient$inference_scope <- "conditional_on_selected_edge_dictionary"
-    coefficient <- coefficient[, c(
-        "tf", "target", "region", "term", "edge_id", "atac_feature_id",
-        "estimate", "std_err", "statistic", "pval", "padj",
-        "significant", "penalty_effect", "direction", "estimable",
-        "zero_variance", "aliased", "condition", "candidate_index",
-        "source_global", "source_conditions", "n_sources",
-        "effect_definition", "inference_scope"
-    ), drop = FALSE]
-    fit_table$condition <- condition_label
-    fit_table$n_cells <- length(cells)
-    network <- methods::new(
-        Class = "Network",
-        features = unique(as.character(coefficient$target)),
-        coefs = coefficient,
-        fit = fit_table,
-        params = list(
-            method = "glm",
-            family = "gaussian_identity",
-            fit_mode = "fixed_edge_dictionary",
-            condition = condition_label,
-            edge_dictionary = edge_dictionary,
-            scale = FALSE,
-            interaction = ":",
-            rna_layer = prepared$rna_layer,
-            peak_layer = prepared$peak_layer,
-            peak_value_type = prepared$peak_value_type,
-            preprocessing_fingerprint = prepared$preprocessing_fingerprint,
-            dictionary_preprocessing_provenance_verified = isTRUE(attr(
-                edge_dictionary,
-                "preprocessing_provenance_verified",
-                exact = TRUE
-            )),
-            adjust_method = adjust_method,
-            padj_threshold = padj_threshold,
-            inference_scope = "conditional_on_selected_edge_dictionary"
-        )
-    )
-    object@grn@networks[[network_name]] <- network
-    object@grn@active_network <- network_name
-    list(object = object, network = network, coefficients = coefficient,
-         fit = fit_table)
-}
-
-#' Fit a Pando Gaussian GLM from a frozen edge dictionary
-#'
-#' @param object A `GRNData` object.
-#' @param edge_dictionary Exact common TF-peak-target dictionary.
-#' @param cells Cells belonging to one condition.
-#' @param condition_label Condition label.
-#' @param network_name Output Pando network name.
-#' @param adjust_method Multiple-testing method passed to `p.adjust()`.
-#' @param padj_threshold Adjusted-P threshold defining effects used by penalty.
-#' @param rank_action Mark or error on aliased coefficients.
-#' @param min_residual_df Minimum residual degrees of freedom.
-#' @param ... Regulatory-domain and execution arguments.
-#' @return The input `GRNData` with one added standard `Network` object.
-#' @export
-fit_grn_from_edges <- function(
-    object, edge_dictionary, cells = NULL, condition_label = NULL,
-    network_name = "fixed_dictionary_grn", adjust_method = "BH",
-    padj_threshold = 0.05, rank_action = c("mark", "error"),
-    min_residual_df = 1L, genes = NULL,
-    peak_to_gene_method = c("Signac", "GREAT"), upstream = 100000,
-    downstream = 0, extend = 1000000, only_tss = FALSE,
-    peak_to_gene_domains = NULL, method = "glm",
-    family = stats::gaussian(link = "identity"), interaction_term = ":",
-    scale = FALSE, rna_layer = "data", peak_layer = "data",
-    peak_value_type = c("normalized", "probability", "other"),
-    parallel = FALSE, overwrite = FALSE, verbose = TRUE) {
-    peak_value_type <- match.arg(peak_value_type)
-    family_name <- tryCatch(family$family, error = function(error) NA_character_)
-    family_link <- tryCatch(family$link, error = function(error) NA_character_)
-    if (!identical(method, "glm") || !identical(family_name, "gaussian") ||
-        !identical(family_link, "identity") ||
-        !identical(interaction_term, ":") || !identical(scale, FALSE)) {
-        stop(
-            "Comparable fixed-dictionary fitting requires method='glm', ",
-            "Gaussian identity, interaction_term=':', and scale=FALSE.",
-            call. = FALSE
-        )
-    }
-    if (!is.numeric(padj_threshold) || length(padj_threshold) != 1L ||
-        !is.finite(padj_threshold) || padj_threshold <= 0 ||
-        padj_threshold >= 1) {
-        stop("`padj_threshold` must be one number in (0, 1).",
-             call. = FALSE)
-    }
-    rank_action <- match.arg(rank_action)
-    prepared <- .condition_prepare_common_input(
-        object, genes = if (is.null(genes)) unique(edge_dictionary$target) else genes,
-        peak_to_gene_method = peak_to_gene_method,
-        upstream = upstream, downstream = downstream, extend = extend,
-        only_tss = only_tss, peak_to_gene_domains = peak_to_gene_domains,
-        rna_layer = rna_layer, peak_layer = peak_layer,
-        peak_value_type = peak_value_type, verbose = verbose
-    )
-    if (is.null(cells)) cells <- rownames(prepared$gene_data)
-    if (is.null(condition_label)) condition_label <- "all"
-    .condition_fit_dictionary_prepared(
-        object = object, prepared = prepared,
-        edge_dictionary = edge_dictionary, cells = cells,
-        condition_label = as.character(condition_label),
-        network_name = network_name, adjust_method = adjust_method,
-        padj_threshold = padj_threshold, rank_action = rank_action,
-        min_residual_df = min_residual_df, parallel = parallel,
-        verbose = verbose, overwrite = overwrite
-    )$object
-}
-
 .condition_standard_by_cell_type <- function(
     object, metadata, cell_type_col, cell_type, genes, network_name,
     peak_to_gene_method, upstream, downstream, extend, only_tss,
@@ -899,10 +618,14 @@ fit_grn_from_edges <- function(
 
 #' Infer comparable condition-specific Pando GRNs
 #'
-#' With two or more conditions in a cell type, candidate discovery is run on the
-#' complete cell type and separately in every condition, followed by the shared
-#' statistically screened multi-task ridge dictionary/refit path. Without a
-#' usable condition column or with one condition level, standard Pando is used.
+#' With two or more conditions in a cell type, Pando candidate discovery is run
+#' on all eligible-condition cells pooled together and independently in every
+#' condition. Exact TF-peak-target triples passing both configured correlation
+#' gates in either scope are deduplicated into one frozen common dictionary.
+#' Every condition is then fitted once on that identical dictionary with a
+#' common-lambda ordinary ridge model and no cross-condition coefficient fusion.
+#' Without a usable condition column or with one condition level, standard Pando
+#' is used.
 #'
 #' @param object A `GRNData` object after motif matching.
 #' @param cell_type_col Broad cell-type metadata column.
@@ -911,7 +634,9 @@ fit_grn_from_edges <- function(
 #' @param cell_type Optional cell-type subset.
 #' @param genes Target genes.
 #' @param network_name Prefix for generated networks.
-#' @param tf_cor,peak_cor Candidate-discovery thresholds.
+#' @param tf_cor,peak_cor Candidate-discovery thresholds. Both default to 0.05;
+#'   user-supplied values are used unchanged for pooled/global and condition
+#'   discovery after ordinary range validation.
 #' @param min_cells_per_condition Minimum cells retained per condition.
 #' @param small_condition_action Error, drop the condition, or skip the cell type.
 #' @param adjust_method,padj_threshold Multiple-testing rule.
@@ -936,7 +661,7 @@ infer_condition_grn.GRNData <- function(
     downstream = 0, extend = 1000000, only_tss = FALSE,
     peak_to_gene_domains = NULL, rna_layer = "data", peak_layer = "data",
     peak_value_type = c("normalized", "probability", "other"),
-    tf_cor = 0.1, peak_cor = 0,
+    tf_cor = 0.05, peak_cor = 0.05,
     min_cells_per_condition = 50L,
     small_condition_action = c("error", "drop_condition", "skip_cell_type"),
     adjust_method = "BH", padj_threshold = 0.05,
@@ -1113,7 +838,7 @@ condition_grn_fit.GRNData <- function(
 #'
 #' @param fit A `ConditionGRNFit`.
 #' @param condition Fitted condition label.
-#' @param significant_only Return only BH-significant coefficients.
+#' @param significant_only Return only active condition edges.
 #' @return Edge table for the selected condition.
 #' @export
 condition_grn_subgraph <- function(fit, condition, significant_only = TRUE) {
@@ -1138,8 +863,8 @@ condition_grn_subgraph <- function(fit, condition, significant_only = TRUE) {
 #' Project common-dictionary condition effects on paired cells
 #'
 #' Reconstructs TF RNA multiplied by peak ATAC on the original unscaled input and
-#' applies the condition coefficient. The default projection uses only the
-#' BH-significant condition coefficients stored in `penalty_effect`.
+#' applies the condition coefficient. The default projection uses only active
+#' condition coefficients stored in `penalty_effect`.
 #'
 #' @param object Fitted `GRNData` object.
 #' @param fit A `ConditionGRNFit`.

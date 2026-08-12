@@ -1,9 +1,6 @@
 test_that("standard ridge is the K=1 condition ridge penalty", {
   p <- 4L
-  expect_equal(
-    .condition_ridge_penalty(1L, p, fusion_ratio = 100),
-    diag(p)
-  )
+  expect_equal(.condition_ridge_penalty(1L, p), diag(p))
 })
 
 test_that("standard infer_grn keeps glm default and exposes ridge controls", {
@@ -27,6 +24,10 @@ test_that("standard ridge routing lives in canonical infer_grn method", {
   body_text <- paste(deparse(body(infer_grn.GRNData)), collapse = "\n")
   expect_match(body_text, "identical(method, \"ridge\")", fixed = TRUE)
   expect_match(body_text, ".pando_standard_ridge_fit", fixed = TRUE)
+  expect_match(
+    paste(deparse(body(.pando_standard_ridge_fit)), collapse = "\n"),
+    ".condition_ridge_fit_contract_one_pass", fixed = TRUE
+  )
   expect_false(exists(
     ".pando_standard_ridge_infer_impl",
     envir = asNamespace("Pando"), inherits = FALSE

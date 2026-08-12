@@ -118,7 +118,7 @@ test_that("candidate target worker cannot recurse into a progress-producing mapp
     expect_false(grepl("pblapply", worker_text, fixed = TRUE))
 })
 
-test_that("target payload mapper preserves target names without one-pass alias overrides", {
+test_that("target payload mapper preserves target names with canonical fit helper", {
     keys <- stats::setNames(c("a", "b", "c"), c("a", "b", "c"))
     result <- Pando:::.pando_target_payload_map(
         keys = keys,
@@ -129,9 +129,9 @@ test_that("target payload mapper preserves target names without one-pass alias o
         phase = "unit"
     )
     expect_identical(names(result), names(keys))
-    expect_true(is.function(Pando:::.condition_ridge_refit_contract_one_pass))
+    expect_true(is.function(Pando:::.condition_ridge_fit_contract_one_pass))
     expect_false(exists(
-        ".condition_ridge_refit_contract_compact",
+        ".condition_ridge_refit_contract_one_pass",
         envir = asNamespace("Pando"), inherits = FALSE
     ))
 })

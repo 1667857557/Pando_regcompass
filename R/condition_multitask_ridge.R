@@ -1,9 +1,11 @@
-# Multi-task ridge solver for the exact common-dictionary condition GRN.
+# Common-lambda no-fusion ridge solver for condition GRNs.
 #
-# Candidate discovery and exact dictionary union remain in condition_grn.R.
-# This file only replaces the post-dictionary estimator.
+# Every condition uses the same ordered TF-by-ATAC predictor dictionary, the
+# same predictor scaling convention and the same target-specific CV lambda. The
+# coefficient blocks are otherwise independent: no penalty couples beta values
+# across conditions.
 
-.condition_multitask_ridge_schema <- "pando_condition_grn_multitask_ridge_v2"
+.condition_multitask_ridge_schema <- "pando_condition_grn_multitask_ridge_v3"
 
 .condition_ridge_control <- function(control = list()) {
     if (is.null(control)) control <- list()
@@ -13,7 +15,6 @@
     defaults <- list(
         lambda_grid = 10^seq(-3, 2, length.out = 9L),
         lambda_rule = "1se",
-        fusion_ratio = 1,
         cv_folds = 5L,
         seed = 1L,
         scale_floor = 1e-8
@@ -31,11 +32,6 @@
              call. = FALSE)
     }
     out$lambda_rule <- match.arg(out$lambda_rule, c("1se", "min"))
-    if (!is.numeric(out$fusion_ratio) || length(out$fusion_ratio) != 1L ||
-        !is.finite(out$fusion_ratio) || out$fusion_ratio < 0) {
-        stop("`ridge_control$fusion_ratio` must be finite and >= 0.",
-             call. = FALSE)
-    }
     if (!is.numeric(out$cv_folds) || length(out$cv_folds) != 1L ||
         !is.finite(out$cv_folds) || out$cv_folds < 2L ||
         out$cv_folds != as.integer(out$cv_folds)) {
@@ -106,13 +102,10 @@
              call. = FALSE)
     }
 
-    # The fitted model contains one intercept per condition, so between-condition
-    # shifts in mean(TF*ATAC) contain no information about a within-condition
-    # slope. Using the ordinary pooled SD would nevertheless let those mean
-    # shifts change the ridge penalty. Instead use the same condition weighting
-    # as the loss: the RMS within-condition predictor SD, with each condition
-    # contributing equally. Then a standardized predictor has unit variance
-    # under the exact metric optimized by the multi-task loss.
+    # Condition-specific intercepts remove between-condition mean shifts from the
+    # slope problem. Scale every shared predictor by the equal-condition RMS of
+    # its within-condition SD so the ridge metric matches the equal-condition
+    # loss rather than pooled sample abundance or between-condition mean shifts.
     pooled <- do.call(rbind, x)
     center <- colMeans(pooled)
     within_variance <- vapply(seq_len(ncol(x[[1L]])), function(j) {
@@ -134,11 +127,8 @@
     )
 }
 
-.condition_ridge_penalty <- function(k, p, fusion_ratio) {
-    laplacian <- diag(k) * k - matrix(1, k, k)
-    diag(k * p) +
-        fusion_ratio / max(1, k - 1L) *
-        kronecker(laplacian, diag(p))
+.condition_ridge_penalty <- function(k, p) {
+    diag(k * p)
 }
 
 .condition_ridge_kappa <- function(x) {
@@ -149,8 +139,7 @@
 }
 
 .condition_ridge_fit <- function(
-    x, y, scaling, lambda, fusion_ratio, min_residual_df = 1L,
-    inference = TRUE) {
+    x, y, scaling, lambda, min_residual_df = 1L, inference = TRUE) {
     conditions <- names(x)
     k <- length(conditions)
     p_full <- ncol(x[[1L]])
@@ -234,8 +223,7 @@
     }
     names(ybar) <- names(raw_rank) <- names(raw_kappa) <- conditions
 
-    penalty <- .condition_ridge_penalty(k, p, fusion_ratio)
-    system <- gram + n_total * lambda * penalty
+    system <- gram + n_total * lambda * .condition_ridge_penalty(k, p)
     r <- tryCatch(chol(system), error = function(e) NULL)
     if (is.null(r)) return(list(status = "failed"))
     theta <- backsolve(r, forwardsolve(t(r), rhs))
@@ -325,7 +313,7 @@
         for (j in seq_along(grid)) {
             fit <- .condition_ridge_fit(
                 train_x, train_y, scaling, grid[[j]],
-                control$fusion_ratio, min_residual_df, inference = FALSE
+                min_residual_df, inference = FALSE
             )
             if (!identical(fit$status, "ok")) next
             mse <- vapply(seq_along(valid_x), function(i) {
@@ -369,7 +357,7 @@
         }
         scaling <- .condition_ridge_scaling(train_x, control$scale_floor)
         fit <- .condition_ridge_fit(
-            train_x, train_y, scaling, lambda, control$fusion_ratio,
+            train_x, train_y, scaling, lambda,
             min_residual_df, inference = FALSE
         )
         if (!identical(fit$status, "ok")) next

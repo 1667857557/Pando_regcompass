@@ -1,8 +1,10 @@
-# Joint multi-task ridge refit of one exact-union ConditionGRNFit skeleton.
+# Single-pass common-dictionary ridge fit for condition GRNs.
 #
-# This file contains the canonical one-pass estimator. Target-level execution is
-# memory bounded through condition_target_parallel.R; no later-loaded function
-# replacement is required.
+# Candidate discovery is completed before this file is called. Every condition
+# is fitted on the same frozen TF-peak-target dictionary with one target-specific
+# CV lambda, shared predictor scaling and no cross-condition coefficient fusion.
+
+.condition_fit_engine <- "condition_union_single_no_fusion_common_lambda_ridge"
 
 .condition_ridge_contrasts <- function(
     fit, edges, condition_informative, scaling) {
@@ -68,11 +70,10 @@
     cv <- .condition_ridge_cv(x, y, folds, control, min_residual_df)
     scaling <- .condition_ridge_scaling(x, control$scale_floor)
     fit <- .condition_ridge_fit(
-        x, y, scaling, cv$lambda, control$fusion_ratio,
-        min_residual_df, inference = TRUE
+        x, y, scaling, cv$lambda, min_residual_df, inference = TRUE
     )
     if (!identical(fit$status, "ok")) {
-        stop("Final multi-task ridge failed for target `",
+        stop("Final condition ridge failed for target `",
              edges$target[[1L]], "`: ", fit$status, ".", call. = FALSE)
     }
     raw_rank_deficient <- fit$raw_rank < sum(fit$informative)
@@ -118,8 +119,6 @@
             estimable = informative_here & is.finite(estimate),
             zero_variance = as.logical(fit$zero_variance[i, ]),
             condition_informative = informative_here,
-            borrowed_by_fusion = !informative_here &
-                fit$informative & is.finite(estimate) & estimate != 0,
             aliased = FALSE,
             condition = condition,
             candidate_index = edges$candidate_index,
@@ -148,7 +147,6 @@
             lambda = cv$lambda,
             lambda_min = cv$lambda_min,
             lambda_rule = control$lambda_rule,
-            fusion_ratio = control$fusion_ratio,
             cv_mse = cv$cv_mse,
             cv_se = cv$cv_se,
             design_rank_deficient = raw_rank_deficient[[i]],
@@ -173,14 +171,14 @@
     )
 }
 
-.condition_ridge_refit_contract_one_pass <- function(
+.condition_ridge_fit_contract_one_pass <- function(
     object, fit, prepared, control, rank_action = "mark",
     min_residual_df = 1L, parallel = FALSE, verbose = TRUE,
     progress_phase = NULL, progress_label = NULL) {
     .condition_validate_dictionary(fit$edge_dictionary, prepared)
     cells <- fit$condition_cell_ids[fit$condition_levels]
     if (any(lengths(cells) < 3L)) {
-        stop("Every multi-task ridge condition needs at least three cells.",
+        stop("Every condition ridge fit needs at least three cells.",
              call. = FALSE)
     }
     folds <- .condition_ridge_folds(cells, control$cv_folds, control$seed)
@@ -191,7 +189,7 @@
         progress_phase <- if (length(fit$condition_levels) == 1L) {
             "ridge_standard"
         } else {
-            "ridge_fit"
+            "ridge_condition"
         }
     }
     if (is.null(progress_label)) progress_label <- fit$cell_type %||% ""
@@ -234,13 +232,13 @@
             )
         }
     }
-    coefficient$significant <- coefficient$estimable &
+    coefficient$statistically_supported <- coefficient$estimable &
         is.finite(coefficient$padj) &
         coefficient$padj < fit$padj_threshold
+    coefficient$significant <- coefficient$statistically_supported
     coefficient$penalty_effect <- ifelse(
-        coefficient$estimable & is.finite(coefficient$estimate),
-        coefficient$estimate,
-        0
+        coefficient$statistically_supported & is.finite(coefficient$estimate),
+        coefficient$estimate, 0
     )
     coefficient$direction <- ifelse(
         !coefficient$estimable, "undefined",
@@ -248,9 +246,9 @@
                ifelse(coefficient$estimate < 0, "negative", "zero"))
     )
     coefficient$effect_definition <-
-        "multitask_ridge_condition_coefficient_raw_tf_atac_units"
+        "no_fusion_common_lambda_ridge_condition_coefficient_raw_tf_atac_units"
     coefficient$inference_scope <-
-        "approximate_ridge_wald_diagnostic_conditional_on_dictionary_cv_lambda_and_fusion"
+        "approximate_ridge_wald_conditional_on_frozen_dictionary_and_cv_lambda"
 
     if (is.data.frame(contrast) && nrow(contrast)) {
         contrast$contrast_padj <- NA_real_
@@ -269,7 +267,7 @@
             is.finite(contrast$contrast_padj) &
             contrast$contrast_padj < fit$padj_threshold
         contrast$inference_scope <-
-            "approximate_joint_ridge_wald_contrast_diagnostic"
+            "approximate_no_fusion_ridge_wald_contrast_diagnostic"
     }
 
     for (condition in fit$condition_levels) {
@@ -286,9 +284,9 @@
             coefs = coefs_one,
             fit = fit_one,
             params = list(
-                method = "multitask_ridge",
+                method = "condition_ridge",
                 family = "gaussian_identity",
-                fit_mode = "fixed_edge_dictionary_joint_conditions",
+                fit_mode = "frozen_common_dictionary_no_fusion",
                 condition = condition,
                 edge_dictionary = fit$edge_dictionary,
                 scale = FALSE,
@@ -302,7 +300,7 @@
                 preprocessing_fingerprint = prepared$preprocessing_fingerprint,
                 adjust_method = fit$adjust_method,
                 padj_threshold = fit$padj_threshold,
-                projection_policy = "continuous_estimable_ridge_effects",
+                projection_policy = "statistical_support_pending_local_pando_gate",
                 ridge_control = control
             )
         )
@@ -311,17 +309,17 @@
     }
 
     fit$model_schema <- .condition_multitask_ridge_schema
-    fit$fit_engine <- "two_stage_exact_edge_union_multitask_ridge"
+    fit$fit_engine <- .condition_fit_engine
     fit$coefficient_scale <- "raw_tf_atac_interaction_units"
     fit$internal_predictor_scale <- "equal_condition_within_condition_rms"
     fit$inference_scope <-
-        "approximate_ridge_wald_diagnostic_conditional_on_dictionary_cv_lambda_and_fusion"
+        "approximate_ridge_wald_conditional_on_frozen_dictionary_and_cv_lambda"
     fit$coefficients <- coefficient
     fit$contrasts <- contrast
     fit$fit <- fit_table
     fit$scale <- FALSE
     fit$projection_effect_column <- "penalty_effect"
-    fit$projection_policy <- "continuous_estimable_ridge_effects"
+    fit$projection_policy <- "statistical_support_pending_local_pando_gate"
     fit$ridge_control <- control
     fit$target_cv <- lapply(result, function(one) {
         one$cv[c("lambda", "lambda_min", "cv_mse", "cv_se",

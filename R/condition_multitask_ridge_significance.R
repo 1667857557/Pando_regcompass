@@ -1,25 +1,24 @@
-# Significance-screened fit dictionary for multi-task condition GRNs.
+# Activity and inference contract for global-plus-condition common-dictionary ridge.
 #
-# Candidate discovery deliberately remains broad: global and condition-specific
-# Pando candidates are exact-unioned so a condition-specific edge cannot be lost
-# before statistical estimation. A preliminary joint multi-task ridge is then
-# used as the statistical screen. The actual fit dictionary is the union of
-# edges with BH-adjusted ridge-Wald P below the configured threshold in at least
-# one condition. The joint ridge is finally refit on that shared screened
-# dictionary. Thus every condition is estimated on the same statistically
-# supported edge set, while the downstream condition-specific projection still
-# requires significance in that condition.
+# The frozen dictionary is the exact union of TF-peak-target edges passing the
+# Pando peak-target and TF-target correlation gates either in the pooled/global
+# cell set or in at least one condition. Ridge is fitted once on this identical
+# dictionary for every condition. Correlation support determines dictionary
+# admission and is retained as provenance only. Once an edge is in the frozen
+# dictionary, activity in condition c is determined by that condition's own
+# estimable BH-supported ridge coefficient.
 
-.condition_significant_projection_policy <- "padj_significant_ridge_effects"
+.condition_significant_projection_policy <-
+    "condition_bh_supported_common_dictionary_ridge_effects"
 .condition_fit_dictionary_policy <-
-    "preliminary_joint_ridge_bh_significant_union_then_joint_refit"
+    "global_and_condition_union_pando_correlation_supported_frozen_dictionary"
 
 .condition_validate_adjust_method <- function(adjust_method) {
     value <- toupper(as.character(adjust_method))
     if (length(value) != 1L || is.na(value) || !identical(value, "BH")) {
         stop(
-            "Multi-condition ridge significance screening requires ",
-            "`adjust_method = \"BH\"`.", call. = FALSE
+            "Condition ridge inference requires `adjust_method = \"BH\"`.",
+            call. = FALSE
         )
     }
     "BH"
@@ -37,175 +36,145 @@
     as.numeric(padj_threshold)
 }
 
-.condition_apply_significance_gate <- function(fit) {
+.condition_apply_activity_gate <- function(fit) {
     if (!inherits(fit, "ConditionGRNFit")) {
-        stop("A ConditionGRNFit is required for significance gating.",
+        stop("A ConditionGRNFit is required for condition activity gating.",
              call. = FALSE)
     }
     threshold <- .condition_validate_padj_threshold(fit$padj_threshold)
     coefficient <- as.data.frame(fit$coefficients, stringsAsFactors = FALSE)
-    required <- c("estimate", "estimable", "padj")
-    if (!all(required %in% colnames(coefficient))) {
-        stop(
-            "Condition ridge coefficients require estimate, estimable and padj ",
-            "before significance gating.", call. = FALSE
-        )
+    support <- fit$dictionary_support_table
+    required_coefficient <- c(
+        "edge_id", "condition", "estimate", "estimable", "padj"
+    )
+    required_support <- c(
+        "edge_id", "source_type", "condition",
+        "peak_target_cor", "tf_target_cor"
+    )
+    if (!all(required_coefficient %in% colnames(coefficient)) ||
+        !is.data.frame(support) ||
+        !all(required_support %in% colnames(support))) {
+        stop("Global/condition Pando support metadata are incomplete.",
+             call. = FALSE)
     }
+
+    global <- support[support$source_type == "global", , drop = FALSE]
+    local <- support[support$source_type == "condition", , drop = FALSE]
+    if (anyDuplicated(as.character(global$edge_id))) {
+        stop("Global Pando support rows must be unique by exact edge.",
+             call. = FALSE)
+    }
+    local_key <- paste(
+        as.character(local$edge_id), as.character(local$condition), sep = "\001"
+    )
+    if (anyNA(local_key) || anyDuplicated(local_key)) {
+        stop("Condition-local Pando support rows must be unique.",
+             call. = FALSE)
+    }
+
+    coefficient_key <- paste(
+        as.character(coefficient$edge_id),
+        as.character(coefficient$condition), sep = "\001"
+    )
+    local_index <- match(coefficient_key, local_key)
+    global_index <- match(as.character(coefficient$edge_id),
+                          as.character(global$edge_id))
+    local_support <- !is.na(local_index)
+    global_support <- !is.na(global_index)
+
+    coefficient$peak_target_cor <- NA_real_
+    coefficient$tf_target_cor <- NA_real_
+    coefficient$peak_target_cor[local_support] <-
+        as.numeric(local$peak_target_cor[local_index[local_support]])
+    coefficient$tf_target_cor[local_support] <-
+        as.numeric(local$tf_target_cor[local_index[local_support]])
+    coefficient$global_peak_target_cor <- NA_real_
+    coefficient$global_tf_target_cor <- NA_real_
+    coefficient$global_peak_target_cor[global_support] <-
+        as.numeric(global$peak_target_cor[global_index[global_support]])
+    coefficient$global_tf_target_cor[global_support] <-
+        as.numeric(global$tf_target_cor[global_index[global_support]])
+    coefficient$local_support <- local_support
+    coefficient$global_support <- global_support
+    # Every coefficient row exists only because the exact edge belongs to the
+    # frozen common dictionary. Global/local flags describe where that admission
+    # evidence came from; they do not veto a condition-specific fitted effect.
+    coefficient$dictionary_support <- TRUE
+    coefficient$current_scope_correlation_support <-
+        local_support | global_support
+    coefficient$peak_cor_pass <- local_support
+    coefficient$tf_cor_pass <- local_support
+
     estimate <- suppressWarnings(as.numeric(coefficient$estimate))
     padj <- suppressWarnings(as.numeric(coefficient$padj))
-    significant <- coefficient$estimable %in% TRUE &
+    statistically_supported <- coefficient$estimable %in% TRUE &
         is.finite(estimate) & is.finite(padj) & padj < threshold
-    coefficient$significant <- significant
-    coefficient$penalty_effect <- ifelse(significant, estimate, 0)
+    active <- statistically_supported
+    coefficient$statistically_supported <- statistically_supported
+    coefficient$active <- active
+    # Compatibility alias for existing Network consumers. The explicit
+    # statistically_supported column is the condition-wise ridge-BH result.
+    coefficient$significant <- active
+    coefficient$penalty_effect <- ifelse(active, estimate, 0)
     fit$coefficients <- coefficient
     fit$projection_effect_column <- "penalty_effect"
     fit$projection_policy <- .condition_significant_projection_policy
+    fit$dictionary_support_role <-
+        "membership_in_global_plus_condition_correlation_screened_common_dictionary"
+    fit$local_support_role <-
+        "condition_specific_pando_correlation_provenance_only"
+    fit$global_support_role <-
+        "pooled_all_eligible_conditions_pando_correlation_provenance_only"
+    fit$statistical_support_role <-
+        "condition_wise_BH_adjusted_approximate_ridge_wald_defines_activity"
     fit
 }
 
-.condition_dictionary_screen <- function(fit) {
-    .condition_validate_adjust_method(fit$adjust_method)
-    threshold <- .condition_validate_padj_threshold(fit$padj_threshold)
-    coefficient <- as.data.frame(fit$coefficients, stringsAsFactors = FALSE)
-    required <- c("edge_id", "condition", "estimate", "estimable", "pval", "padj")
-    if (!all(required %in% colnames(coefficient))) {
-        stop("Preliminary ridge coefficients are incomplete for dictionary screening.",
-             call. = FALSE)
-    }
-    estimate <- suppressWarnings(as.numeric(coefficient$estimate))
-    padj <- suppressWarnings(as.numeric(coefficient$padj))
-    supported <- coefficient$estimable %in% TRUE &
-        is.finite(estimate) & is.finite(padj) & padj < threshold
-
-    ids <- unique(as.character(coefficient$edge_id))
-    summary <- lapply(ids, function(id) {
-        index <- which(as.character(coefficient$edge_id) == id)
-        sig_index <- index[supported[index]]
-        finite_padj <- padj[index][is.finite(padj[index])]
-        data.frame(
-            edge_id = id,
-            screening_min_padj = if (length(finite_padj)) min(finite_padj) else NA_real_,
-            screening_n_significant_conditions = length(sig_index),
-            screening_significant_conditions = if (length(sig_index)) {
-                paste(as.character(coefficient$condition[sig_index]), collapse = ";")
-            } else "",
-            stringsAsFactors = FALSE
-        )
-    })
-    summary <- do.call(rbind, summary)
-    rownames(summary) <- NULL
-    list(
-        keep_edge_ids = summary$edge_id[
-            summary$screening_n_significant_conditions > 0L
-        ],
-        summary = summary,
-        threshold = threshold
-    )
-}
-
-.condition_subset_dictionary <- function(dictionary, keep_edge_ids, screen_summary) {
-    keep <- as.character(dictionary$edge_id) %in% as.character(keep_edge_ids)
-    out <- dictionary[keep, , drop = FALSE]
-    if (!nrow(out)) return(out)
-
-    screen_index <- match(as.character(out$edge_id), screen_summary$edge_id)
-    out$screening_min_padj <- screen_summary$screening_min_padj[screen_index]
-    out$screening_n_significant_conditions <-
-        screen_summary$screening_n_significant_conditions[screen_index]
-    out$screening_significant_conditions <-
-        screen_summary$screening_significant_conditions[screen_index]
-
-    source_attributes <- attributes(dictionary)
-    structural <- c("names", "row.names", "class")
-    for (name in setdiff(names(source_attributes), structural)) {
-        attr(out, name) <- source_attributes[[name]]
-    }
-    class(out) <- class(dictionary)
-    out
-}
-
-.condition_ridge_refit_contract <- function(
+.condition_ridge_fit_contract <- function(
     object, fit, prepared, control, rank_action = "mark",
     min_residual_df = 1L, parallel = FALSE, verbose = TRUE) {
     fit$adjust_method <- .condition_validate_adjust_method(fit$adjust_method)
     fit$padj_threshold <- .condition_validate_padj_threshold(fit$padj_threshold)
-    candidate_dictionary <- fit$edge_dictionary
+    control <- .condition_ridge_control(control)
+    dictionary <- fit$edge_dictionary
     progress_label <- fit$cell_type %||% ""
 
-    preliminary <- .condition_ridge_refit_contract_one_pass(
+    if (isTRUE(verbose)) {
+        message(
+            "Pando condition phase=single_no_fusion_ridge_start",
+            " | cell_type=", as.character(progress_label),
+            ";fit_edges=", nrow(dictionary),
+            ";targets=", length(unique(as.character(dictionary$target)))
+        )
+    }
+    final <- .condition_ridge_fit_contract_one_pass(
         object = object, fit = fit, prepared = prepared, control = control,
         rank_action = rank_action, min_residual_df = min_residual_df,
         parallel = parallel, verbose = verbose,
-        progress_phase = "ridge_preliminary",
+        progress_phase = "ridge_single",
         progress_label = progress_label
     )
-    screen <- .condition_dictionary_screen(preliminary$fit)
-    if (isTRUE(verbose)) {
-        message(
-            "Pando condition phase=bh_dictionary_screen",
-            " | cell_type=", as.character(progress_label),
-            ";candidate_edges=", nrow(candidate_dictionary),
-            ";supported_edges=", length(screen$keep_edge_ids),
-            ";threshold=", format(screen$threshold, trim = TRUE)
-        )
-    }
-    if (!length(screen$keep_edge_ids)) {
-        stop(
-            "No condition-GRN edge passes BH padj < ",
-            format(screen$threshold, trim = TRUE),
-            " in any condition; no statistically supported common fit ",
-            "dictionary can be constructed.", call. = FALSE
-        )
-    }
-
-    final_dictionary <- .condition_subset_dictionary(
-        candidate_dictionary, screen$keep_edge_ids, screen$summary
-    )
-    if (nrow(final_dictionary) == nrow(candidate_dictionary) &&
-        identical(sort(as.character(final_dictionary$edge_id)),
-                  sort(as.character(candidate_dictionary$edge_id)))) {
-        final <- preliminary
-        final$fit$edge_dictionary <- final_dictionary
-        if (isTRUE(verbose)) {
-            message(
-                "Pando condition phase=ridge_final_reuse",
-                " | cell_type=", as.character(progress_label),
-                ";targets=", length(unique(as.character(final_dictionary$target))),
-                ";fit_edges=", nrow(final_dictionary)
-            )
-        }
-    } else {
-        final_skeleton <- fit
-        final_skeleton$edge_dictionary <- final_dictionary
-        final_skeleton$target_genes <- unique(as.character(final_dictionary$target))
-        final_skeleton$coefficients <- NULL
-        final_skeleton$contrasts <- NULL
-        final_skeleton$fit <- NULL
-        final <- .condition_ridge_refit_contract_one_pass(
-            object = object, fit = final_skeleton, prepared = prepared,
-            control = control, rank_action = rank_action,
-            min_residual_df = min_residual_df,
-            parallel = parallel, verbose = verbose,
-            progress_phase = "ridge_final",
-            progress_label = progress_label
-        )
-    }
-
-    final$fit <- .condition_apply_significance_gate(final$fit)
-    final$fit$candidate_edge_count <- nrow(candidate_dictionary)
-    final$fit$fit_dictionary_edge_count <- nrow(final_dictionary)
     final$fit$fit_dictionary_policy <- .condition_fit_dictionary_policy
-    final$fit$dictionary_screening_threshold <- screen$threshold
-    final$fit$dictionary_screening_summary <- screen$summary
-    final$fit$edge_dictionary <- final_dictionary
-    final$object <- .condition_update_network_significance(final$object, final$fit)
+    final$fit$candidate_edge_count <- nrow(dictionary)
+    final$fit$fit_dictionary_edge_count <- nrow(dictionary)
+    final$fit$edge_dictionary <- dictionary
+    final$fit$dictionary_support_table <- fit$dictionary_support_table
+    final$fit$dictionary_support_summary <- fit$dictionary_support_summary
+    final$fit$candidate_tf_cor <- fit$candidate_tf_cor
+    final$fit$candidate_peak_cor <- fit$candidate_peak_cor
+    final$fit$inference_scope <-
+        "approximate_ridge_wald_conditional_on_global_or_condition_pando_screened_dictionary_and_cv_lambda"
+    final$fit <- .condition_apply_activity_gate(final$fit)
+    final$object <- .condition_update_network_significance(
+        final$object, final$fit
+    )
     if (isTRUE(verbose)) {
         message(
             "Pando condition phase=condition_fit_complete",
             " | cell_type=", as.character(progress_label),
-            ";candidate_edges=", nrow(candidate_dictionary),
-            ";fit_edges=", nrow(final_dictionary),
-            ";targets=", length(unique(as.character(final_dictionary$target)))
+            ";fit_edges=", nrow(dictionary),
+            ";active_edges=", sum(final$fit$coefficients$active %in% TRUE),
+            ";targets=", length(unique(as.character(dictionary$target)))
         )
     }
     final

@@ -13,19 +13,9 @@ test_that("common-dictionary functions have one direct definition", {
   expect_false(any(basename(files) %in% c(
     "zz_common_dictionary_validation.R",
     "zz_common_dictionary_projection.R",
-    "zzz_fit_schema_contract.R"
+    "zzz_fit_schema_contract.R",
+    "condition_fixed_glm_target.R"
   )))
-})
-
-test_that("fixed-dictionary model controls are explicit and strict", {
-  expect_match(
-    paste(deparse(formals(Pando::fit_grn_from_edges)$method), collapse = ""),
-    "glm", fixed = TRUE
-  )
-  expect_identical(formals(Pando::fit_grn_from_edges)$interaction_term, ":")
-  expect_identical(formals(Pando::fit_grn_from_edges)$scale, FALSE)
-  expect_true(all(c("rna_layer", "peak_layer", "peak_value_type") %in%
-                  names(formals(Pando::fit_grn_from_edges))))
 })
 
 test_that("exact edge union enforces one preprocessing reference", {
@@ -48,15 +38,14 @@ test_that("exact edge union enforces one preprocessing reference", {
   }
   global <- stamp(candidate, "same")
   condition <- stamp(candidate, "same")
-  union <- Pando::union_grn_edges(
-    global, list(control = condition)
-  )
+  union <- Pando::union_grn_edges(global, list(control = condition))
   expect_true(isTRUE(attr(
     union, "preprocessing_provenance_verified", exact = TRUE
   )))
   expect_identical(
     attr(union, "preprocessing_fingerprint", exact = TRUE), "same"
   )
+  expect_identical(anyDuplicated(union$edge_id), 0L)
 
   mismatched <- stamp(candidate, "different")
   expect_error(
@@ -83,14 +72,19 @@ test_that("condition fit extraction has no compatibility arguments", {
   )
 })
 
-test_that("retired condition APIs are absent", {
+test_that("retired condition APIs and fixed-GLM helpers are absent", {
   namespace <- asNamespace("Pando")
   retired <- c(
     "condition_grn_contrast",
     "project_condition_grn_primary_cells",
-    "project_condition_grn_to_cells"
+    "project_condition_grn_to_cells",
+    "fit_grn_from_edges",
+    ".condition_fit_target_matrix",
+    ".condition_fit_dictionary_prepared",
+    ".pando_fixed_glm_target_payload",
+    ".pando_fixed_glm_target_worker"
   )
   expect_false(any(vapply(retired, exists, logical(1), envir = namespace,
                           inherits = FALSE)))
+  expect_false("fit_grn_from_edges" %in% getNamespaceExports("Pando"))
 })
-

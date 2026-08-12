@@ -23,8 +23,8 @@ infer_condition_grn(object, ...)
   rna_layer = "data",
   peak_layer = "data",
   peak_value_type = c("normalized", "probability", "other"),
-  tf_cor = 0.1,
-  peak_cor = 0,
+  tf_cor = 0.05,
+  peak_cor = 0.05,
   min_cells_per_condition = 50L,
   small_condition_action = c("error", "drop_condition", "skip_cell_type"),
   adjust_method = "BH",
@@ -43,59 +43,51 @@ infer_condition_grn(object, ...)
 \arguments{
 \item{object}{A \code{GRNData} object after motif matching.}
 \item{cell_type_col}{Broad cell-type metadata column.}
-\item{condition_col}{Condition column. NULL, absent, or fewer than two levels selects original per-cell-type Pando.}
+\item{condition_col}{Condition column. NULL, absent, or fewer than two levels selects standard per-cell-type Pando.}
 \item{cell_type}{Optional cell-type subset.}
 \item{genes}{Target genes.}
 \item{network_name}{Prefix for generated networks.}
 \item{peak_to_gene_method, upstream, downstream, extend, only_tss, peak_to_gene_domains}{Regulatory-domain controls.}
-\item{rna_layer, peak_layer, peak_value_type}{RNA and ATAC layers and peak-value semantics used consistently for candidate discovery, fitting, and projection.}
-\item{tf_cor, peak_cor}{Candidate-discovery correlation thresholds.}
+\item{rna_layer, peak_layer, peak_value_type}{RNA and ATAC layers and peak-value semantics used consistently for discovery, fitting, and projection.}
+\item{tf_cor, peak_cor}{Absolute Pando candidate-discovery correlation thresholds. Both default to 0.05, remain adjustable, and are evaluated on all eligible-condition cells pooled together and independently within each condition.}
 \item{min_cells_per_condition}{Minimum paired cells per fitted condition.}
 \item{small_condition_action}{Action for undersized conditions.}
-\item{adjust_method, padj_threshold}{Multiple-testing method and adjusted-P threshold used first to construct the significant-union fit dictionary and again to decide which final condition-specific coefficients can contribute downstream. Multi-condition ridge requires BH adjustment. The threshold defaults to 0.05 and is user-configurable over \code{(0, 1)} with no additional condition-specific upper cap.}
-\item{rank_action}{With the default \code{"mark"}, raw rank deficiency is retained as a diagnostic because the regularized system remains identifiable. \code{"error"} requests strict failure when a raw condition design is rank deficient.}
-\item{min_residual_df}{Minimum effective residual degrees of freedom for the joint regularized fit.}
+\item{adjust_method, padj_threshold}{Condition ridge inference requires BH adjustment. \code{padj_threshold}, default 0.05, determines whether an estimable condition-specific ridge coefficient is active after the common dictionary has been frozen.}
+\item{rank_action}{With \code{"mark"}, raw rank deficiency is retained as a diagnostic because ridge remains identifiable. \code{"error"} requests strict failure.}
+\item{min_residual_df}{Minimum effective residual degrees of freedom for the regularized fit.}
 \item{parallel}{Enable parallel execution.}
-\item{BPPARAM}{\code{NULL}, \code{FALSE}, or a \code{BiocParallelParam}. With cell-type scope it controls independent cell-type jobs. With \code{parallel_scope = "target"} it directly controls target-gene work used by candidate discovery and multi-task ridge fitting; the same pool is reused across target-parallel stages and is stopped on return when Pando started it.}
-\item{parallel_scope}{Parallelization level. \code{"auto"} uses cell-type jobs when more than one cell type is available; \code{"cell_type"} requests that behavior explicitly; \code{"target"} uses \code{BPPARAM} for target-gene candidate and ridge work inside one cell-type fit.}
+\item{BPPARAM}{\code{NULL}, \code{FALSE}, or a \code{BiocParallelParam}.}
+\item{parallel_scope}{Parallelization level: \code{"auto"}, \code{"cell_type"}, or \code{"target"}.}
 \item{overwrite}{Replace generated networks with matching names.}
-\item{fallback_args}{Additional arguments for the original single-condition \code{infer_grn()} fallback. In the multi-condition path, the reserved element \code{condition_ridge_control} is consumed by the multi-task ridge engine and removed before any standard fallback. It can contain \code{lambda_grid} (default \code{10^seq(-3, 2, length.out = 9)}), \code{lambda_rule} (\code{"1se"} or \code{"min"}), \code{fusion_ratio} (default 1), \code{cv_folds} (default 5), \code{seed} (default 1), and \code{scale_floor} (default \code{1e-8}).}
+\item{fallback_args}{Additional arguments for the standard fallback. The reserved \code{condition_ridge_control} element can contain \code{lambda_grid}, \code{lambda_rule}, \code{cv_folds}, \code{seed}, and \code{scale_floor}. Cross-condition fusion is not supported.}
 \item{verbose}{Display progress messages.}
 \item{...}{Must be empty.}
 }
-\value{A \code{GRNData} containing standard Pando \code{Network} objects and statistically screened common-dictionary condition fit contracts.}
-\description{For each multi-condition cell type, Pando performs global-plus-condition candidate discovery, exact TF-peak-target candidate union, preliminary joint multi-task ridge screening, a BH-significant edge union across conditions, and a final joint multi-task ridge refit on that shared screened dictionary.}
+\value{A \code{GRNData} containing condition-specific Pando \code{Network} objects and their frozen common-dictionary ridge fit contracts.}
+\description{For each multi-condition cell type, Pando performs pooled/global and condition-specific candidate discovery, exact deduplicated TF-peak-target union, and one common-lambda no-fusion ridge fit on the frozen shared dictionary.}
 \details{
-For edge \eqn{e} in condition \eqn{k}, the predictor remains the original Pando interaction
-\eqn{x_{cek}=RNA_{TF_e,c} ATAC_{peak_e,c}}. Global and condition-specific candidate sets are exact-unioned first so a condition-specific edge cannot be lost before statistical estimation. This first exact union is a candidate dictionary, not the final fit dictionary.
+For exact edge \eqn{e=(g,f,r)}, candidate discovery preserves the original Pando peak-target and TF-target correlation gates. Let \eqn{G_e} denote that the edge passes both gates on all eligible-condition cells pooled together and \eqn{L_{e,c}} that it passes both gates within condition \eqn{c}. The fitted common dictionary is
+\deqn{D_g=\operatorname{unique}\{D_{g,global}\cup\bigcup_cD_{g,c}\}.}
+Deduplication uses the complete target-TF-region triple. Pooled/global support reduces candidate false negatives from unstable small-condition correlations; condition-local support is retained separately. The configured \code{tf_cor} and \code{peak_cor} values are stored with the fit and are not fixed to their defaults.
 
-A preliminary joint multi-task ridge is fitted on the candidate dictionary. Within each condition, ridge-Wald P values are BH adjusted. The actual common fit dictionary is
-\deqn{D_{fit}=\bigcup_k\{e: padj^{screen}_{e,k}<\tau\},}
-where \eqn{\tau} is the user-configured \code{padj_threshold} in \eqn{(0,1)} and defaults to 0.05. Thus every edge in the final fit dictionary has preliminary statistical support in at least one condition, while every condition is subsequently fitted on exactly the same edge set. Screening provenance is retained on the fit dictionary, including minimum screening padj and supporting conditions. If no edge passes the threshold in any condition, the multi-condition fit stops rather than silently reverting to the unscreened candidate dictionary.
+The correlation gates determine dictionary admission only. Once an exact edge belongs to \eqn{D_g}, it is retained as a predictor in every fitted condition even when that condition did not itself pass the marginal-correlation gates.
 
-The model has a separate intercept in every condition, so between-condition shifts in the mean predictor do not identify the slope. Accordingly, the common predictor scale is the equal-condition RMS within-condition standard deviation,
-\deqn{s_e^2=K^{-1}\sum_k n_k^{-1}\sum_c(x_{cek}-\bar{x}_{ek})^2,}
-which matches the equal-condition loss and prevents between-condition mean shifts from changing ridge shrinkage. Cross-validation relearns this scale within each training fold. Stored coefficients are back-transformed to the original TF-by-ATAC units before projection.
+For edge \eqn{e} in condition \eqn{c}, the predictor remains the Pando interaction
+\deqn{x_{eic}=RNA_{TF(e),i}ATAC_{peak(e),i}.}
+Every condition uses the same ordered dictionary. Predictors use an equal-condition RMS within-condition scaling and stored coefficients are back-transformed to raw TF-by-ATAC units.
 
-For \eqn{K} conditions, the numerical objective is proportional to
-\deqn{
-\frac{1}{K}\sum_k\frac{||y_k-X_k\beta_k||_2^2}{n_k} +
-\lambda\left\{\sum_k||\beta_k||_2^2 +
-\frac{\gamma}{K-1}\sum_{k<l}||\beta_k-\beta_l||_2^2\right\}.
-}
-Each condition therefore contributes equal total loss weight. The positive ridge term makes the penalized system identifiable even when the raw common-dictionary design is rank deficient. The normalized fusion term borrows strength across conditions but does not force equality.
+For \eqn{K} conditions the numerical objective is proportional to
+\deqn{\frac{1}{K}\sum_c\frac{||y_c-X_c\beta_c||_2^2}{n_c}+\lambda\sum_c||\beta_c||_2^2.}
+There is no cross-condition fusion term. Conditions therefore share dictionary coordinates, scaling convention, and one target-specific CV-selected lambda while retaining independently estimated coefficient blocks. Ridge keeps the penalized system identifiable under severe collinearity and raw rank deficiency.
 
-After the significant-union dictionary has been constructed, the model is refitted on that shared dictionary and lambda is reselected by condition-stratified cross-validation. One lambda is shared across conditions for each target. The default one-standard-error rule chooses the largest lambda within one standard error of minimum equal-condition validation MSE. The public target-condition \code{rsq} field is dictionary-conditional out-of-fold R-squared; candidate discovery and significance screening precede the final CV refit, so this is not a fully nested estimate. \code{rsq_in_sample} is retained separately.
+Condition-specific approximate ridge-Wald P values are BH adjusted. Because every coefficient row already belongs to the frozen common dictionary, an edge is active in condition \eqn{c} when its own coefficient is estimable and its adjusted P value is below \code{padj_threshold}:
+\deqn{A_{e,c}=1\{estimable_{e,c}\land padj_{e,c}<\tau\}.}
+The pooled/global and condition-local flags \eqn{G_e} and \eqn{L_{e,c}} remain candidate-provenance annotations and are not reapplied as a post-fit veto. Consequently an edge admitted globally or by another condition can still be active in condition \eqn{c} when that condition's own ridge coefficient is BH-supported.
 
-The raw design rank, raw condition number, regularized condition number, effective degrees of freedom, condition-specific zero-variance flags, common lambda and CV loss are retained as diagnostics. A predictor that varies in the common fit dictionary but is constant within one condition may receive a finite coefficient through the fusion penalty, but that condition-edge is marked non-estimable and contributes zero downstream.
+The exported effect is
+\deqn{penalty\_effect_{e,c}=A_{e,c}\widehat\beta_{e,c}.}
 
-For the final refit, condition-specific ridge-Wald P values are BH adjusted again. The exported \code{penalty_effect} is
-\deqn{penalty\_effect_{e,k}=\begin{cases}\beta_{e,k},& estimable_{e,k}\ \&\ padj_{e,k}<\tau,\\0,& otherwise.\end{cases}}
-Thus the shared fit dictionary is the union of statistically supported screening edges, while a particular edge contributes to a particular condition only when the final refit also supports that condition-edge at the configured threshold. The threshold defaults to 0.05 but remains freely configurable within the valid adjusted-P threshold interval \eqn{(0,1)}.
+Direct contrasts use \eqn{\Delta\beta_e=\beta_{e,A}-\beta_{e,B}} on the same coefficient coordinate. Coefficient and contrast P values remain approximate and conditional on data-dependent candidate discovery and CV-selected ridge regularization; they are not exact post-selection inference.
 
-Pairwise differential-GRN contrasts remain a separate calculation. For conditions A and B, Pando reports \eqn{\Delta\beta_e=\beta_{e,A}-\beta_{e,B}} with a covariance-based approximate ridge-Wald standard error, P value, and BH-adjusted P value. A coefficient being significant in one condition and nonsignificant in another is not used as a substitute for the direct contrast.
-
-All coefficient and contrast P values remain approximate and conditional on data-dependent candidate discovery, screening, CV-selected lambda, and fusion regularization. They are not exact post-selection or donor-level population inference.
-
-When the condition column is absent or has fewer than two levels, the original per-cell-type Pando \code{infer_grn()} fallback is unchanged.
+When the condition column is absent or has fewer than two levels, the standard per-cell-type Pando fallback is used.
 }
