@@ -15,9 +15,11 @@ knitr::opts_chunk$set(eval = FALSE, collapse = TRUE, comment = "#>")
 
 The input must be a `GRNData` object with paired RNA and ATAC cells, gene annotation, regulatory regions, and motif matches from `find_motifs()`.
 
-The complete mathematical specification is in `docs/mathematical-model.md`.
+For RegCompass, the regulatory regions are normally initialized from the predefined union of phastCons and SCREEN cCRE regions before motif matching. The complete mathematical specification is in `docs/mathematical-model.md`.
 
-# Automatic routing
+# Condition GRN
+
+Only parameters that normally need analysis-specific adjustment are shown below.
 
 ```r
 fit_object <- infer_condition_grn(
@@ -26,40 +28,40 @@ fit_object <- infer_condition_grn(
   condition_col = "condition",
   genes = metabolic_genes,
   tf_cor = 0.1,
-  peak_cor = 0,
+  peak_cor = 0.05,
   min_cells_per_condition = 300L,
-  small_condition_action = "error",
-  adjust_method = "BH",
-  padj_threshold = 0.05,
-  rank_action = "mark",
-  min_residual_df = 1L,
   parallel = TRUE
 )
 ```
 
-With at least two eligible conditions in a cell type, `infer_condition_grn()` discovers pooled and condition-specific candidates, freezes the exact TF–peak–target union, and fits every condition against that dictionary. With no usable condition column or one condition level, it runs the original per-cell-type `infer_grn()` route and does not create condition coefficients.
+For each cell type with at least two eligible conditions, Pando runs the original Pando candidate logic twice in scope: once on all eligible-condition cells pooled together and once within each condition. An exact TF-peak-target edge enters the frozen common dictionary when it passes both `tf_cor` and `peak_cor` in the pooled/global calculation or in at least one condition. The edge union is deduplicated on the complete `(target, tf, region)` triple.
 
-Important parameters:
+Every condition is then fitted once against exactly that same ordered dictionary using the TF-by-ATAC interaction predictor and ordinary ridge regularization. Conditions share the dictionary, predictor-scaling convention, and target-specific CV-selected lambda, but coefficients are not fused or shrunk toward coefficients from other conditions.
 
-- `tf_cor`, `peak_cor`: candidate-discovery thresholds.
+Important adjustable parameters:
+
+- `tf_cor`, `peak_cor`: Pando candidate-discovery thresholds used independently in the pooled/global and condition-specific screens.
 - `min_cells_per_condition`: minimum paired cells required for a condition fit.
-- `small_condition_action`: action for undersized conditions.
-- `adjust_method`, `padj_threshold`: adjusted-P rule used for `significant` and `penalty_effect`.
-- `rank_action`, `min_residual_df`: estimability controls.
-- `rna_layer`, `peak_layer`, `peak_value_type`: recorded preprocessing reference used again during projection.
+- `small_condition_action`: optional behavior for undersized conditions.
+- `padj_threshold`: condition-wise BH threshold used to activate fitted ridge effects; default `0.05`.
+- `rank_action`, `min_residual_df`: optional numerical/estimability controls.
+
+Ridge tuning is normally left at its defaults. If needed, advanced controls are passed through `fallback_args = list(condition_ridge_control = list(...))`; available fields are `lambda_grid`, `lambda_rule`, `cv_folds`, `seed`, and `scale_floor`. There is no cross-condition fusion parameter.
 
 # Outputs
 
-Each fitted condition is stored as a standard Pando `Network`. The coefficient table includes:
+Each fitted condition is stored as a standard Pando `Network`. The coefficient table retains both candidate provenance and the fitted effect:
 
 ```text
 tf target region edge_id estimate std_err statistic pval padj
-significant penalty_effect direction estimable zero_variance aliased
+statistically_supported global_support local_support active penalty_effect
 ```
 
-`estimate` retains the fitted coefficient. `penalty_effect` contains only coefficients accepted by the configured adjusted-P rule. Unavailable coefficients remain `NA`.
+`global_support` means the exact edge passed pooled/global Pando correlation screening. `local_support` means it passed screening inside that condition. An edge is `active` when its condition-specific ridge coefficient is estimable, passes condition-wise BH, and has either global or local Pando candidate support. Thus pooled support can protect a real edge from a noisy small-condition correlation screen, but cannot make a condition edge active without condition-specific ridge evidence.
 
-Use `condition_grn_fit()` to retrieve the cell-type contract and `condition_grn_subgraph()` to retrieve one condition's edge table.
+`penalty_effect` is the active condition-specific ridge coefficient in the original TF-by-ATAC units and is zero otherwise. The full `estimate` is retained for diagnostics and contrasts.
+
+Use `condition_grn_fit()` to retrieve the cell-type fit and `condition_grn_subgraph()` to retrieve one condition's active edge table.
 
 ```r
 fit <- condition_grn_fit(fit_object, cell_type = "T_cell")
@@ -69,43 +71,6 @@ edges <- condition_grn_subgraph(
   significant_only = TRUE
 )
 ```
-
-# Manual dictionary route
-
-```r
-pooled_edges <- discover_grn_edges(
-  grn_object,
-  genes = metabolic_genes,
-  cells = cells_cell_type,
-  source_label = "pooled",
-  source_type = "global"
-)
-
-condition_edges <- setNames(lapply(condition_levels, function(level) {
-  discover_grn_edges(
-    grn_object,
-    genes = metabolic_genes,
-    cells = cells_by_condition[[level]],
-    source_label = level,
-    source_type = "condition"
-  )
-}), condition_levels)
-
-edge_dictionary <- union_grn_edges(pooled_edges, condition_edges)
-
-grn_object <- fit_grn_from_edges(
-  grn_object,
-  edge_dictionary = edge_dictionary,
-  cells = cells_by_condition[[1]],
-  condition_label = condition_levels[[1]],
-  network_name = "condition_grn",
-  adjust_method = "BH",
-  padj_threshold = 0.05,
-  rank_action = "mark"
-)
-```
-
-The dictionary union is always performed on complete TF–peak–target triples.
 
 # Projection and aggregation
 
@@ -123,4 +88,4 @@ metacell_projection <- aggregate_condition_grn_projection(
 )
 ```
 
-Projection uses the fitted paired-cell RNA and ATAC layers and is aggregated only after cell-level target scores are calculated.
+For an active edge, paired-cell projection uses `penalty_effect * RNA(TF) * ATAC(peak)` and is aggregated only after cell-level target scores are calculated.
