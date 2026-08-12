@@ -18,6 +18,11 @@
         params$fit_dictionary_policy <- .condition_fit_dictionary_policy
         params$candidate_edge_count <- fit$candidate_edge_count
         params$fit_dictionary_edge_count <- fit$fit_dictionary_edge_count
+        params$screening_inference_scope <- fit$screening_inference_scope
+        params$screening_adjust_method <- fit$screening_adjust_method
+        params$screening_padj_threshold <- fit$screening_padj_threshold
+        params$inference_performed <- FALSE
+        params$inference_scope <- fit$inference_scope
         methods::slot(network, "params") <- params
         object@grn@networks[[network_name]] <- network
     }
