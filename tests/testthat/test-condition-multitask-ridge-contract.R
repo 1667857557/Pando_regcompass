@@ -8,15 +8,15 @@ test_that("public condition API remains canonical and explicit", {
     expect_false("ridge_control" %in% args)
 })
 
-test_that("condition runtime uses condition-only candidate union and one ridge fit", {
+test_that("condition runtime uses global-plus-condition union and one ridge fit", {
     runtime_text <- paste(
         deparse(body(Pando:::.pando_infer_condition_grn_multitask_ridge_one)),
         collapse = "\n"
     )
+    expect_match(runtime_text, "global_edges <-", fixed = TRUE)
     expect_match(runtime_text, "condition_edges <- lapply", fixed = TRUE)
-    expect_match(runtime_text, "global_edges = NULL", fixed = TRUE)
+    expect_match(runtime_text, "global_edges = global_edges", fixed = TRUE)
     expect_match(runtime_text, ".condition_ridge_fit_contract", fixed = TRUE)
-    expect_false(grepl("Discovering global candidates", runtime_text, fixed = TRUE))
     expect_false(grepl(".condition_ridge_refit_contract", runtime_text, fixed = TRUE))
 
     fit_text <- paste(
@@ -30,10 +30,6 @@ test_that("condition runtime uses condition-only candidate union and one ridge f
 })
 
 test_that("condition model uses the revised no-fusion schema", {
-    expect_identical(
-        Pando:::.condition_common_dictionary_schema,
-        "pando_condition_grn_common_dictionary_v1"
-    )
     expect_identical(
         Pando:::.condition_multitask_ridge_schema,
         "pando_condition_grn_multitask_ridge_v3"
@@ -89,12 +85,13 @@ test_that("scaling matches the condition-intercept loss geometry", {
     )
 })
 
-test_that("active projection requires both BH and condition-local Pando support", {
+test_that("global support can rescue dictionary admission without local support", {
     fit <- list(
         padj_threshold = 0.05,
         dictionary_support_table = data.frame(
             edge_id = c("G||TF1||P1", "G||TF2||P2", "G||TF1||P1"),
-            condition = c("A", "A", "B"),
+            source_type = c("global", "global", "condition"),
+            condition = c(NA, NA, "A"),
             peak_target_cor = c(0.2, 0.3, 0.25),
             tf_target_cor = c(0.4, 0.5, 0.35),
             stringsAsFactors = FALSE
@@ -112,21 +109,22 @@ test_that("active projection requires both BH and condition-local Pando support"
     gated <- Pando:::.condition_apply_activity_gate(fit)
     expect_identical(gated$coefficients$statistically_supported,
                      rep(TRUE, 4L))
+    expect_identical(gated$coefficients$global_support,
+                     rep(TRUE, 4L))
     expect_identical(gated$coefficients$local_support,
-                     c(TRUE, TRUE, TRUE, FALSE))
-    expect_identical(gated$coefficients$active,
-                     c(TRUE, TRUE, TRUE, FALSE))
+                     c(TRUE, FALSE, FALSE, FALSE))
+    expect_identical(gated$coefficients$active, rep(TRUE, 4L))
     expect_equal(gated$coefficients$penalty_effect,
-                 c(0.5, 0.4, 0.6, 0))
+                 c(0.5, 0.4, 0.6, 0.7))
 })
 
-test_that("fit dictionary policy is condition-union and frozen", {
+test_that("fit dictionary policy is global-plus-condition and frozen", {
     expect_identical(
         Pando:::.condition_fit_dictionary_policy,
-        "condition_union_pando_correlation_supported_frozen_dictionary"
+        "global_and_condition_union_pando_correlation_supported_frozen_dictionary"
     )
     expect_identical(
         Pando:::.condition_significant_projection_policy,
-        "active_condition_pando_support_and_bh_ridge_effects"
+        "active_global_or_local_pando_support_and_condition_bh_ridge_effects"
     )
 })
