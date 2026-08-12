@@ -8,30 +8,31 @@ test_that("public condition API remains canonical and explicit", {
     expect_false("ridge_control" %in% args)
 })
 
-test_that("multi-condition path retains exact condition union and one ridge fit", {
-    body_text <- paste(
-        deparse(body(Pando:::.pando_infer_condition_grn_one)),
+test_that("condition runtime uses condition-only candidate union and one ridge fit", {
+    runtime_text <- paste(
+        deparse(body(Pando:::.pando_infer_condition_grn_multitask_ridge_one)),
         collapse = "\n"
     )
-    expect_match(body_text, "union_grn_edges", fixed = TRUE)
-    expect_match(body_text, ".condition_ridge_refit_contract", fixed = TRUE)
-    expect_false(grepl("stats::glm", body_text, fixed = TRUE))
+    expect_match(runtime_text, "condition_edges <- lapply", fixed = TRUE)
+    expect_match(runtime_text, "global_edges = NULL", fixed = TRUE)
+    expect_match(runtime_text, ".condition_ridge_fit_contract", fixed = TRUE)
+    expect_false(grepl("Discovering global candidates", runtime_text, fixed = TRUE))
+    expect_false(grepl(".condition_ridge_refit_contract", runtime_text, fixed = TRUE))
 
-    refit_text <- paste(
-        deparse(body(Pando:::.condition_ridge_refit_contract)),
-        collapse = "\n"
+    fit_text <- paste(
+        deparse(body(Pando:::.condition_ridge_fit_contract)), collapse = "\n"
     )
-    expect_match(refit_text, ".condition_ridge_refit_contract_one_pass", fixed = TRUE)
-    expect_false(grepl(".condition_dictionary_screen", refit_text, fixed = TRUE))
-    expect_false(grepl(".condition_subset_dictionary", refit_text, fixed = TRUE))
-    expect_false(grepl("ridge_preliminary", refit_text, fixed = TRUE))
-    expect_false(grepl("ridge_final", refit_text, fixed = TRUE))
+    expect_match(fit_text, ".condition_ridge_fit_contract_one_pass", fixed = TRUE)
+    expect_false(grepl(".condition_dictionary_screen", fit_text, fixed = TRUE))
+    expect_false(grepl(".condition_subset_dictionary", fit_text, fixed = TRUE))
+    expect_false(grepl("ridge_preliminary", fit_text, fixed = TRUE))
+    expect_false(grepl("ridge_final", fit_text, fixed = TRUE))
 })
 
-test_that("condition model advertises the revised schemas", {
+test_that("condition model uses the revised no-fusion schema", {
     expect_identical(
         Pando:::.condition_common_dictionary_schema,
-        "pando_condition_grn_common_dictionary_v2"
+        "pando_condition_grn_common_dictionary_v1"
     )
     expect_identical(
         Pando:::.condition_multitask_ridge_schema,
@@ -43,30 +44,26 @@ test_that("condition model advertises the revised schemas", {
     )
 })
 
-test_that("ridge defaults are deterministic and no-fusion", {
+test_that("ridge controls contain no fusion parameter", {
     control <- Pando:::.condition_ridge_control()
     expect_true(all(control$lambda_grid > 0))
     expect_identical(control$lambda_rule, "1se")
-    expect_equal(control$fusion_ratio, 0)
+    expect_false("fusion_ratio" %in% names(control))
     expect_equal(control$cv_folds, 5L)
     expect_equal(control$seed, 1L)
     expect_error(
         Pando:::.condition_ridge_control(list(fusion_ratio = 1)),
-        "fusion_ratio = 0",
+        "Unknown `ridge_control` field",
         fixed = TRUE
     )
 })
 
-test_that("condition ridge penalty is ordinary ridge only", {
+test_that("condition ridge penalty is block-wise ordinary ridge", {
     k <- 3L
     p <- 4L
-    penalty <- Pando:::.condition_ridge_penalty(k, p, fusion_ratio = 0)
-    expect_equal(penalty, diag(k * p))
-    expect_error(
-        Pando:::.condition_ridge_penalty(k, p, fusion_ratio = 1),
-        "does not permit fusion",
-        fixed = TRUE
-    )
+    expect_equal(Pando:::.condition_ridge_penalty(k, p), diag(k * p))
+    expect_false("fusion_ratio" %in% names(formals(Pando:::.condition_ridge_fit)))
+    expect_false("fusion_ratio" %in% names(formals(Pando:::.condition_ridge_penalty)))
 })
 
 test_that("scaling matches the condition-intercept loss geometry", {
@@ -92,21 +89,15 @@ test_that("scaling matches the condition-intercept loss geometry", {
     )
 })
 
-test_that("active projection requires both BH and condition Pando support", {
+test_that("active projection requires both BH and condition-local Pando support", {
     fit <- list(
         padj_threshold = 0.05,
-        edge_dictionary = structure(
-            data.frame(
-                edge_id = c("G||TF1||P1", "G||TF2||P2"),
-                stringsAsFactors = FALSE
-            ),
-            condition_support_table = data.frame(
-                edge_id = c("G||TF1||P1", "G||TF2||P2", "G||TF1||P1"),
-                condition = c("A", "A", "B"),
-                peak_target_cor = c(0.2, 0.3, 0.25),
-                tf_target_cor = c(0.4, 0.5, 0.35),
-                stringsAsFactors = FALSE
-            )
+        dictionary_support_table = data.frame(
+            edge_id = c("G||TF1||P1", "G||TF2||P2", "G||TF1||P1"),
+            condition = c("A", "A", "B"),
+            peak_target_cor = c(0.2, 0.3, 0.25),
+            tf_target_cor = c(0.4, 0.5, 0.35),
+            stringsAsFactors = FALSE
         ),
         coefficients = data.frame(
             edge_id = rep(c("G||TF1||P1", "G||TF2||P2"), 2L),
@@ -118,7 +109,7 @@ test_that("active projection requires both BH and condition Pando support", {
         )
     )
     class(fit) <- c("ConditionGRNFit", "list")
-    gated <- Pando:::.condition_annotate_local_pando_support(fit)
+    gated <- Pando:::.condition_apply_activity_gate(fit)
     expect_identical(gated$coefficients$statistically_supported,
                      rep(TRUE, 4L))
     expect_identical(gated$coefficients$local_support,
