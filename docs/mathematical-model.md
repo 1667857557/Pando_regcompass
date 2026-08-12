@@ -48,6 +48,8 @@ D_{g,global}\cup\bigcup_c D_{g,c}
 
 Deduplication is performed on the exact \((target,TF,region)\) key. Global support is included to reduce false-negative candidate exclusion caused by unstable correlations in small conditions; condition-local support is retained separately as provenance.
 
+The correlation gates have one role only: **dictionary admission**. Once an exact edge belongs to \(D_g\), it is retained as a predictor in every fitted condition regardless of whether that condition itself passed the marginal-correlation gates. Therefore a condition with a noisy marginal correlation can still recover a supported conditional ridge effect for an edge admitted globally or by another condition.
+
 Because the same RNA/ATAC observations are used for correlation screening and coefficient estimation, subsequent P values are conditional on a data-selected dictionary and are not formal selective-inference P values.
 
 ## 3. Pando TF-by-ATAC predictor
@@ -95,7 +97,7 @@ up to the equal-condition weighting and the implementation's common multiplicati
 
 One target-specific \(\lambda_g\) is selected by condition-stratified cross-validation and used for every condition of that target. The default one-standard-error rule chooses the largest lambda within one standard error of minimum equal-condition validation MSE.
 
-## 5. Approximate ridge inference
+## 5. Approximate ridge inference and active condition GRNs
 
 Let \(a_{e,c}\) denote that edge \(e\) is estimable in condition \(c\). Robust sandwich covariance for the penalized estimator is used to form approximate ridge-Wald statistics. P values are BH-adjusted separately within each condition.
 
@@ -105,13 +107,13 @@ Define condition-specific statistical support
 S_{e,c}=\mathbf 1\{a_{e,c}=1\land q_{e,c}<\alpha\}.
 \]
 
-The active condition GRN is
+Because every fitted coefficient row already corresponds to an edge in the frozen common dictionary, the active condition GRN is simply
 
 \[
-A_{e,c}=S_{e,c}\,(G_e\lor L_{e,c}).
+\boxed{A_{e,c}=S_{e,c}}.
 \]
 
-Because every fitted edge belongs to the frozen dictionary, \(G_e\lor L_{e,c}\) records whether the candidate was supported globally or in the specific condition. Importantly, pooled/global correlation support alone cannot make an edge active: the condition-specific ridge coefficient must itself pass the BH gate. Conversely, an edge admitted only by another condition's local screen is not active in condition \(c\) unless it also has global support or local support in \(c\).
+The pooled/global and condition-local correlation flags \(G_e\) and \(L_{e,c}\) are retained as provenance describing **why the edge entered the common dictionary**. They are not applied again as a post-fit veto. In particular, if edge \(e\) entered through pooled/global support or through condition \(A\), condition \(B\) may still mark the edge active when \(\widehat\beta_{e,B}\) is estimable and BH-supported, even when \(G_e=0\) and \(L_{e,B}=0\). This is intentional: the marginal-correlation screen and the joint ridge coefficient are different statistics, and reapplying the marginal screen after fitting would reintroduce the small-condition false-negative problem that the common dictionary is meant to avoid.
 
 The downstream regulatory effect is
 
