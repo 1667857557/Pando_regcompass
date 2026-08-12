@@ -22,49 +22,36 @@ test_that("exact edge union does not create Cartesian edges", {
         dictionary$edge_id,
         c("G||TF1||P1", "G||TF2||P2")
     )
+    expect_identical(anyDuplicated(dictionary$edge_id), 0L)
     expect_false("G||TF1||P2" %in% dictionary$edge_id)
     expect_false("G||TF2||P1" %in% dictionary$edge_id)
 })
 
-test_that("fixed dictionary GLM permits opposite condition directions", {
-    set.seed(11)
-    n <- 300L
-    x1 <- rnorm(n)
-    x2 <- rnorm(n)
-    X <- cbind(x1, x2)
-    fit_a <- Pando:::.condition_fit_target_matrix(
-        response = 1.5 * x1 - 0.7 * x2 + rnorm(n, sd = 0.05),
-        predictor = X,
-        terms = c("edge_1", "edge_2"),
-        rank_action = "error"
+test_that("exact edge union records pooled/global and condition provenance", {
+    global <- data.frame(
+        target = c("G", "G"), tf = c("TF1", "TF2"),
+        region = c("P1", "P2"), atac_feature_id = c("A1", "A2"),
+        peak_target_cor = c(0.2, 0.3), tf_target_cor = c(0.3, 0.4),
+        stringsAsFactors = FALSE
     )
-    fit_b <- Pando:::.condition_fit_target_matrix(
-        response = -1.2 * x1 + 0.9 * x2 + rnorm(n, sd = 0.05),
-        predictor = X,
-        terms = c("edge_1", "edge_2"),
-        rank_action = "error"
+    condition <- list(
+        A = data.frame(
+            target = c("G", "G"), tf = c("TF1", "TF3"),
+            region = c("P1", "P3"), atac_feature_id = c("A1", "A3"),
+            peak_target_cor = c(0.25, 0.35), tf_target_cor = c(0.35, 0.45),
+            stringsAsFactors = FALSE
+        )
     )
-    expect_gt(fit_a$coefs$estimate[[1L]], 0)
-    expect_lt(fit_b$coefs$estimate[[1L]], 0)
-    expect_lt(fit_a$coefs$estimate[[2L]], 0)
-    expect_gt(fit_b$coefs$estimate[[2L]], 0)
-})
-
-test_that("zero variance and aliased edges are not fitted zeros", {
-    set.seed(12)
-    x <- rnorm(100)
-    X <- cbind(variable = x, duplicate = x, closed = 0)
-    fit <- Pando:::.condition_fit_target_matrix(
-        response = 2 * x + rnorm(100, sd = 0.1),
-        predictor = X,
-        terms = c("edge_1", "edge_2", "edge_3"),
-        rank_action = "mark"
+    dictionary <- union_grn_edges(global, condition)
+    expect_setequal(dictionary$edge_id,
+                    c("G||TF1||P1", "G||TF2||P2", "G||TF3||P3"))
+    expect_true(dictionary$source_global[dictionary$edge_id == "G||TF1||P1"])
+    expect_true(dictionary$source_global[dictionary$edge_id == "G||TF2||P2"])
+    expect_false(dictionary$source_global[dictionary$edge_id == "G||TF3||P3"])
+    expect_identical(
+        dictionary$source_conditions[dictionary$edge_id == "G||TF1||P1"],
+        "A"
     )
-    expect_true(fit$coefs$zero_variance[[3L]])
-    expect_false(fit$coefs$estimable[[3L]])
-    expect_true(is.na(fit$coefs$estimate[[3L]]))
-    expect_true(any(fit$coefs$aliased[1:2]))
-    expect_true(any(is.na(fit$coefs$estimate[1:2])))
 })
 
 test_that("external dictionaries preserve domain and motif support", {
@@ -79,23 +66,19 @@ test_that("external dictionaries preserve domain and motif support", {
         ),
         region_map = data.frame(
             region = c("P1", "P2"),
-            atac_feature_id = c("A1", "A2"),
-            stringsAsFactors = FALSE
+            atac_feature_id = c("A1", "A2"), stringsAsFactors = FALSE
         ),
         peaks2gene = Matrix::Matrix(
             matrix(c(1, 0), nrow = 1,
-                   dimnames = list("G", c("P1", "P2"))),
-            sparse = TRUE
+                   dimnames = list("G", c("P1", "P2"))), sparse = TRUE
         ),
         peaks2motif = Matrix::Matrix(
             matrix(c(1, 0), nrow = 2,
-                   dimnames = list(c("P1", "P2"), "M1")),
-            sparse = TRUE
+                   dimnames = list(c("P1", "P2"), "M1")), sparse = TRUE
         ),
         motif2tf = Matrix::Matrix(
             matrix(c(1, 0), nrow = 1,
-                   dimnames = list("M1", c("TF1", "TF2"))),
-            sparse = TRUE
+                   dimnames = list("M1", c("TF1", "TF2"))), sparse = TRUE
         )
     )
     valid <- data.frame(
@@ -123,20 +106,26 @@ test_that("external dictionaries preserve domain and motif support", {
     )
 })
 
-test_that("condition API contains only common dictionary controls", {
+test_that("condition API contains only common-dictionary ridge controls", {
     formal_names <- names(formals(Pando:::infer_condition_grn.GRNData))
     expect_true(all(c(
         "tf_cor", "peak_cor", "adjust_method", "padj_threshold",
         "rank_action", "min_residual_df"
     ) %in% formal_names))
+    expect_equal(eval(formals(Pando:::infer_condition_grn.GRNData)$tf_cor), 0.05)
+    expect_equal(eval(formals(Pando:::infer_condition_grn.GRNData)$peak_cor), 0.05)
     expect_false(any(c(
         "candidate_screen", "condition_mix", "condition_weight",
         "nlambda", "lambda", "outer_nfolds", "inner_nfolds",
-        "lambda_selection", "engine_control", "scale"
+        "lambda_selection", "engine_control", "scale", "fusion_ratio"
     ) %in% formal_names))
     description <- utils::packageDescription("Pando")
     expect_identical(
         description[["Config/Pando/ConditionGRNSchema"]],
         "pando_condition_grn_common_dictionary_v1"
+    )
+    expect_identical(
+        description[["Config/Pando/ConditionGRNModelSchema"]],
+        "pando_condition_grn_multitask_ridge_v3"
     )
 })
