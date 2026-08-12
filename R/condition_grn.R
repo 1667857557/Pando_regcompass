@@ -159,8 +159,7 @@
     regions <- NetworkRegions(object)
     if (!length(regions@peaks) || is.null(regions@motifs) ||
         !nrow(regions@motifs@data)) {
-        stop("Pando regions lack measured-peak or motif mappings.",
-             call. = FALSE)
+        stop("Pando regions lack measured-peak or motif mappings.", call. = FALSE)
     }
     if (any(regions@peaks < 1L | regions@peaks > ncol(peak_data_all))) {
         stop("Pando region-to-peak indices are out of range.", call. = FALSE)
@@ -295,13 +294,14 @@
 #' @param cells Paired cells used for candidate discovery.
 #' @param source_label Label stored with the candidate source.
 #' @param source_type Either `"global"` or `"condition"`.
-#' @param tf_cor,peak_cor Absolute correlation thresholds.
+#' @param tf_cor,peak_cor Absolute correlation thresholds; defaults are 0.05
+#'   for both and user-supplied values in [0, 1] are preserved.
 #' @param ... Regulatory-domain and execution arguments.
 #' @return A `PandoEdgeDictionary` data frame.
 #' @export
 discover_grn_edges <- function(
     object, genes = NULL, cells = NULL, source_label = "global",
-    source_type = c("global", "condition"), tf_cor = 0.1, peak_cor = 0,
+    source_type = c("global", "condition"), tf_cor = 0.05, peak_cor = 0.05,
     peak_to_gene_method = c("Signac", "GREAT"), upstream = 100000,
     downstream = 0, extend = 1000000, only_tss = FALSE,
     peak_to_gene_domains = NULL, rna_layer = "data", peak_layer = "data",
@@ -899,10 +899,14 @@ fit_grn_from_edges <- function(
 
 #' Infer comparable condition-specific Pando GRNs
 #'
-#' With two or more conditions in a cell type, candidate discovery is run on the
-#' complete cell type and separately in every condition, followed by the shared
-#' statistically screened multi-task ridge dictionary/refit path. Without a
-#' usable condition column or with one condition level, standard Pando is used.
+#' With two or more conditions in a cell type, Pando candidate discovery is run
+#' on all eligible-condition cells pooled together and independently in every
+#' condition. Exact TF-peak-target triples passing both configured correlation
+#' gates in either scope are deduplicated into one frozen common dictionary.
+#' Every condition is then fitted once on that identical dictionary with a
+#' common-lambda ordinary ridge model and no cross-condition coefficient fusion.
+#' Without a usable condition column or with one condition level, standard Pando
+#' is used.
 #'
 #' @param object A `GRNData` object after motif matching.
 #' @param cell_type_col Broad cell-type metadata column.
@@ -911,7 +915,9 @@ fit_grn_from_edges <- function(
 #' @param cell_type Optional cell-type subset.
 #' @param genes Target genes.
 #' @param network_name Prefix for generated networks.
-#' @param tf_cor,peak_cor Candidate-discovery thresholds.
+#' @param tf_cor,peak_cor Candidate-discovery thresholds. Both default to 0.05;
+#'   user-supplied values are used unchanged for pooled/global and condition
+#'   discovery after ordinary range validation.
 #' @param min_cells_per_condition Minimum cells retained per condition.
 #' @param small_condition_action Error, drop the condition, or skip the cell type.
 #' @param adjust_method,padj_threshold Multiple-testing rule.
@@ -936,7 +942,7 @@ infer_condition_grn.GRNData <- function(
     downstream = 0, extend = 1000000, only_tss = FALSE,
     peak_to_gene_domains = NULL, rna_layer = "data", peak_layer = "data",
     peak_value_type = c("normalized", "probability", "other"),
-    tf_cor = 0.1, peak_cor = 0,
+    tf_cor = 0.05, peak_cor = 0.05,
     min_cells_per_condition = 50L,
     small_condition_action = c("error", "drop_condition", "skip_cell_type"),
     adjust_method = "BH", padj_threshold = 0.05,
@@ -1113,7 +1119,7 @@ condition_grn_fit.GRNData <- function(
 #'
 #' @param fit A `ConditionGRNFit`.
 #' @param condition Fitted condition label.
-#' @param significant_only Return only BH-significant coefficients.
+#' @param significant_only Return only active condition edges.
 #' @return Edge table for the selected condition.
 #' @export
 condition_grn_subgraph <- function(fit, condition, significant_only = TRUE) {
@@ -1138,8 +1144,8 @@ condition_grn_subgraph <- function(fit, condition, significant_only = TRUE) {
 #' Project common-dictionary condition effects on paired cells
 #'
 #' Reconstructs TF RNA multiplied by peak ATAC on the original unscaled input and
-#' applies the condition coefficient. The default projection uses only the
-#' BH-significant condition coefficients stored in `penalty_effect`.
+#' applies the condition coefficient. The default projection uses only active
+#' condition coefficients stored in `penalty_effect`.
 #'
 #' @param object Fitted `GRNData` object.
 #' @param fit A `ConditionGRNFit`.
