@@ -6,6 +6,24 @@ test_that("public condition API remains canonical and explicit", {
         "parallel", "BPPARAM", "parallel_scope", "fallback_args"
     ) %in% args))
     expect_false("ridge_control" %in% args)
+    expect_equal(eval(formals(Pando:::infer_condition_grn.GRNData)$tf_cor), 0.05)
+    expect_equal(eval(formals(Pando:::infer_condition_grn.GRNData)$peak_cor), 0.05)
+    expect_equal(eval(formals(Pando:::discover_grn_edges)$tf_cor), 0.05)
+    expect_equal(eval(formals(Pando:::discover_grn_edges)$peak_cor), 0.05)
+})
+
+test_that("condition runtime keeps thresholds as adjustable inputs", {
+    defaults <- formals(Pando:::.pando_infer_condition_grn_multitask_ridge_one)
+    expect_equal(eval(defaults$tf_cor), 0.05)
+    expect_equal(eval(defaults$peak_cor), 0.05)
+    runtime_text <- paste(
+        deparse(body(Pando:::.pando_infer_condition_grn_multitask_ridge_one)),
+        collapse = "\n"
+    )
+    expect_match(runtime_text, "tf_cor = tf_cor", fixed = TRUE)
+    expect_match(runtime_text, "peak_cor = peak_cor", fixed = TRUE)
+    expect_match(runtime_text, "candidate_tf_cor = as.numeric(tf_cor)", fixed = TRUE)
+    expect_match(runtime_text, "candidate_peak_cor = as.numeric(peak_cor)", fixed = TRUE)
 })
 
 test_that("condition runtime uses global-plus-condition union and one ridge fit", {
