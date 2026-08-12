@@ -1,4 +1,4 @@
-test_that("condition ridge significance policy requires BH and any valid padj threshold", {
+test_that("condition ridge screening policy requires BH and any valid padj threshold", {
     expect_identical(Pando:::.condition_validate_adjust_method("BH"), "BH")
     expect_identical(Pando:::.condition_validate_adjust_method("bh"), "BH")
     expect_error(
@@ -25,6 +25,8 @@ test_that("preliminary joint ridge builds the fit dictionary by significant unio
             edge_id = rep(c("E1", "E2", "E3"), 2L),
             condition = rep(c("A", "B"), each = 3L),
             estimate = c(1, 0.5, 0.2, 0.8, 0.3, 0.1),
+            std_err = 0.1,
+            statistic = c(10, 5, 2, 8, 3, 1),
             estimable = TRUE,
             pval = c(0.001, 0.2, 0.8, 0.01, 0.7, 0.9),
             padj = c(0.003, 0.3, 0.8, 0.03, 0.9, 0.9),
@@ -39,29 +41,77 @@ test_that("preliminary joint ridge builds the fit dictionary by significant unio
     expect_equal(e1$screening_n_significant_conditions, 2L)
     expect_equal(e1$screening_min_padj, 0.003)
     expect_identical(e1$screening_significant_conditions, "A;B")
+    expect_true(all(c(
+        "screen_estimate", "screen_std_err", "screen_statistic",
+        "screen_pval", "screen_padj", "screen_estimable",
+        "screen_significant"
+    ) %in% colnames(screen$coefficients)))
+    expect_identical(screen$coefficients$screen_significant,
+                     c(TRUE, FALSE, FALSE, TRUE, FALSE, FALSE))
 })
 
-test_that("condition ridge penalty_effect follows final BH significance gate", {
+test_that("final refit uses screening support without second-round P values", {
     fit <- list(
-        padj_threshold = 0.1,
         coefficients = data.frame(
+            edge_id = c("E1", "E1", "E2", "E2"),
+            condition = c("A", "B", "A", "B"),
             estimate = c(0.5, 0.4, 0.3, NA_real_),
             estimable = c(TRUE, TRUE, TRUE, FALSE),
-            padj = c(0.049, 0.08, 0.11, NA_real_),
-            significant = c(FALSE, FALSE, FALSE, FALSE),
-            penalty_effect = c(0, 0, 0, 0),
+            pval = NA_real_,
+            padj = NA_real_,
+            significant = FALSE,
+            penalty_effect = 0,
             stringsAsFactors = FALSE
         )
     )
     class(fit) <- c("ConditionGRNFit", "list")
-    gated <- Pando:::.condition_apply_significance_gate(fit)
+    screen <- data.frame(
+        edge_id = c("E1", "E1", "E2", "E2"),
+        condition = c("A", "B", "A", "B"),
+        screen_estimate = c(0.45, 0.35, 0.25, 0.1),
+        screen_std_err = 0.1,
+        screen_statistic = c(4.5, 3.5, 2.5, 1),
+        screen_pval = c(0.001, 0.01, 0.02, 0.4),
+        screen_padj = c(0.002, 0.02, 0.04, 0.4),
+        screen_estimable = TRUE,
+        screen_significant = c(TRUE, TRUE, TRUE, FALSE),
+        stringsAsFactors = FALSE
+    )
+    gated <- Pando:::.condition_apply_screen_support(fit, screen)
 
     expect_identical(gated$coefficients$significant,
-                     c(TRUE, TRUE, FALSE, FALSE))
+                     c(TRUE, TRUE, TRUE, FALSE))
     expect_equal(gated$coefficients$penalty_effect,
-                 c(0.5, 0.4, 0, 0))
-    expect_identical(gated$projection_policy,
-                     "padj_significant_ridge_effects")
+                 c(0.5, 0.4, 0.3, 0))
+    expect_true(all(is.na(gated$coefficients$pval)))
+    expect_true(all(is.na(gated$coefficients$padj)))
+    expect_identical(
+        gated$projection_policy,
+        "screen_bh_supported_refit_ridge_effects"
+    )
+    expect_false(gated$inference_performed)
+})
+
+test_that("final refit rejects accidental second-round inference", {
+    fit <- list(
+        coefficients = data.frame(
+            edge_id = "E1", condition = "A", estimate = 0.5,
+            estimable = TRUE, pval = 0.01, padj = 0.01,
+            stringsAsFactors = FALSE
+        )
+    )
+    class(fit) <- c("ConditionGRNFit", "list")
+    screen <- data.frame(
+        edge_id = "E1", condition = "A", screen_estimate = 0.4,
+        screen_std_err = 0.1, screen_statistic = 4,
+        screen_pval = 0.001, screen_padj = 0.001,
+        screen_estimable = TRUE, screen_significant = TRUE,
+        stringsAsFactors = FALSE
+    )
+    expect_error(
+        Pando:::.condition_apply_screen_support(fit, screen),
+        "must not contain second-round"
+    )
 })
 
 test_that("screened dictionary preserves provenance and screening audit", {
@@ -93,7 +143,7 @@ test_that("screened dictionary preserves provenance and screening audit", {
     expect_true(isTRUE(attr(out, "preprocessing_provenance_verified")))
 })
 
-test_that("default threshold remains 0.05 and alternatives remain configurable", {
+test_that("default screening threshold remains 0.05 and is configurable", {
     default <- formals(Pando:::.pando_infer_condition_grn_one)$padj_threshold
     expect_equal(eval(default), 0.05)
 })
