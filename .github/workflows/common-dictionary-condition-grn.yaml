@@ -102,7 +102,7 @@ jobs:
           required_description = [
               "Config/Pando/ConditionGRNModelSchema: pando_condition_grn_multitask_ridge_v3",
               "Config/Pando/ConditionGRNMethod: global-condition-union-single-no-fusion-ridge",
-              "Config/Pando/ConditionProjectionPolicy: active-global-or-local-support-and-condition-BH-ridge",
+              "Config/Pando/ConditionProjectionPolicy: condition-BH-supported-common-dictionary-ridge",
           ]
           missing = [x for x in required_description if x not in description]
           if missing:
@@ -149,13 +149,22 @@ jobs:
           required_significance = [
               "global_support",
               "local_support",
-              "dictionary_support <- local_support | global_support",
-              "active <- statistically_supported & coefficient$dictionary_support",
+              "coefficient$dictionary_support <- TRUE",
+              "current_scope_correlation_support",
+              "active <- statistically_supported",
+              "condition_bh_supported_common_dictionary_ridge_effects",
               "penalty_effect",
           ]
           missing = [x for x in required_significance if x not in significance]
           if missing:
               raise RuntimeError(f"condition activity contract missing: {missing}")
+          forbidden_activity = [
+              "active <- statistically_supported & coefficient$dictionary_support",
+              "active <- statistically_supported & (global_support | local_support)",
+          ]
+          present = [x for x in forbidden_activity if x in significance]
+          if present:
+              raise RuntimeError(f"candidate provenance still vetoes fitted activity: {present}")
 
           projection = Path("R/condition_grn_projection.R").read_text()
           required_projection = [
