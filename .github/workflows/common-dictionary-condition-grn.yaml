@@ -68,6 +68,7 @@ jobs:
               ".pando_fixed_glm_target_payload",
               ".pando_fixed_glm_target_worker",
               "fit_grn_from_edges <- function",
+              "statistical_support_pending_local_pando_gate",
               "aggregate_condition_grn_projection_strict",
               "zzzzz_condition_fit_contract",
           ]
@@ -111,6 +112,7 @@ jobs:
           condition = Path("R/condition_grn.R").read_text()
           runtime = Path("R/condition_multitask_ridge_runtime.R").read_text()
           ridge = Path("R/condition_multitask_ridge.R").read_text()
+          ridge_fit = Path("R/condition_multitask_ridge_fit.R").read_text()
           significance = Path("R/condition_multitask_ridge_significance.R").read_text()
           required_condition = [
               "tf_cor = 0.05, peak_cor = 0.05",
@@ -146,6 +148,8 @@ jobs:
               raise RuntimeError(f"no-fusion ridge contract missing: {missing}")
           if "fusion_ratio" in ridge:
               raise RuntimeError("ridge solver still contains fusion_ratio")
+          if "statistical_support_pending_local_pando_gate" in ridge_fit:
+              raise RuntimeError("obsolete local-support post-fit gate remains")
           required_significance = [
               "global_support",
               "local_support",
