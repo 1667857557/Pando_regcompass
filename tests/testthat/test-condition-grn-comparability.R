@@ -1,4 +1,13 @@
-test_that("condition-wise Pando candidates form the exact common union", {
+test_that("global and condition Pando candidates form one deduplicated exact union", {
+    global <- data.frame(
+        target = c("G", "G"),
+        tf = c("TF1", "TF2"),
+        region = c("P1", "P2"),
+        atac_feature_id = c("A1", "A2"),
+        peak_target_cor = c(0.5, 0.4),
+        tf_target_cor = c(0.6, 0.5),
+        stringsAsFactors = FALSE
+    )
     control <- data.frame(
         target = c("G", "G"),
         tf = c("TF1", "TF3"),
@@ -14,23 +23,29 @@ test_that("condition-wise Pando candidates form the exact common union", {
         stringsAsFactors = FALSE
     )
     dictionary <- union_grn_edges(
-        global_edges = NULL,
+        global_edges = global,
         condition_edges = list(Control = control, Drug = drug)
     )
     support <- Pando:::.condition_candidate_support_table(
-        list(Control = control, Drug = drug)
+        global_edges = global,
+        condition_edges = list(Control = control, Drug = drug)
     )
     summary <- Pando:::.condition_candidate_support_summary(dictionary, support)
 
     expect_s3_class(dictionary, "PandoEdgeDictionary")
     expect_setequal(
         dictionary$edge_id,
-        c("G||TF1||P1", "G||TF3||P3")
+        c("G||TF1||P1", "G||TF2||P2", "G||TF3||P3")
     )
     expect_identical(anyDuplicated(dictionary$edge_id), 0L)
     expect_equal(
-        summary$n_support_conditions[summary$edge_id == "G||TF1||P1"], 2L
+        summary$n_sources[summary$edge_id == "G||TF1||P1"], 3L
     )
+    expect_true(summary$source_global[summary$edge_id == "G||TF2||P2"])
+    expect_equal(
+        summary$n_support_conditions[summary$edge_id == "G||TF2||P2"], 0L
+    )
+    expect_false(summary$source_global[summary$edge_id == "G||TF3||P3"])
     expect_equal(
         summary$n_support_conditions[summary$edge_id == "G||TF3||P3"], 1L
     )
