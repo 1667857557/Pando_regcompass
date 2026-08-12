@@ -1,62 +1,141 @@
 # Mathematical specification
 
-This file is the only mathematical specification for the condition-comparable Pando workflow.
+This file is the mathematical specification for the condition-comparable Pando workflow.
 
-## Candidate dictionary
+## 1. Structural candidate space
 
-For one broad cell type, target gene \(g\), pooled cells, and conditions \(c\), let \(E_g^{pool}\) be the pooled candidate set and \(E_{g,c}\) the candidate set found within condition \(c\). The frozen dictionary is the union of complete TF–peak–target triples:
+For target gene \(g\), Pando first restricts candidate regulatory peaks by the supplied regulatory regions, the target regulatory domain, and TF motif support. In the RegCompass workflow the supplied region prior is normally
 
 \[
-E_g^{\cup}=E_g^{pool}\cup\bigcup_c E_{g,c}.
+R_{prior}=R_{phastCons}\cup R_{SCREEN\ cCRE}.
 \]
 
-TFs, peaks, and targets are not unioned independently and are never recombined by Cartesian product.
+For an exact edge \(e=(g,f,r)\), candidate identity always means the complete target-TF-region triple. TFs, peaks, and targets are never unioned independently and recombined by Cartesian product.
 
-## Condition fit
+## 2. Pando correlation support and frozen common dictionary
 
-For edge \(e\), paired cell \(i\), and condition \(c\), the unscaled predictor is
+For condition \(c\), define
 
 \[
-x_{e,i}=RNA_{TF(e),i}\,ATAC_{peak(e),i}.
+\rho^{peak}_{e,c}=cor_c(ATAC_r,RNA_g),\qquad
+\rho^{TF}_{e,c}=cor_c(RNA_f,RNA_g).
 \]
 
-Every condition uses the same ordered dictionary and fits
+An edge has local Pando support in condition \(c\) when the two configured Pando gates are satisfied in that same condition:
 
 \[
-y_{g,i}=\alpha_{g,c}+\sum_{e\in E_g^{\cup}}\beta_{e,g,c}x_{e,i}+\varepsilon_{g,i},
-\qquad i\in c.
+L_{e,c}=\mathbf 1\left(|\rho^{peak}_{e,c}|\ge \tau_{peak}\right)
+\mathbf 1\left(|\rho^{TF}_{e,c}|\ge \tau_{TF}\right).
 \]
 
-The implementation uses a Gaussian identity GLM with an intercept, `interaction_term = ":"`, and `scale = FALSE`. Pooled coefficients are not used to centre, scale, or calibrate condition coefficients.
-
-## Estimability and edge selection
-
-Let \(a_{e,g,c}\) indicate that the coefficient is estimable. Zero-variance, aliased, non-finite, and insufficient-residual-degree-of-freedom coefficients remain unavailable.
-
-For the configured adjusted-P threshold \(q\),
+The same correlations are also calculated on all eligible-condition cells pooled within the cell type. Let
 
 \[
-s_{e,g,c}=\mathbf{1}\{a_{e,g,c}=1\ \land\ padj_{e,g,c}<q\}.
+G_e=\mathbf 1\left(|\rho^{peak}_{e,global}|\ge \tau_{peak}\right)
+\mathbf 1\left(|\rho^{TF}_{e,global}|\ge \tau_{TF}\right).
 \]
 
-The effect exported for downstream projection is
+The frozen common dictionary is
 
 \[
-\theta_{e,g,c}=
-\begin{cases}
-\widehat\beta_{e,g,c}, & s_{e,g,c}=1,\\
-0, & s_{e,g,c}=0.
-\end{cases}
+D_g=\operatorname{unique}\left(
+D_{g,global}\cup\bigcup_c D_{g,c}
+\right)
+=\{e:G_e=1\ \lor\ \exists c\ L_{e,c}=1\}.
 \]
 
-The complete coefficient table is retained. An unavailable coefficient remains `NA`; a non-significant coefficient is not interpreted as a biological zero.
+Deduplication is performed on the exact \((target,TF,region)\) key. Global support is included to reduce false-negative candidate exclusion caused by unstable correlations in small conditions; condition-local support is retained separately as provenance.
 
-## Paired-cell projection
+Because the same RNA/ATAC observations are used for correlation screening and coefficient estimation, subsequent P values are conditional on a data-selected dictionary and are not formal selective-inference P values.
 
-For cell \(i\) in condition \(c\), the target-level regulatory score is
+## 3. Pando TF-by-ATAC predictor
+
+For edge \(e\), paired cell \(i\), and condition \(c\), the predictor is the original Pando regulatory interaction
 
 \[
-G_{i,g,c}=\sum_{e\in E_g^{\cup}}\theta_{e,g,c}x_{e,i}.
+x_{eic}=RNA_{TF(e),i}\,ATAC_{peak(e),i}.
+\]
+
+For target \(g\), every condition uses the same ordered columns \(e\in D_g\):
+
+\[
+y_{g,c}=\alpha_{g,c}\mathbf 1+X_{g,c}\beta_{g,c}+\varepsilon_{g,c}.
+\]
+
+This common coordinate system is what makes \(\beta_{g,c,e}\) directly comparable across conditions.
+
+## 4. Common scaling and no-fusion ridge
+
+The model contains a separate intercept for every condition. Between-condition shifts in mean \(TF\times ATAC\) therefore do not identify a within-condition slope. For predictor \(e\), the common scale is the equal-condition RMS within-condition standard deviation:
+
+\[
+s_e^2=\frac{1}{K}\sum_{c=1}^{K}
+\frac{1}{n_c}\sum_{i\in c}(x_{eic}-\bar x_{ec})^2.
+\]
+
+Cross-validation relearns this scale inside each training fold. Exported coefficients are back-transformed to the original TF-by-ATAC units.
+
+For one target and \(K\) conditions, Pando minimizes
+
+\[
+\frac{1}{K}\sum_{c=1}^{K}
+\frac{\|y_c-X_c\beta_c\|_2^2}{n_c}
++\lambda\sum_{c=1}^{K}\|\beta_c\|_2^2.
+\]
+
+There is **no cross-condition fusion penalty**. Algebraically the penalized normal system is block diagonal apart from the shared preprocessing/tuning conventions:
+
+\[
+\left(X_c^TX_c+\lambda I\right)^{-1}X_c^Ty_c
+\]
+
+for each condition block after the common scaling and equal-condition weighting are applied. Ridge keeps the system identifiable under severe collinearity or raw rank deficiency, but does not make individual coefficients uniquely attributable when several highly correlated TF-peak predictors encode nearly the same signal.
+
+One target-specific \(\lambda_g\) is selected by condition-stratified cross-validation and used for every condition of that target. The default one-standard-error rule chooses the largest lambda within one standard error of minimum equal-condition validation MSE.
+
+## 5. Approximate ridge inference
+
+Let \(a_{e,c}\) denote that edge \(e\) is estimable in condition \(c\). Robust sandwich covariance for the penalized estimator is used to form approximate ridge-Wald statistics. P values are BH-adjusted separately within each condition.
+
+Define condition-specific statistical support
+
+\[
+S_{e,c}=\mathbf 1\{a_{e,c}=1\land q_{e,c}<\alpha\}.
+\]
+
+The active condition GRN is
+
+\[
+A_{e,c}=S_{e,c}\,(G_e\lor L_{e,c}).
+\]
+
+Because every fitted edge belongs to the frozen dictionary, \(G_e\lor L_{e,c}\) records why the candidate was allowed into the shared model. Importantly, pooled/global correlation support alone cannot make an edge active: the condition-specific ridge coefficient must itself pass the BH gate.
+
+The downstream regulatory effect is
+
+\[
+penalty\_effect_{e,c}=A_{e,c}\,\widehat\beta_{e,c}.
+\]
+
+The complete \(\widehat\beta\) table is retained even when an edge is inactive. An inactive coefficient is not interpreted as a biological zero.
+
+## 6. Differential coefficients
+
+Because the dictionary, column identities, scaling convention, and target-specific lambda are shared, direct contrasts are defined on the same coefficient coordinate:
+
+\[
+\Delta\beta_e=\beta_{e,A}-\beta_{e,B}.
+\]
+
+Pairwise contrasts use the covariance of the no-fusion ridge estimator to form approximate Wald statistics and BH-adjusted contrast P values. Significance in one condition and nonsignificance in another is not used as a substitute for the direct contrast.
+
+## 7. Paired-cell projection
+
+For paired cell \(i\) in condition \(c\), the target regulatory score is
+
+\[
+G_{i,g,c}=\sum_{e\in D_g}
+penalty\_effect_{e,c}\,RNA_{TF(e),i}\,ATAC_{peak(e),i}.
 \]
 
 For aggregation group \(u\) with membership set \(M_u\),
@@ -65,8 +144,15 @@ For aggregation group \(u\) with membership set \(M_u\),
 G_{u,g}=\frac{1}{|M_u|}\sum_{i\in M_u}G_{i,g,c(i)}.
 \]
 
-Projection is performed on paired cells before aggregation. The fitted coefficient and the RNA and ATAC values always come from the cell's own condition and the recorded preprocessing reference.
+Projection is performed on paired cells before aggregation so the coefficient and both molecular measurements preserve the fitted condition and preprocessing reference.
 
-## Inference scope
+## 8. Inference scope
 
-The reported Gaussian GLM P values are conditional on the frozen candidate dictionary. They do not include selective-inference correction for candidate discovery.
+The coefficient and contrast P values are approximate and conditional on:
+
+1. structural region/domain/motif candidate restrictions;
+2. pooled/global or condition-wise Pando correlation screening;
+3. the resulting frozen exact-edge dictionary;
+4. CV-selected ridge lambda.
+
+They are not exact post-selection inference and are not donor-level population inference when cells rather than biological replicates are the statistical units.
