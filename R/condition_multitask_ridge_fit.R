@@ -133,8 +133,6 @@
             target = edges$target[[1L]],
             condition = condition,
             rsq = fit$rsq[[i]],
-            rsq_oof = cv$rsq_oof[[i]],
-            rsq_in_sample = fit$rsq[[i]],
             rank = as.integer(1L + fit$raw_rank[[i]]),
             raw_rank = as.integer(fit$raw_rank[[i]]),
             residual_df = as.integer(max(0, floor(local_residual))),
@@ -324,8 +322,7 @@
         "condition_bh_supported_common_dictionary_ridge_effects"
     fit$ridge_control <- control
     fit$target_cv <- lapply(result, function(one) {
-        one$cv[c("lambda", "lambda_min", "cv_mse", "cv_se",
-                 "rsq_oof", "curve")]
+        one$cv[c("lambda", "lambda_min", "cv_mse", "cv_se", "curve")]
     })
     fit$target_scaling <- lapply(result, `[[`, "scaling")
     fit$target_parallel_memory_policy <- list(
@@ -336,7 +333,6 @@
         master_batch_gc = TRUE
     )
     fit$rsq_definition <- "selected_lambda_full_data_R2"
-    fit$rsq_oof_role <- "cross_validated_prediction_diagnostic_only"
     class(fit) <- c("ConditionGRNFit", "list")
     result <- NULL
     invisible(gc(verbose = FALSE, full = TRUE))
