@@ -1,5 +1,5 @@
 Package: Pando
-Version: 2.0.9
+Version: 2.0.10
 Type: Package
 Title: Inferring regulomes from multi-modal single-cell genomics data
 Authors@R: person(given = "Jonas Simon",
@@ -34,12 +34,15 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     admitted by pooled/global support or by another condition, while activity
     still requires statistical evidence from that condition's own ridge fit.
     Active penalty_effect values are projected as beta times RNA(TF) times
-    ATAC(peak). Pairwise condition contrasts are computed directly from the
-    no-fusion ridge covariance. Coefficient and contrast P values remain
+    ATAC(peak). The canonical target fit-quality statistic is selected-lambda
+    full-data R-squared; out-of-fold R-squared is retained separately as a
+    prediction diagnostic. Pairwise condition contrasts are computed directly
+    from the no-fusion ridge covariance. Coefficient and contrast P values remain
     approximate and conditional on data-dependent candidate discovery and
     CV-selected ridge regularization. Standard infer_grn retains the original
     Gaussian GLM as its default method and additionally supports single-task
-    ridge. Target-parallel candidate discovery and ridge fitting use target-
+    ridge, implemented as the one-condition specialization of the same ridge
+    solver. Target-parallel candidate discovery and ridge fitting use target-
     specific payload batches, and independent cell-type jobs can be dispatched
     through BiocParallel.
 License: MIT
@@ -98,6 +101,8 @@ Config/Pando/ConditionGRNModelSchema: pando_condition_grn_multitask_ridge_v3
 Config/Pando/ConditionGRNMethod: global-condition-union-single-no-fusion-ridge
 Config/Pando/ConditionProjectionPolicy: condition-BH-supported-common-dictionary-ridge
 Config/Pando/ConditionInference: approximate-ridge-Wald-conditional-on-candidate-dictionary-and-CV-lambda
+Config/Pando/ConditionR2: selected-lambda-full-data-R2
+Config/Pando/ConditionOOFR2: cross-validated-prediction-diagnostic-only
 Config/Pando/StandardRidgeSchema: pando_standard_grn_single_task_ridge_v1
 Config/Pando/StandardRidgeMethod: condition-ridge-k1
 Config/Pando/TargetParallelMemoryPolicy: namespace-worker-target-specific-payload-batches
