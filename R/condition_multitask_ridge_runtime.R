@@ -1,8 +1,6 @@
 # Global-plus-condition common-dictionary ridge integration behind the canonical
 # infer_condition_grn.GRNData definition in condition_grn.R.
 
-.condition_ridge_fallback_key <- "condition_ridge_control"
-
 .condition_candidate_support_table <- function(
     global_edges = NULL, condition_edges) {
     required <- c(
@@ -49,9 +47,6 @@
         out$edge_id, out$source_type,
         ifelse(is.na(out$condition), "__global__", out$condition), sep = "\001"
     )
-    # Candidate discovery can encounter the same exact TF-peak-target triple by
-    # more than one motif path. The common dictionary and its provenance are
-    # exact-edge objects, so collapse those duplicates deterministically.
     out <- out[!duplicated(key), , drop = FALSE]
     out <- out[order(
         out$edge_id, out$source_type,
@@ -102,6 +97,7 @@
     small_condition_action = c("error", "drop_condition", "skip_cell_type"),
     adjust_method = "BH", padj_threshold = 0.05,
     rank_action = c("mark", "error"), min_residual_df = 1L,
+    condition_ridge_control = list(),
     parallel = FALSE, overwrite = FALSE, fallback_args = list(),
     verbose = TRUE, ...) {
     dots <- list(...)
@@ -115,12 +111,19 @@
     if (!inherits(object, "GRNData")) {
         stop("`object` must be a GRNData object.", call. = FALSE)
     }
+    if (!is.list(condition_ridge_control)) {
+        stop("`condition_ridge_control` must be a list.", call. = FALSE)
+    }
     if (!is.list(fallback_args)) {
         stop("`fallback_args` must be a list.", call. = FALSE)
     }
-    control <- fallback_args[[.condition_ridge_fallback_key]]
-    fallback_args[[.condition_ridge_fallback_key]] <- NULL
-    control <- .condition_ridge_control(control)
+    if ("condition_ridge_control" %in% names(fallback_args)) {
+        stop(
+            "`fallback_args$condition_ridge_control` has been removed; pass ",
+            "`condition_ridge_control` directly.", call. = FALSE
+        )
+    }
+    control <- .condition_ridge_control(condition_ridge_control)
     peak_to_gene_method <- match.arg(peak_to_gene_method)
     small_condition_action <- match.arg(small_condition_action)
     rank_action <- match.arg(rank_action)
@@ -258,9 +261,6 @@
         dictionary <- union_grn_edges(
             global_edges = global_edges, condition_edges = condition_edges
         )
-        # union_grn_edges() groups on the exact (target, tf, region) key. Keep an
-        # explicit assertion because duplicated dictionary edges would invalidate
-        # coefficient alignment across conditions.
         if (anyDuplicated(as.character(dictionary$edge_id))) {
             stop("Common condition dictionary contains duplicated exact edges.",
                  call. = FALSE)
