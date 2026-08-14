@@ -641,9 +641,12 @@ union_grn_edges <- function(global_edges = NULL, condition_edges) {
 #' @param small_condition_action Error, drop the condition, or skip the cell type.
 #' @param adjust_method,padj_threshold Multiple-testing rule.
 #' @param rank_action,min_residual_df Ridge estimability controls.
+#' @param condition_ridge_control Direct controls for common-dictionary ridge
+#'   fitting. This is the only condition-ridge control surface.
 #' @param BPPARAM Optional BiocParallel parameter.
 #' @param parallel_scope Automatic, cell-type, or target-level parallel scope.
-#' @param fallback_args Arguments used only by standard Pando fallback.
+#' @param fallback_args Arguments used only by standard Pando fallback. It must
+#'   not contain condition ridge controls.
 #' @param ... Must be empty.
 #' @return A `GRNData` object with common-dictionary condition fits.
 #' @export
@@ -666,6 +669,7 @@ infer_condition_grn.GRNData <- function(
     small_condition_action = c("error", "drop_condition", "skip_cell_type"),
     adjust_method = "BH", padj_threshold = 0.05,
     rank_action = c("mark", "error"), min_residual_df = 1L,
+    condition_ridge_control = list(),
     parallel = FALSE, BPPARAM = NULL,
     parallel_scope = c("auto", "cell_type", "target"),
     overwrite = FALSE, fallback_args = list(), verbose = TRUE, ...) {
@@ -676,6 +680,18 @@ infer_condition_grn.GRNData <- function(
         label[!nzchar(label)] <- "<unnamed>"
         stop("Unused condition-GRN argument(s): ",
              paste(label, collapse = ", "), call. = FALSE)
+    }
+    if (!is.list(condition_ridge_control)) {
+        stop("`condition_ridge_control` must be a list.", call. = FALSE)
+    }
+    if (!is.list(fallback_args)) {
+        stop("`fallback_args` must be a list.", call. = FALSE)
+    }
+    if ("condition_ridge_control" %in% names(fallback_args)) {
+        stop(
+            "`fallback_args$condition_ridge_control` has been removed; pass ",
+            "`condition_ridge_control` directly.", call. = FALSE
+        )
     }
     .pando_validate_bpparam(BPPARAM)
     parallel_scope <- match.arg(parallel_scope)
@@ -744,6 +760,7 @@ infer_condition_grn.GRNData <- function(
             padj_threshold = padj_threshold,
             rank_action = rank_action,
             min_residual_df = min_residual_df,
+            condition_ridge_control = condition_ridge_control,
             parallel = inner_parallel,
             overwrite = overwrite,
             fallback_args = fallback_args,
