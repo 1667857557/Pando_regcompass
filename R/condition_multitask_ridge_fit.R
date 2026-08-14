@@ -132,7 +132,7 @@
         fits[[i]] <- data.frame(
             target = edges$target[[1L]],
             condition = condition,
-            rsq = cv$rsq_oof[[i]],
+            rsq = fit$rsq[[i]],
             rsq_oof = cv$rsq_oof[[i]],
             rsq_in_sample = fit$rsq[[i]],
             rank = as.integer(1L + fit$raw_rank[[i]]),
@@ -335,6 +335,8 @@
         worker_gc = TRUE,
         master_batch_gc = TRUE
     )
+    fit$rsq_definition <- "selected_lambda_full_data_R2"
+    fit$rsq_oof_role <- "cross_validated_prediction_diagnostic_only"
     class(fit) <- c("ConditionGRNFit", "list")
     result <- NULL
     invisible(gc(verbose = FALSE, full = TRUE))
