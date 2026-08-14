@@ -298,19 +298,10 @@
     grid <- control$lambda_grid
     conditions <- names(x)
     loss <- matrix(NA_real_, nfolds, length(grid))
-    oof_sse <- matrix(
-        0, nrow = length(x), ncol = length(grid),
-        dimnames = list(conditions, NULL)
-    )
-    oof_n <- matrix(
-        0L, nrow = length(x), ncol = length(grid),
-        dimnames = list(conditions, NULL)
-    )
 
-    # The first fold-by-lambda pass supplies both lambda-selection loss and all
-    # sufficient statistics needed for condition-level OOF R2. Re-fitting the
-    # selected lambda on every fold would repeat the same training problems and
-    # is mathematically unnecessary.
+    # Cross-validation has one responsibility here: select the target-specific
+    # ridge lambda. Target model adequacy is evaluated only after the selected
+    # lambda is fitted once on all condition data.
     for (fold in seq_len(nfolds)) {
         train_x <- train_y <- valid_x <- valid_y <- vector("list", length(x))
         names(train_x) <- names(train_y) <- names(valid_x) <-
@@ -343,8 +334,6 @@
             mse <- fold_sse / fold_n
             if (all(is.finite(mse)) && all(fold_n > 0L)) {
                 loss[fold, j] <- mean(mse)
-                oof_sse[, j] <- oof_sse[, j] + fold_sse
-                oof_n[, j] <- oof_n[, j] + fold_n
             }
         }
     }
@@ -367,20 +356,9 @@
         eligible <- which(is.finite(mean_loss) & mean_loss <= limit)
         i_pick <- eligible[[which.max(grid[eligible])]]
     }
-    lambda <- grid[[i_pick]]
-
-    expected_n <- lengths(y)
-    rsq_oof <- vapply(seq_along(y), function(i) {
-        value <- as.numeric(y[[i]])
-        if (oof_n[i, i_pick] != expected_n[[i]]) return(NA_real_)
-        tss <- sum((value - mean(value))^2)
-        if (tss <= 0) NA_real_ else 1 - oof_sse[i, i_pick] / tss
-    }, numeric(1))
-    names(rsq_oof) <- names(y)
     list(
-        lambda = lambda, lambda_min = grid[[i_min]],
+        lambda = grid[[i_pick]], lambda_min = grid[[i_min]],
         cv_mse = mean_loss[[i_pick]], cv_se = se_loss[[i_pick]],
-        rsq_oof = rsq_oof,
         curve = data.frame(lambda = grid, mean_mse = mean_loss,
                            se_mse = se_loss, n_folds = n_valid)
     )
