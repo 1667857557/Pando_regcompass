@@ -132,7 +132,7 @@
         fits[[i]] <- data.frame(
             target = edges$target[[1L]],
             condition = condition,
-            rsq = cv$rsq_oof[[i]],
+            rsq = fit$rsq[[i]],
             rsq_oof = cv$rsq_oof[[i]],
             rsq_in_sample = fit$rsq[[i]],
             rank = as.integer(1L + fit$raw_rank[[i]]),
