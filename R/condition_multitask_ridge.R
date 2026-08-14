@@ -296,11 +296,16 @@
     x, y, folds, control, min_residual_df = 1L) {
     nfolds <- attr(folds, "nfolds")
     grid <- control$lambda_grid
+    conditions <- names(x)
     loss <- matrix(NA_real_, nfolds, length(grid))
+
+    # Cross-validation has one responsibility here: select the target-specific
+    # ridge lambda. Target model adequacy is evaluated only after the selected
+    # lambda is fitted once on all condition data.
     for (fold in seq_len(nfolds)) {
         train_x <- train_y <- valid_x <- valid_y <- vector("list", length(x))
         names(train_x) <- names(train_y) <- names(valid_x) <-
-            names(valid_y) <- names(x)
+            names(valid_y) <- conditions
         for (i in seq_along(x)) {
             train <- folds[[i]] != fold
             valid <- !train
@@ -316,12 +321,20 @@
                 min_residual_df, inference = FALSE
             )
             if (!identical(fit$status, "ok")) next
-            mse <- vapply(seq_along(valid_x), function(i) {
+            fold_sse <- vapply(seq_along(valid_x), function(i) {
                 pred <- fit$intercept[[i]] +
                     valid_x[[i]] %*% fit$beta[i, ]
-                mean((as.numeric(valid_y[[i]]) - as.numeric(pred))^2)
+                residual <- as.numeric(valid_y[[i]]) - as.numeric(pred)
+                if (!length(residual) || any(!is.finite(residual))) {
+                    return(NA_real_)
+                }
+                sum(residual^2)
             }, numeric(1))
-            if (all(is.finite(mse))) loss[fold, j] <- mean(mse)
+            fold_n <- lengths(valid_y)
+            mse <- fold_sse / fold_n
+            if (all(is.finite(mse)) && all(fold_n > 0L)) {
+                loss[fold, j] <- mean(mse)
+            }
         }
     }
     mean_loss <- colMeans(loss, na.rm = TRUE)
@@ -343,44 +356,9 @@
         eligible <- which(is.finite(mean_loss) & mean_loss <= limit)
         i_pick <- eligible[[which.max(grid[eligible])]]
     }
-    lambda <- grid[[i_pick]]
-
-    oof <- lapply(y, function(value) rep(NA_real_, length(value)))
-    names(oof) <- names(y)
-    for (fold in seq_len(nfolds)) {
-        train_x <- train_y <- vector("list", length(x))
-        names(train_x) <- names(train_y) <- names(x)
-        for (i in seq_along(x)) {
-            train <- folds[[i]] != fold
-            train_x[[i]] <- x[[i]][train, , drop = FALSE]
-            train_y[[i]] <- y[[i]][train]
-        }
-        scaling <- .condition_ridge_scaling(train_x, control$scale_floor)
-        fit <- .condition_ridge_fit(
-            train_x, train_y, scaling, lambda,
-            min_residual_df, inference = FALSE
-        )
-        if (!identical(fit$status, "ok")) next
-        for (i in seq_along(x)) {
-            index <- which(folds[[i]] == fold)
-            oof[[i]][index] <- fit$intercept[[i]] +
-                x[[i]][index, , drop = FALSE] %*% fit$beta[i, ]
-        }
-    }
-    rsq_oof <- vapply(seq_along(y), function(i) {
-        value <- as.numeric(y[[i]])
-        pred <- as.numeric(oof[[i]])
-        valid <- is.finite(value) & is.finite(pred)
-        if (sum(valid) < 2L) return(NA_real_)
-        tss <- sum((value[valid] - mean(value[valid]))^2)
-        if (tss <= 0) NA_real_ else
-            1 - sum((value[valid] - pred[valid])^2) / tss
-    }, numeric(1))
-    names(rsq_oof) <- names(y)
     list(
-        lambda = lambda, lambda_min = grid[[i_min]],
+        lambda = grid[[i_pick]], lambda_min = grid[[i_min]],
         cv_mse = mean_loss[[i_pick]], cv_se = se_loss[[i_pick]],
-        rsq_oof = rsq_oof,
         curve = data.frame(lambda = grid, mean_mse = mean_loss,
                            se_mse = se_loss, n_folds = n_valid)
     )

@@ -40,8 +40,55 @@ test_that("canonical ridge rsq is selected-lambda full-data R2", {
     min_residual_df = 1L,
     rank_action = "mark"
   )
-  expect_equal(result$fit$rsq, result$fit$rsq_in_sample, tolerance = 1e-12)
-  expect_equal(result$fit$rsq_oof, unname(result$cv$rsq_oof), tolerance = 1e-12)
+
+  x <- Pando:::.condition_ridge_predictors(prepared, edges, cells)
+  y <- lapply(cells, function(one) as.numeric(prepared$gene_data[one, "G"]))
+  scaling <- Pando:::.condition_ridge_scaling(x, control$scale_floor)
+  full_fit <- Pando:::.condition_ridge_fit(
+    x, y, scaling, result$cv$lambda,
+    min_residual_df = 1L, inference = TRUE
+  )
+
+  expect_equal(result$fit$rsq, unname(full_fit$rsq), tolerance = 1e-12)
   expect_true(all(is.finite(result$fit$rsq)))
   expect_true(all(result$fit$rsq <= 1 + 1e-12))
+  expect_false(any(c("rsq_oof", "rsq_in_sample") %in% names(result$fit)))
+})
+
+test_that("ridge CV only selects lambda and exports CV loss diagnostics", {
+  set.seed(23)
+  n <- 25L
+  x <- list(
+    A = cbind(e1 = rnorm(n), e2 = rnorm(n)),
+    B = cbind(e1 = rnorm(n), e2 = rnorm(n))
+  )
+  y <- list(
+    A = 0.8 * x$A[, "e1"] - 0.2 * x$A[, "e2"] + rnorm(n, sd = 0.3),
+    B = -0.5 * x$B[, "e1"] + 0.6 * x$B[, "e2"] + rnorm(n, sd = 0.3)
+  )
+  cells <- list(A = seq_len(n), B = seq_len(n))
+  control <- Pando:::.condition_ridge_control(list(
+    lambda_grid = c(0.01, 0.1, 1),
+    lambda_rule = "1se", cv_folds = 5L, seed = 7L
+  ))
+  folds <- Pando:::.condition_ridge_folds(cells, 5L, 7L)
+  cv <- Pando:::.condition_ridge_cv(
+    x, y, folds, control, min_residual_df = 1L
+  )
+
+  expect_named(cv, c("lambda", "lambda_min", "cv_mse", "cv_se", "curve"))
+  expect_true(cv$lambda %in% control$lambda_grid)
+  expect_true(cv$lambda_min %in% control$lambda_grid)
+  expect_true(is.finite(cv$cv_mse))
+  expect_equal(nrow(cv$curve), length(control$lambda_grid))
+
+  body_text <- paste(deparse(body(Pando:::.condition_ridge_cv)), collapse = "\n")
+  expect_false(grepl("oof", body_text, ignore.case = TRUE))
+  expect_equal(
+    lengths(regmatches(
+      body_text,
+      gregexpr("for (fold in seq_len(nfolds))", body_text, fixed = TRUE)
+    )),
+    1L
+  )
 })
