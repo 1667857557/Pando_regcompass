@@ -1,15 +1,13 @@
-# Activity and inference contract for global-plus-condition common-dictionary ridge.
+# Activity and diagnostic-inference contract for common-dictionary Scheme E.
 #
-# The frozen dictionary is the exact union of TF-peak-target edges passing the
-# Pando peak-target and TF-target correlation gates either in the pooled/global
-# cell set or in at least one condition. Ridge is fitted once on this identical
-# dictionary for every condition. Correlation support determines dictionary
-# admission and is retained as provenance only. Once an edge is in the frozen
-# dictionary, activity in condition c is determined by that condition's own
-# estimable BH-supported ridge coefficient.
+# Candidate correlation support determines admission to the frozen exact-edge
+# dictionary and remains provenance only. Scheme-E coefficients are continuous
+# on that fixed dictionary. Condition-wise BH statistics are retained as model
+# diagnostics; they never change network membership and never overwrite a fitted
+# coefficient with zero.
 
 .condition_significant_projection_policy <-
-    "condition_bh_supported_common_dictionary_ridge_effects"
+    "continuous_common_dictionary_scheme_e_effects"
 .condition_fit_dictionary_policy <-
     "global_and_condition_union_pando_correlation_supported_frozen_dictionary"
 
@@ -17,7 +15,7 @@
     value <- toupper(as.character(adjust_method))
     if (length(value) != 1L || is.na(value) || !identical(value, "BH")) {
         stop(
-            "Condition ridge inference requires `adjust_method = \"BH\"`.",
+            "Condition diagnostic inference requires `adjust_method = \"BH\"`.",
             call. = FALSE
         )
     }
@@ -38,14 +36,15 @@
 
 .condition_apply_activity_gate <- function(fit) {
     if (!inherits(fit, "ConditionGRNFit")) {
-        stop("A ConditionGRNFit is required for condition activity gating.",
+        stop("A ConditionGRNFit is required for condition activity annotation.",
              call. = FALSE)
     }
     threshold <- .condition_validate_padj_threshold(fit$padj_threshold)
     coefficient <- as.data.frame(fit$coefficients, stringsAsFactors = FALSE)
     support <- fit$dictionary_support_table
     required_coefficient <- c(
-        "edge_id", "condition", "estimate", "estimable", "padj"
+        "edge_id", "condition", "estimate", "padj",
+        "contrast_identifiable", "shared_by_boundary", "fused_by_penalty"
     )
     required_support <- c(
         "edge_id", "source_type", "condition",
@@ -54,7 +53,7 @@
     if (!all(required_coefficient %in% colnames(coefficient)) ||
         !is.data.frame(support) ||
         !all(required_support %in% colnames(support))) {
-        stop("Global/condition Pando support metadata are incomplete.",
+        stop("Scheme-E condition-GRN support metadata are incomplete.",
              call. = FALSE)
     }
 
@@ -96,9 +95,6 @@
         as.numeric(global$tf_target_cor[global_index[global_support]])
     coefficient$local_support <- local_support
     coefficient$global_support <- global_support
-    # Every coefficient row exists only because the exact edge belongs to the
-    # frozen common dictionary. Global/local flags describe where that admission
-    # evidence came from; they do not veto a condition-specific fitted effect.
     coefficient$dictionary_support <- TRUE
     coefficient$current_scope_correlation_support <-
         local_support | global_support
@@ -107,15 +103,15 @@
 
     estimate <- suppressWarnings(as.numeric(coefficient$estimate))
     padj <- suppressWarnings(as.numeric(coefficient$padj))
-    statistically_supported <- coefficient$estimable %in% TRUE &
-        is.finite(estimate) & is.finite(padj) & padj < threshold
-    active <- statistically_supported
+    statistically_supported <- is.finite(estimate) & is.finite(padj) &
+        padj < threshold
+    # Fixed topology: every finite coefficient on the frozen dictionary remains
+    # active for projection. BH is diagnostic only.
+    active <- is.finite(estimate)
     coefficient$statistically_supported <- statistically_supported
     coefficient$active <- active
-    # Compatibility alias for existing Network consumers. The explicit
-    # statistically_supported column is the condition-wise ridge-BH result.
-    coefficient$significant <- active
-    coefficient$penalty_effect <- ifelse(active, estimate, 0)
+    coefficient$significant <- statistically_supported
+    coefficient$penalty_effect <- ifelse(active, estimate, NA_real_)
     fit$coefficients <- coefficient
     fit$projection_effect_column <- "penalty_effect"
     fit$projection_policy <- .condition_significant_projection_policy
@@ -126,7 +122,9 @@
     fit$global_support_role <-
         "pooled_all_eligible_conditions_pando_correlation_provenance_only"
     fit$statistical_support_role <-
-        "condition_wise_BH_adjusted_approximate_ridge_wald_defines_activity"
+        "condition_wise_BH_adjusted_wald_diagnostic_only"
+    fit$activity_role <-
+        "all_finite_scheme_e_coefficients_on_fixed_common_dictionary"
     fit
 }
 
@@ -141,7 +139,7 @@
 
     if (isTRUE(verbose)) {
         message(
-            "Pando condition phase=single_no_fusion_ridge_start",
+            "Pando condition phase=scheme_e_z025_start",
             " | cell_type=", as.character(progress_label),
             ";fit_edges=", nrow(dictionary),
             ";targets=", length(unique(as.character(dictionary$target)))
@@ -151,7 +149,7 @@
         object = object, fit = fit, prepared = prepared, control = control,
         rank_action = rank_action, min_residual_df = min_residual_df,
         parallel = parallel, verbose = verbose,
-        progress_phase = "ridge_single",
+        progress_phase = "scheme_e_z025",
         progress_label = progress_label
     )
     final$fit$fit_dictionary_policy <- .condition_fit_dictionary_policy
@@ -163,7 +161,7 @@
     final$fit$candidate_tf_cor <- fit$candidate_tf_cor
     final$fit$candidate_peak_cor <- fit$candidate_peak_cor
     final$fit$inference_scope <-
-        "approximate_ridge_wald_conditional_on_global_or_condition_pando_screened_dictionary_and_cv_lambda"
+        "scheme_e_z025_primary;BH_and_target_R2_are_diagnostics_only"
     final$fit <- .condition_apply_activity_gate(final$fit)
     final$object <- .condition_update_network_significance(
         final$object, final$fit
@@ -173,7 +171,9 @@
             "Pando condition phase=condition_fit_complete",
             " | cell_type=", as.character(progress_label),
             ";fit_edges=", nrow(dictionary),
-            ";active_edges=", sum(final$fit$coefficients$active %in% TRUE),
+            ";projection_edges=", sum(final$fit$coefficients$active %in% TRUE),
+            ";bh_supported_diagnostic=",
+            sum(final$fit$coefficients$statistically_supported %in% TRUE),
             ";targets=", length(unique(as.character(dictionary$target)))
         )
     }
