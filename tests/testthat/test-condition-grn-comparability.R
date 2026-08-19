@@ -1,183 +1,124 @@
-test_that("global and condition Pando candidates form one deduplicated exact union", {
-    global <- data.frame(
-        target = c("G", "G"),
-        tf = c("TF1", "TF2"),
-        region = c("P1", "P2"),
-        atac_feature_id = c("A1", "A2"),
-        peak_target_cor = c(0.5, 0.4),
-        tf_target_cor = c(0.6, 0.5),
-        stringsAsFactors = FALSE
+test_that("Scheme E reproduces the two-condition scalar closed form", {
+    i_delta <- 4
+    d_delta <- 1
+    i_gamma <- matrix(2 * i_delta, 1, 1)
+    d_gamma <- d_delta / sqrt(2)
+    rhs <- as.numeric(i_gamma * d_gamma)
+    block <- Pando:::.condition_scheme_e_block_inverse_roots(
+        i_gamma, p = 1L, k_minus_one = 1L,
+        edge_keep = TRUE, rank_tol = 1e-12
     )
-    control <- data.frame(
-        target = c("G", "G"),
-        tf = c("TF1", "TF3"),
-        region = c("P1", "P3"),
-        atac_feature_id = c("A1", "A3"),
-        peak_target_cor = c(0.4, 0.6),
-        tf_target_cor = c(0.5, 0.4),
-        stringsAsFactors = FALSE
+    solved <- Pando:::.condition_scheme_e_fista(
+        i_gamma, rhs, block,
+        Pando:::.condition_scheme_e_control(list(
+            solver_tol = 1e-12, solver_max_iter = 10000L
+        ))
     )
-    drug <- data.frame(
-        target = "G", tf = "TF1", region = "P1", atac_feature_id = "A1",
-        peak_target_cor = 0.7, tf_target_cor = 0.6,
-        stringsAsFactors = FALSE
-    )
-    dictionary <- union_grn_edges(
-        global_edges = global,
-        condition_edges = list(Control = control, Drug = drug)
-    )
-    support <- Pando:::.condition_candidate_support_table(
-        global_edges = global,
-        condition_edges = list(Control = control, Drug = drug)
-    )
-    summary <- Pando:::.condition_candidate_support_summary(dictionary, support)
-
-    expect_s3_class(dictionary, "PandoEdgeDictionary")
-    expect_setequal(
-        dictionary$edge_id,
-        c("G||TF1||P1", "G||TF2||P2", "G||TF3||P3")
-    )
-    expect_identical(anyDuplicated(dictionary$edge_id), 0L)
-    expect_equal(
-        summary$n_sources[summary$edge_id == "G||TF1||P1"], 3L
-    )
-    expect_true(summary$source_global[summary$edge_id == "G||TF2||P2"])
-    expect_equal(
-        summary$n_support_conditions[summary$edge_id == "G||TF2||P2"], 0L
-    )
-    expect_false(summary$source_global[summary$edge_id == "G||TF3||P3"])
-    expect_equal(
-        summary$n_support_conditions[summary$edge_id == "G||TF3||P3"], 1L
-    )
+    expected_delta <- sign(d_delta) *
+        max(abs(d_delta) - 0.25 / sqrt(i_delta), 0)
+    observed_delta <- sqrt(2) * solved$gamma[[1L]]
+    expect_identical(solved$status, "ok")
+    expect_equal(observed_delta, expected_delta, tolerance = 1e-9)
+    expect_lte(solved$kkt_residual, 1e-9)
 })
 
-.rank_deficient_multitask_fixture <- function(n = 30L) {
-    x1_a <- seq(-1, 1, length.out = n)
-    x2_a <- cos(seq(0, pi, length.out = n))
-    x1_b <- seq(-0.8, 1.2, length.out = n)
-    x2_b <- sin(seq(0, pi, length.out = n))
-    xa <- cbind(edge1 = x1_a, edge2 = x2_a, edge3 = x1_a + x2_a)
-    xb <- cbind(edge1 = x1_b, edge2 = x2_b, edge3 = x1_b + x2_b)
-    x <- list(Control = xa, Drug = xb)
+test_that("zero-information exact edges are constrained to exact sharing", {
+    n <- 40L
+    signal_a <- seq(-1, 1, length.out = n)
+    signal_b <- seq(-0.8, 1.2, length.out = n)
+    x <- list(
+        A = cbind(signal = signal_a, no_information = rep(1, n)),
+        B = cbind(signal = signal_b, no_information = rep(2, n))
+    )
     y <- list(
-        Control = 1 + 2 * x1_a - 0.8 * x2_a,
-        Drug = 1.2 + 2.4 * x1_b - 0.4 * x2_b
-    )
-    list(x = x, y = y)
-}
-
-test_that("ridge fits a raw rank-deficient common dictionary", {
-    fixture <- .rank_deficient_multitask_fixture()
-    scaling <- Pando:::.condition_ridge_scaling(fixture$x, 1e-8)
-    fit <- Pando:::.condition_ridge_fit(
-        fixture$x, fixture$y, scaling,
-        lambda = 0.1, min_residual_df = 1L, inference = TRUE
-    )
-
-    expect_identical(fit$status, "ok")
-    expect_true(all(fit$raw_rank < sum(fit$informative)))
-    expect_true(all(is.finite(fit$beta)))
-    expect_true(all(is.finite(fit$beta_z)))
-    expect_true(is.finite(fit$regularized_kappa))
-    expect_true(is.matrix(fit$covariance_z))
-})
-
-test_that("no-fusion ridge retains condition-specific coefficient differences", {
-    fixture <- .rank_deficient_multitask_fixture()
-    scaling <- Pando:::.condition_ridge_scaling(fixture$x, 1e-8)
-    fit <- Pando:::.condition_ridge_fit(
-        fixture$x, fixture$y, scaling,
-        lambda = 0.05, min_residual_df = 1L, inference = FALSE
-    )
-    expect_identical(fit$status, "ok")
-    expect_gt(sum((fit$beta["Control", ] - fit$beta["Drug", ])^2), 0)
-})
-
-test_that("condition-specific zero variance is diagnostic rather than fatal", {
-    n <- 30L
-    control_x <- cbind(
-        constant_here = rep(1, n),
-        shared_signal = seq(-1, 1, length.out = n)
-    )
-    drug_x <- cbind(
-        constant_here = seq(0.5, 1.5, length.out = n),
-        shared_signal = seq(-0.8, 1.2, length.out = n)
-    )
-    x <- list(Control = control_x, Drug = drug_x)
-    y <- list(
-        Control = 1 + 1.5 * control_x[, "shared_signal"],
-        Drug = 1 + 0.8 * drug_x[, "constant_here"] +
-            1.5 * drug_x[, "shared_signal"]
+        A = 1 + 1.2 * signal_a + sin(seq_len(n)) * 0.05,
+        B = 1 + 1.2 * signal_b + cos(seq_len(n)) * 0.05
     )
     scaling <- Pando:::.condition_ridge_scaling(x, 1e-8)
-    fit <- Pando:::.condition_ridge_fit(
-        x, y, scaling, lambda = 0.1,
-        min_residual_df = 1L, inference = TRUE
-    )
-
-    expect_identical(fit$status, "ok")
-    expect_true(fit$zero_variance["Control", "constant_here"])
-    expect_false(fit$zero_variance["Drug", "constant_here"])
-    expect_true(fit$informative[["constant_here"]])
-    expect_true(all(is.finite(fit$beta[, "constant_here"])))
-})
-
-test_that("condition-stratified CV selects one lambda for every condition", {
-    fixture <- .rank_deficient_multitask_fixture(n = 36L)
-    cells <- list(
-        Control = paste0("c", seq_len(nrow(fixture$x$Control))),
-        Drug = paste0("d", seq_len(nrow(fixture$x$Drug)))
-    )
-    control <- Pando:::.condition_ridge_control(list(
-        lambda_grid = c(0.01, 0.1, 1),
-        lambda_rule = "1se",
-        cv_folds = 4L,
-        seed = 7L
-    ))
-    folds <- Pando:::.condition_ridge_folds(
-        cells, control$cv_folds, control$seed
-    )
-    cv <- Pando:::.condition_ridge_cv(
-        fixture$x, fixture$y, folds, control,
-        min_residual_df = 1L
-    )
-
-    expect_true(cv$lambda %in% control$lambda_grid)
-    expect_true(cv$lambda_min %in% control$lambda_grid)
-    expect_identical(names(cv$rsq_oof), c("Control", "Drug"))
-    expect_true(all(is.finite(cv$rsq_oof)))
-    expect_equal(nrow(cv$curve), length(control$lambda_grid))
-})
-
-test_that("joint block covariance yields finite pairwise ridge contrasts", {
-    fixture <- .rank_deficient_multitask_fixture()
-    scaling <- Pando:::.condition_ridge_scaling(fixture$x, 1e-8)
-    fit <- Pando:::.condition_ridge_fit(
-        fixture$x, fixture$y, scaling,
-        lambda = 0.1, min_residual_df = 1L, inference = TRUE
-    )
-    edges <- data.frame(
-        tf = paste0("TF", 1:3), target = rep("G", 3),
-        region = paste0("P", 1:3), edge_id = colnames(fixture$x$Control),
-        atac_feature_id = paste0("A", 1:3), stringsAsFactors = FALSE
-    )
-    informative <- sweep(!fit$zero_variance, 2L, fit$informative, "&")
-    contrast <- Pando:::.condition_ridge_contrasts(
-        fit, edges, informative, scaling
-    )
-    expect_equal(nrow(contrast), 3L)
-    expect_true(all(contrast$contrast_estimable))
-    expect_true(all(is.finite(contrast$contrast_estimate)))
-    expect_true(all(is.finite(contrast$contrast_se)))
-})
-
-test_that("rank auditing remains available under ridge", {
-    fixture <- .rank_deficient_multitask_fixture()
-    scaling <- Pando:::.condition_ridge_scaling(fixture$x, 1e-8)
-    fit <- Pando:::.condition_ridge_fit(
-        fixture$x, fixture$y, scaling,
-        lambda = 0.1, min_residual_df = 1L, inference = FALSE
+    fit <- Pando:::.condition_scheme_e_fit(
+        x, y, scaling, min_residual_df = 1L, inference = FALSE
     )
     expect_identical(fit$status, "ok")
-    expect_true(any(fit$raw_rank < sum(fit$informative)))
+    expect_false(fit$contrast_identifiable[[2L]])
+    expect_true(fit$shared_by_boundary[[2L]])
+    expect_equal(diff(range(fit$beta[, 2L])), 0, tolerance = 0)
+})
+
+test_that("cell abundance remains in raw condition information", {
+    base_x <- cbind(edge = rep(c(-1, -0.5, 0, 0.5, 1), 20L))
+    x <- list(
+        Large = base_x,
+        Small = base_x[seq_len(nrow(base_x) / 4L), , drop = FALSE]
+    )
+    y <- list(
+        Large = 0.7 * x$Large[, 1] + sin(seq_len(nrow(x$Large))) * 0.2,
+        Small = 0.7 * x$Small[, 1] + sin(seq_len(nrow(x$Small))) * 0.2
+    )
+    scaling <- Pando:::.condition_ridge_scaling(x, 1e-8)
+    fit <- Pando:::.condition_scheme_e_fit(
+        x, y, scaling, min_residual_df = 1L, inference = FALSE
+    )
+    expect_identical(fit$status, "ok")
+    ratio <- fit$raw_information["Large", "edge"] /
+        fit$raw_information["Small", "edge"]
+    expect_equal(ratio, 4, tolerance = 1e-10)
+    expect_equal(unname(fit$condition_weight), c(1, 1))
+})
+
+test_that("three-condition Scheme E is invariant to condition ordering", {
+    set.seed(71)
+    n <- c(A = 70L, B = 45L, C = 30L)
+    make_x <- function(nn, shift) {
+        e1 <- rnorm(nn, shift, 1)
+        e2 <- 0.45 * e1 + rnorm(nn, sd = 0.8)
+        cbind(e1 = e1, e2 = e2)
+    }
+    x <- Map(make_x, n, c(A = 0, B = 0.2, C = -0.1))
+    y <- lapply(names(x), function(condition) {
+        b <- switch(condition,
+                    A = c(1.0, -0.4), B = c(1.1, -0.4), C = c(0.7, -0.1))
+        as.numeric(x[[condition]] %*% b + rnorm(n[[condition]], sd = 0.3))
+    })
+    names(y) <- names(x)
+    scaling <- Pando:::.condition_ridge_scaling(x, 1e-8)
+    fit <- Pando:::.condition_scheme_e_fit(
+        x, y, scaling, min_residual_df = 1L, inference = FALSE,
+        control = list(solver_tol = 1e-10, solver_max_iter = 10000L)
+    )
+    order <- c("C", "A", "B")
+    x2 <- x[order]
+    y2 <- y[order]
+    scaling2 <- Pando:::.condition_ridge_scaling(x2, 1e-8)
+    fit2 <- Pando:::.condition_scheme_e_fit(
+        x2, y2, scaling2, min_residual_df = 1L, inference = FALSE,
+        control = list(solver_tol = 1e-10, solver_max_iter = 10000L)
+    )
+    expect_identical(fit$status, "ok")
+    expect_identical(fit2$status, "ok")
+    expect_equal(fit$beta, fit2$beta[rownames(fit$beta), , drop = FALSE],
+                 tolerance = 1e-7)
+})
+
+test_that("correlated multi-edge Scheme E reports a converged KKT residual", {
+    set.seed(101)
+    n <- 80L
+    xa <- cbind(e1 = rnorm(n), e2 = rnorm(n))
+    xa[, 2] <- 0.8 * xa[, 1] + 0.6 * xa[, 2]
+    xb <- cbind(e1 = rnorm(n), e2 = rnorm(n))
+    xb[, 2] <- 0.8 * xb[, 1] + 0.6 * xb[, 2]
+    x <- list(A = xa, B = xb)
+    y <- list(
+        A = as.numeric(xa %*% c(1.0, -0.4) + rnorm(n, sd = 0.25)),
+        B = as.numeric(xb %*% c(1.25, -0.1) + rnorm(n, sd = 0.25))
+    )
+    scaling <- Pando:::.condition_ridge_scaling(x, 1e-8)
+    fit <- Pando:::.condition_scheme_e_fit(
+        x, y, scaling, min_residual_df = 1L, inference = TRUE,
+        control = list(solver_tol = 1e-9, solver_max_iter = 10000L)
+    )
+    expect_identical(fit$status, "ok")
+    expect_identical(fit$solver_status, "ok")
+    expect_true(is.finite(fit$kkt_residual))
+    expect_lte(fit$kkt_residual, 1e-7)
+    expect_true(all(is.finite(fit$beta)))
 })
