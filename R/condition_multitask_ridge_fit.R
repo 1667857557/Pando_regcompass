@@ -1,41 +1,26 @@
-# Single-pass common-dictionary ridge fit for condition GRNs.
+# Single-pass common-dictionary Scheme-E fit for condition GRNs.
 #
 # Candidate discovery is completed before this file is called. Every condition
-# is fitted on the same frozen TF-peak-target dictionary with one target-specific
-# CV lambda, shared predictor scaling and no cross-condition coefficient fusion.
+# is fitted on the same frozen TF-peak-target dictionary and common predictor
+# scale. Scheme E (z=0.25) couples condition coefficients through an exact-edge
+# sparse deviation penalty and returns continuous coefficients for projection.
 
-.condition_fit_engine <- "condition_union_single_no_fusion_common_lambda_ridge"
+.condition_fit_engine <- "condition_union_scheme_e_exact_edge_z025"
 
 .condition_ridge_contrasts <- function(
     fit, edges, condition_informative, scaling) {
     conditions <- rownames(fit$beta)
     if (length(conditions) < 2L) return(data.frame())
     pairs <- utils::combn(seq_along(conditions), 2L, simplify = FALSE)
-    keep <- fit$informative_index
-    p <- length(keep)
     out <- lapply(pairs, function(pair) {
         a <- pair[[1L]]
         b <- pair[[2L]]
         delta <- as.numeric(fit$beta[a, ] - fit$beta[b, ])
-        estimable <- as.logical(condition_informative[a, ]) &
-            as.logical(condition_informative[b, ]) & is.finite(delta)
-        se <- rep(NA_real_, nrow(edges))
-        if (!is.null(fit$covariance_z) && p > 0L) {
-            for (j in seq_along(keep)) {
-                edge_index <- keep[[j]]
-                ia <- (a - 1L) * p + j
-                ib <- (b - 1L) * p + j
-                variance_z <- fit$covariance_z[ia, ia] +
-                    fit$covariance_z[ib, ib] -
-                    2 * fit$covariance_z[ia, ib]
-                if (is.finite(variance_z) && variance_z >= 0) {
-                    se[[edge_index]] <- sqrt(variance_z) /
-                        scaling$scale[[edge_index]]
-                }
-            }
-        }
+        identifiable <- as.logical(fit$contrast_identifiable) & is.finite(delta)
+        se <- sqrt(as.numeric(fit$se[a, ])^2 + as.numeric(fit$se[b, ])^2)
+        se[!is.finite(se) | se <= 0] <- NA_real_
         statistic <- delta / se
-        statistic[!is.finite(statistic) | !estimable] <- NA_real_
+        statistic[!is.finite(statistic) | !identifiable] <- NA_real_
         pval <- 2 * stats::pnorm(-abs(statistic))
         data.frame(
             tf = edges$tf,
@@ -52,7 +37,16 @@
             contrast_se = se,
             contrast_statistic = statistic,
             contrast_pval = pval,
-            contrast_estimable = estimable,
+            contrast_estimable = identifiable,
+            contrast_identifiable = identifiable,
+            shared_by_boundary = as.logical(fit$shared_by_boundary),
+            fused_by_penalty = as.logical(fit$fused_by_penalty),
+            profile_information_delta = as.numeric(fit$profile_information),
+            penalty_family = fit$penalty_family,
+            penalty_value = fit$penalty_value,
+            solver_status = fit$solver_status,
+            kkt_residual = fit$kkt_residual,
+            iterations = fit$iterations,
             stringsAsFactors = FALSE
         )
     })
@@ -60,32 +54,43 @@
 }
 
 .condition_ridge_target <- function(
-    prepared, edges, cells_by_condition, folds, control,
+    prepared, edges, cells_by_condition, folds = NULL, control,
     min_residual_df, rank_action) {
     x <- .condition_ridge_predictors(prepared, edges, cells_by_condition)
     y <- lapply(cells_by_condition, function(cells) {
         as.numeric(prepared$gene_data[cells, edges$target[[1L]]])
     })
     names(y) <- names(cells_by_condition)
-    cv <- .condition_ridge_cv(x, y, folds, control, min_residual_df)
     scaling <- .condition_ridge_scaling(x, control$scale_floor)
     fit <- .condition_ridge_fit(
-        x, y, scaling, cv$lambda, min_residual_df, inference = TRUE
+        x = x,
+        y = y,
+        scaling = scaling,
+        min_residual_df = min_residual_df,
+        inference = TRUE,
+        control = control
     )
     if (!identical(fit$status, "ok")) {
-        stop("Final condition ridge failed for target `",
-             edges$target[[1L]], "`: ", fit$status, ".", call. = FALSE)
+        detail <- if (!is.null(fit$solver_status)) {
+            paste0(" (solver=", fit$solver_status,
+                   ", kkt=", format(fit$kkt_residual, digits = 4), ")")
+        } else ""
+        stop("Final condition Scheme-E fit failed for target `",
+             edges$target[[1L]], "`: ", fit$status, detail, ".",
+             call. = FALSE)
     }
     raw_rank_deficient <- fit$raw_rank < sum(fit$informative)
     if (identical(rank_action, "error") && any(raw_rank_deficient)) {
         stop("Raw common-dictionary design is rank deficient for target `",
              edges$target[[1L]],
-             "`; ridge succeeded but rank_action='error' requested failure.",
-             call. = FALSE)
+             "`; Scheme E retained only identifiable condition contrasts but ",
+             "rank_action='error' requested failure.", call. = FALSE)
     }
 
-    shared <- colMeans(fit$beta)
-    deviation <- sweep(fit$beta, 2L, shared, "-")
+    shared <- fit$shared_z / scaling$scale
+    deviation <- sweep(
+        fit$deviation_z, 2L, scaling$scale, "/"
+    )
     condition_informative <- sweep(
         !fit$zero_variance, 2L, fit$informative, "&"
     )
@@ -99,9 +104,6 @@
         std_err <- as.numeric(fit$se[i, ])
         statistic <- as.numeric(fit$statistic[i, ])
         pval <- as.numeric(fit$pval[i, ])
-        std_err[!informative_here] <- NA_real_
-        statistic[!informative_here] <- NA_real_
-        pval[!informative_here] <- NA_real_
         coefficients[[i]] <- data.frame(
             tf = edges$tf,
             target = edges$target,
@@ -112,14 +114,26 @@
             estimate = estimate,
             estimate_standardized = as.numeric(fit$beta_z[i, ]),
             shared_estimate = as.numeric(shared),
+            beta_shared = as.numeric(shared),
             condition_deviation = as.numeric(deviation[i, ]),
+            delta_beta = as.numeric(deviation[i, ]),
             std_err = std_err,
             statistic = statistic,
             pval = pval,
-            estimable = informative_here & is.finite(estimate),
+            estimable = is.finite(estimate),
             zero_variance = as.logical(fit$zero_variance[i, ]),
             condition_informative = informative_here,
-            aliased = FALSE,
+            contrast_identifiable = as.logical(fit$contrast_identifiable),
+            shared_by_boundary = as.logical(fit$shared_by_boundary),
+            fused_by_penalty = as.logical(fit$fused_by_penalty),
+            raw_information_condition = as.numeric(fit$raw_information[i, ]),
+            profile_information_delta = as.numeric(fit$profile_information),
+            penalty_family = fit$penalty_family,
+            penalty_value = fit$penalty_value,
+            solver_status = fit$solver_status,
+            kkt_residual = fit$kkt_residual,
+            iterations = fit$iterations,
+            aliased = !as.logical(fit$contrast_identifiable),
             condition = condition,
             candidate_index = edges$candidate_index,
             source_global = edges$source_global,
@@ -127,8 +141,7 @@
             n_sources = edges$n_sources,
             stringsAsFactors = FALSE
         )
-        local_residual <- length(cells_by_condition[[i]]) - 1 -
-            fit$effective_df[[i]]
+        local_residual <- length(cells_by_condition[[i]]) - 1 - fit$raw_rank[[i]]
         fits[[i]] <- data.frame(
             target = edges$target[[1L]],
             condition = condition,
@@ -136,24 +149,24 @@
             rank = as.integer(1L + fit$raw_rank[[i]]),
             raw_rank = as.integer(fit$raw_rank[[i]]),
             residual_df = as.integer(max(0, floor(local_residual))),
-            effective_df = fit$effective_df[[i]],
             residual_df_effective_joint = fit$residual_df,
             condition_number = fit$raw_kappa[[i]],
-            condition_number_regularized = fit$regularized_kappa,
             fit_status = "ok",
             intercept = fit$intercept[[i]],
-            lambda = cv$lambda,
-            lambda_min = cv$lambda_min,
-            lambda_rule = control$lambda_rule,
-            cv_mse = cv$cv_mse,
-            cv_se = cv$cv_se,
-            design_rank_deficient = raw_rank_deficient[[i]],
+            sigma2_common = fit$sigma2,
+            deviation_z = fit$penalty_value,
+            penalty_family = fit$penalty_family,
+            solver_status = fit$solver_status,
+            kkt_residual = fit$kkt_residual,
+            iterations = fit$iterations,
             nvariables = nrow(edges),
             nvariables_dictionary = nrow(edges),
-            nvariables_estimable = sum(informative_here),
+            nvariables_contrast_identifiable =
+                sum(fit$contrast_identifiable %in% TRUE),
+            n_shared_by_boundary = sum(fit$shared_by_boundary %in% TRUE),
+            n_fused_by_penalty = sum(fit$fused_by_penalty %in% TRUE),
             n_zero_variance = sum(fit$zero_variance[i, ]),
-            n_aliased = 0L,
-            condition_weight = fit$weight[[i]],
+            condition_weight = 1,
             predictor_scale_reference = scaling$reference,
             stringsAsFactors = FALSE
         )
@@ -164,8 +177,14 @@
             fit, edges, condition_informative, scaling
         ),
         fit = do.call(rbind, fits),
-        cv = cv,
-        scaling = scaling
+        scaling = scaling,
+        solver = list(
+            status = fit$solver_status,
+            kkt_residual = fit$kkt_residual,
+            iterations = fit$iterations,
+            penalty_family = fit$penalty_family,
+            penalty_value = fit$penalty_value
+        )
     )
 }
 
@@ -176,20 +195,13 @@
     .condition_validate_dictionary(fit$edge_dictionary, prepared)
     cells <- fit$condition_cell_ids[fit$condition_levels]
     if (any(lengths(cells) < 3L)) {
-        stop("Every condition ridge fit needs at least three cells.",
+        stop("Every condition Scheme-E fit needs at least three cells.",
              call. = FALSE)
     }
-    folds <- .condition_ridge_folds(cells, control$cv_folds, control$seed)
     targets <- unique(as.character(fit$edge_dictionary$target))
     names(targets) <- targets
 
-    if (is.null(progress_phase)) {
-        progress_phase <- if (length(fit$condition_levels) == 1L) {
-            "ridge_standard"
-        } else {
-            "ridge_condition"
-        }
-    }
+    if (is.null(progress_phase)) progress_phase <- "scheme_e_condition"
     if (is.null(progress_label)) progress_label <- fit$cell_type %||% ""
 
     result <- .pando_target_payload_map(
@@ -200,7 +212,7 @@
                 edge_dictionary = fit$edge_dictionary,
                 target = target,
                 cells = cells,
-                folds = folds,
+                folds = NULL,
                 control = control,
                 min_residual_df = min_residual_df,
                 rank_action = rank_action
@@ -219,53 +231,52 @@
     rownames(coefficient) <- rownames(fit_table) <- NULL
     if (is.data.frame(contrast) && nrow(contrast)) rownames(contrast) <- NULL
 
+    # BH remains a model-level diagnostic only. It never changes dictionary
+    # membership and never overwrites a Scheme-E coefficient with zero.
     coefficient$padj <- NA_real_
     for (condition in fit$condition_levels) {
         index <- which(coefficient$condition == condition)
-        valid <- index[coefficient$estimable[index] %in% TRUE &
-                       is.finite(coefficient$pval[index])]
+        valid <- index[is.finite(coefficient$pval[index])]
         if (length(valid)) {
             coefficient$padj[valid] <- stats::p.adjust(
                 coefficient$pval[valid], method = fit$adjust_method
             )
         }
     }
-    coefficient$statistically_supported <- coefficient$estimable &
-        is.finite(coefficient$padj) &
-        coefficient$padj < fit$padj_threshold
+    coefficient$statistically_supported <-
+        is.finite(coefficient$padj) & coefficient$padj < fit$padj_threshold
     coefficient$significant <- coefficient$statistically_supported
-    coefficient$penalty_effect <- ifelse(
-        coefficient$statistically_supported & is.finite(coefficient$estimate),
-        coefficient$estimate, 0
-    )
+    coefficient$penalty_effect <- coefficient$estimate
     coefficient$direction <- ifelse(
-        !coefficient$estimable, "undefined",
-        ifelse(coefficient$estimate > 0, "positive",
-               ifelse(coefficient$estimate < 0, "negative", "zero"))
+        coefficient$estimate > 0, "positive",
+        ifelse(coefficient$estimate < 0, "negative", "zero")
     )
     coefficient$effect_definition <-
-        "no_fusion_common_lambda_ridge_condition_coefficient_raw_tf_atac_units"
+        "scheme_e_z025_continuous_condition_coefficient_raw_tf_atac_units"
     coefficient$inference_scope <-
-        "approximate_ridge_wald_conditional_on_frozen_dictionary_and_cv_lambda"
+        "diagnostic_wald_only;scheme_e_coefficients_define_projection"
 
     if (is.data.frame(contrast) && nrow(contrast)) {
         contrast$contrast_padj <- NA_real_
         pair_key <- paste(contrast$condition_a, contrast$condition_b, sep = "\001")
         for (key in unique(pair_key)) {
             index <- which(pair_key == key)
-            valid <- index[contrast$contrast_estimable[index] %in% TRUE &
-                           is.finite(contrast$contrast_pval[index])]
+            valid <- index[
+                contrast$contrast_identifiable[index] %in% TRUE &
+                is.finite(contrast$contrast_pval[index])
+            ]
             if (length(valid)) {
                 contrast$contrast_padj[valid] <- stats::p.adjust(
                     contrast$contrast_pval[valid], method = fit$adjust_method
                 )
             }
         }
-        contrast$contrast_significant <- contrast$contrast_estimable &
+        contrast$contrast_significant <-
+            contrast$contrast_identifiable &
             is.finite(contrast$contrast_padj) &
             contrast$contrast_padj < fit$padj_threshold
         contrast$inference_scope <-
-            "approximate_no_fusion_ridge_wald_contrast_diagnostic"
+            "diagnostic_wald_contrast_on_scheme_e_continuous_coefficients"
     }
 
     for (condition in fit$condition_levels) {
@@ -282,9 +293,9 @@
             coefs = coefs_one,
             fit = fit_one,
             params = list(
-                method = "condition_ridge",
+                method = "condition_scheme_e",
                 family = "gaussian_identity",
-                fit_mode = "frozen_common_dictionary_no_fusion",
+                fit_mode = "frozen_common_dictionary_scheme_e_z025",
                 condition = condition,
                 edge_dictionary = fit$edge_dictionary,
                 scale = FALSE,
@@ -299,7 +310,11 @@
                 adjust_method = fit$adjust_method,
                 padj_threshold = fit$padj_threshold,
                 projection_policy =
-                    "condition_bh_supported_common_dictionary_ridge_effects",
+                    "continuous_common_dictionary_scheme_e_effects",
+                deviation_penalty = list(
+                    family = .condition_scheme_e_penalty_family,
+                    z = .condition_scheme_e_z
+                ),
                 ridge_control = control
             )
         )
@@ -312,18 +327,19 @@
     fit$coefficient_scale <- "raw_tf_atac_interaction_units"
     fit$internal_predictor_scale <- "equal_condition_within_condition_rms"
     fit$inference_scope <-
-        "approximate_ridge_wald_conditional_on_frozen_dictionary_and_cv_lambda"
+        "scheme_e_z025_primary;BH_and_R2_are_diagnostics_only"
     fit$coefficients <- coefficient
     fit$contrasts <- contrast
     fit$fit <- fit_table
     fit$scale <- FALSE
     fit$projection_effect_column <- "penalty_effect"
-    fit$projection_policy <-
-        "condition_bh_supported_common_dictionary_ridge_effects"
+    fit$projection_policy <- "continuous_common_dictionary_scheme_e_effects"
     fit$ridge_control <- control
-    fit$target_cv <- lapply(result, function(one) {
-        one$cv[c("lambda", "lambda_min", "cv_mse", "cv_se", "curve")]
-    })
+    fit$deviation_penalty <- list(
+        family = .condition_scheme_e_penalty_family,
+        z = .condition_scheme_e_z
+    )
+    fit$target_solver <- lapply(result, `[[`, "solver")
     fit$target_scaling <- lapply(result, `[[`, "scaling")
     fit$target_parallel_memory_policy <- list(
         payload = "target_specific_rna_atac_edges",
@@ -332,7 +348,7 @@
         worker_gc = TRUE,
         master_batch_gc = TRUE
     )
-    fit$rsq_definition <- "selected_lambda_full_data_R2"
+    fit$rsq_definition <- "scheme_e_z025_selected_full_data_R2"
     class(fit) <- c("ConditionGRNFit", "list")
     result <- NULL
     invisible(gc(verbose = FALSE, full = TRUE))
