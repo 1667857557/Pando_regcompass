@@ -12,38 +12,32 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     regulatory relationships between TF-binding site pairs and target genes.
     For two or more conditions within a broad cell type, infer_condition_grn
     retains the original Pando regulatory-domain, motif, peak-target-correlation
-    and TF-target-correlation candidate logic while producing condition-
-    comparable coefficients. Candidate discovery is run on all eligible-
-    condition cells pooled together and independently within each condition.
-    Exact target-TF-region triples passing both configured correlation gates in
-    the pooled/global calculation or in at least one condition are deduplicated
-    into one frozen common dictionary. Every condition is fitted once on this
-    identical ordered dictionary with the original TF-by-ATAC interaction
-    predictor and ordinary ridge regularization. Conditions share the predictor
-    dictionary, equal-condition within-condition RMS scaling convention, and one
-    target-specific cross-validated lambda, but coefficients are not fused or
-    shrunk toward coefficients from other conditions. Ridge keeps the penalized
-    system identifiable under severe collinearity and raw rank deficiency while
-    preserving directly comparable condition coefficient coordinates. Robust
-    approximate ridge-Wald P values are BH adjusted within condition. Once an
-    exact edge has entered the frozen common dictionary, its pooled/global and
-    condition-local correlation support are retained as candidate provenance and
-    do not veto a fitted condition effect. An edge is active in condition c when
-    its condition-specific ridge coefficient is estimable and BH-supported.
-    This allows a condition with noisy marginal correlations to recover an edge
-    admitted by pooled/global support or by another condition, while activity
-    still requires statistical evidence from that condition's own ridge fit.
-    Active penalty_effect values are projected as beta times RNA(TF) times
-    ATAC(peak). Cross-validation is used only to select the target-specific
-    ridge lambda; the canonical and only exported target fit-quality statistic
-    is the R-squared from the selected-lambda full-data fit. Pairwise condition
-    contrasts are computed directly from the no-fusion ridge covariance.
-    Coefficient and contrast P values remain approximate and conditional on
-    data-dependent candidate discovery and CV-selected ridge regularization.
+    and TF-target-correlation candidate logic while producing directly
+    comparable condition coefficients. Candidate discovery is run on all
+    eligible-condition cells pooled together and independently within each
+    condition. Exact target-TF-region triples passing both configured correlation
+    gates in the pooled/global calculation or in at least one condition are
+    deduplicated into one frozen common dictionary. Every condition uses this
+    identical ordered dictionary, the original TF-by-ATAC interaction predictor,
+    one cross-condition predictor scale per exact edge, and one pooled Gaussian
+    residual scale. Conditional coefficients are estimated jointly with the
+    fixed Scheme E exact-edge sparse-deviation penalty z=0.25. The shared
+    component is unpenalized; only condition deviations are shrunk. For more than
+    two conditions, the deviation penalty is applied to the orthonormal centered
+    condition-contrast subspace and is invariant to the chosen contrast basis.
+    Edges whose condition contrast is not identifiable are constrained to exact
+    sharing and explicitly marked. Condition-wise Wald P values and BH-adjusted
+    P values are retained as diagnostics only and do not alter common-dictionary
+    membership or overwrite continuous coefficients with zero. Projection uses
+    the continuous Scheme E coefficient for every fitted dictionary edge.
+    Target R-squared is likewise a full-data model diagnostic rather than a
+    topology gate. Solver status, KKT residual, iterations, raw condition
+    information, profiled contrast information, boundary sharing, penalty
+    fusion, and contrast identifiability are retained in the fit contract.
     Standard infer_grn retains the original Gaussian GLM as its default method
-    and additionally supports single-task ridge, implemented as the one-
-    condition specialization of the same ridge solver. Target-parallel candidate
-    discovery and ridge fitting use target-specific payload batches, and
+    and a separate single-task cross-validated ridge implementation; the
+    conditional Scheme E redesign does not alter standard ridge. Target-parallel
+    candidate discovery and fitting use target-specific payload batches, and
     independent cell-type jobs can be dispatched through BiocParallel.
 License: MIT
 Encoding: UTF-8
@@ -97,13 +91,13 @@ Suggests:
 Remotes:
     github::immunogenomics/presto
 Config/Pando/ConditionGRNSchema: pando_condition_grn_common_dictionary_v1
-Config/Pando/ConditionGRNModelSchema: pando_condition_grn_multitask_ridge_v3
-Config/Pando/ConditionGRNMethod: global-condition-union-single-no-fusion-ridge
-Config/Pando/ConditionProjectionPolicy: condition-BH-supported-common-dictionary-ridge
-Config/Pando/ConditionInference: approximate-ridge-Wald-conditional-on-candidate-dictionary-and-CV-lambda
-Config/Pando/ConditionR2: selected-lambda-full-data-R2
+Config/Pando/ConditionGRNModelSchema: pando_condition_grn_sparse_deviation_v4
+Config/Pando/ConditionGRNMethod: global-condition-union-scheme-E-exact-edge-z025
+Config/Pando/ConditionProjectionPolicy: continuous-common-dictionary-scheme-E
+Config/Pando/ConditionInference: scheme-E-z025-primary-BH-diagnostic-only
+Config/Pando/ConditionR2: full-data-diagnostic-only
 Config/Pando/StandardRidgeSchema: pando_standard_grn_single_task_ridge_v1
-Config/Pando/StandardRidgeMethod: condition-ridge-k1
+Config/Pando/StandardRidgeMethod: single-task-cv-ridge
 Config/Pando/TargetParallelMemoryPolicy: namespace-worker-target-specific-payload-batches
 Config/Pando/TargetRuntimeArchitecture: canonical-methods-no-late-overrides
 Config/Pando/DataStorage: standalone-RData
