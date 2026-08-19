@@ -7,10 +7,17 @@
 
 .condition_fit_engine <- "condition_union_scheme_e_exact_edge_z025"
 
+.condition_profile_information_export <- function(fit) {
+    information <- as.numeric(fit$profile_information)
+    if (nrow(fit$beta) == 2L) information <- information / 2
+    information
+}
+
 .condition_ridge_contrasts <- function(
     fit, edges, condition_informative, scaling) {
     conditions <- rownames(fit$beta)
     if (length(conditions) < 2L) return(data.frame())
+    profile_information <- .condition_profile_information_export(fit)
     pairs <- utils::combn(seq_along(conditions), 2L, simplify = FALSE)
     out <- lapply(pairs, function(pair) {
         a <- pair[[1L]]
@@ -41,7 +48,7 @@
             contrast_identifiable = identifiable,
             shared_by_boundary = as.logical(fit$shared_by_boundary),
             fused_by_penalty = as.logical(fit$fused_by_penalty),
-            profile_information_delta = as.numeric(fit$profile_information),
+            profile_information_delta = profile_information,
             penalty_family = fit$penalty_family,
             penalty_value = fit$penalty_value,
             solver_status = fit$solver_status,
@@ -88,9 +95,13 @@
     }
 
     shared <- fit$shared_z / scaling$scale
-    deviation <- sweep(
-        fit$deviation_z, 2L, scaling$scale, "/"
-    )
+    deviation <- sweep(fit$deviation_z, 2L, scaling$scale, "/")
+    profile_information <- .condition_profile_information_export(fit)
+    profile_information_definition <- if (length(cells_by_condition) == 2L) {
+        "pairwise_delta_profile_information"
+    } else {
+        "minimum_orthonormal_condition_contrast_information"
+    }
     condition_informative <- sweep(
         !fit$zero_variance, 2L, fit$informative, "&"
     )
@@ -127,7 +138,8 @@
             shared_by_boundary = as.logical(fit$shared_by_boundary),
             fused_by_penalty = as.logical(fit$fused_by_penalty),
             raw_information_condition = as.numeric(fit$raw_information[i, ]),
-            profile_information_delta = as.numeric(fit$profile_information),
+            profile_information_delta = profile_information,
+            profile_information_definition = profile_information_definition,
             penalty_family = fit$penalty_family,
             penalty_value = fit$penalty_value,
             solver_status = fit$solver_status,
@@ -168,6 +180,7 @@
             n_zero_variance = sum(fit$zero_variance[i, ]),
             condition_weight = 1,
             predictor_scale_reference = scaling$reference,
+            profile_information_definition = profile_information_definition,
             stringsAsFactors = FALSE
         )
     }
@@ -194,13 +207,15 @@
     progress_phase = NULL, progress_label = NULL) {
     .condition_validate_dictionary(fit$edge_dictionary, prepared)
     cells <- fit$condition_cell_ids[fit$condition_levels]
+    if (length(cells) < 2L) {
+        stop("Conditional Scheme E requires at least two conditions.", call. = FALSE)
+    }
     if (any(lengths(cells) < 3L)) {
         stop("Every condition Scheme-E fit needs at least three cells.",
              call. = FALSE)
     }
     targets <- unique(as.character(fit$edge_dictionary$target))
     names(targets) <- targets
-
     if (is.null(progress_phase)) progress_phase <- "scheme_e_condition"
     if (is.null(progress_label)) progress_label <- fit$cell_type %||% ""
 
@@ -231,8 +246,6 @@
     rownames(coefficient) <- rownames(fit_table) <- NULL
     if (is.data.frame(contrast) && nrow(contrast)) rownames(contrast) <- NULL
 
-    # BH remains a model-level diagnostic only. It never changes dictionary
-    # membership and never overwrites a Scheme-E coefficient with zero.
     coefficient$padj <- NA_real_
     for (condition in fit$condition_levels) {
         index <- which(coefficient$condition == condition)
@@ -299,8 +312,7 @@
                 condition = condition,
                 edge_dictionary = fit$edge_dictionary,
                 scale = FALSE,
-                internal_scale_reference =
-                    "equal_condition_within_condition_rms",
+                internal_scale_reference = "equal_condition_within_condition_rms",
                 exported_coefficient_scale = "raw_tf_atac_interaction_units",
                 interaction = ":",
                 rna_layer = prepared$rna_layer,
@@ -309,8 +321,7 @@
                 preprocessing_fingerprint = prepared$preprocessing_fingerprint,
                 adjust_method = fit$adjust_method,
                 padj_threshold = fit$padj_threshold,
-                projection_policy =
-                    "continuous_common_dictionary_scheme_e_effects",
+                projection_policy = "continuous_common_dictionary_scheme_e_effects",
                 deviation_penalty = list(
                     family = .condition_scheme_e_penalty_family,
                     z = .condition_scheme_e_z
@@ -326,8 +337,7 @@
     fit$fit_engine <- .condition_fit_engine
     fit$coefficient_scale <- "raw_tf_atac_interaction_units"
     fit$internal_predictor_scale <- "equal_condition_within_condition_rms"
-    fit$inference_scope <-
-        "scheme_e_z025_primary;BH_and_R2_are_diagnostics_only"
+    fit$inference_scope <- "scheme_e_z025_primary;BH_and_R2_are_diagnostics_only"
     fit$coefficients <- coefficient
     fit$contrasts <- contrast
     fit$fit <- fit_table
@@ -348,7 +358,7 @@
         worker_gc = TRUE,
         master_batch_gc = TRUE
     )
-    fit$rsq_definition <- "scheme_e_z025_selected_full_data_R2"
+    fit$rsq_definition <- "scheme_e_z025_full_data_R2_diagnostic"
     class(fit) <- c("ConditionGRNFit", "list")
     result <- NULL
     invisible(gc(verbose = FALSE, full = TRUE))
