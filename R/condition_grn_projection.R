@@ -199,9 +199,9 @@ project_condition_grn_cells <- function(
         )
     )
     # `penalty_effect` is always the continuous production E-star coefficient.
-    # For the production/RegCompass projection, `significant_only = TRUE`
-    # therefore gates exact edges with the any-condition BH union first and
-    # then retains each admitted condition's own continuous coefficient.
+    # With `significant_only = TRUE`, the same exact-edge whole-network BH
+    # topology is applied to every condition before each condition's own
+    # continuous production coefficient is used.
     effect <- if (isTRUE(significant_only)) {
         value <- as.numeric(coefficient$penalty_effect)
         value[!(coefficient$active_in_regcompass %in% TRUE)] <- 0
@@ -233,7 +233,7 @@ project_condition_grn_cells <- function(
         is.character(fit$projection_policy) &&
         length(fit$projection_policy) == 1L &&
         !is.na(fit$projection_policy) && nzchar(fit$projection_policy)
-    ) fit$projection_policy else .condition_significant_projection_policy
+    ) fit$projection_policy else .condition_projection_policy
     answer <- list(
         schema_version = "pando_condition_projection_common_dictionary_v1",
         gene_score = gene_score,
