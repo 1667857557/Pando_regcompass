@@ -1,4 +1,4 @@
-test_that("condition inference requires BH and a valid threshold", {
+test_that("conditional edge inference requires BH and a valid threshold", {
     expect_identical(Pando:::.condition_validate_adjust_method("BH"), "BH")
     expect_identical(Pando:::.condition_validate_adjust_method("bh"), "BH")
     expect_error(Pando:::.condition_validate_adjust_method("holm"),
@@ -8,30 +8,42 @@ test_that("condition inference requires BH and a valid threshold", {
     expect_error(Pando:::.condition_validate_padj_threshold(0))
 })
 
-.activity_fit_fixture <- function(padj_threshold = 0.05) {
+.edge_gate_fixture <- function() {
+    edge <- data.frame(
+        edge_id = c("G||TF1||P1", "G||TF2||P2", "G||TF3||P3"),
+        target = "G", tf = c("TF1", "TF2", "TF3"),
+        region = c("P1", "P2", "P3"),
+        atac_feature_id = c("P1", "P2", "P3"),
+        candidate_index = 1:3,
+        stringsAsFactors = FALSE
+    )
     coefficient <- data.frame(
-        edge_id = rep(c("E1", "E2", "E3"), 2L),
+        edge_id = rep(edge$edge_id, each = 2L),
         target = "G",
-        condition = rep(c("A", "B"), each = 3L),
-        estimate = c(0.5, 0.4, 0.3, 0.6, 0.7, 0.8),
-        penalty_effect = c(0.5, 0.4, 0.3, 0.6, 0.7, 0.8),
-        pval = c(0.003, 0.1, 0.2, 0.3, 0.003, 0.2),
-        padj = c(0.01, 0.20, 0.30, 0.50, 0.01, 0.40),
-        inference_estimable = TRUE,
-        condition_significant = c(TRUE, FALSE, FALSE, FALSE, TRUE, FALSE),
-        fusion_component_id = "component1",
-        shared_edge = FALSE,
+        condition = rep(c("A", "B"), 3L),
+        estimate = c(0.7, 0.65, 0.6, 0.55, 0.10, 0.05),
+        penalty_effect = c(0.7, 0.65, 0.6, 0.55, 0.10, 0.05),
+        inference_estimate = c(0.7, NA, 0.6, 0.55, 0.10, 0.05),
+        inference_se = c(0.10, NA, 0.10, 0.10, 0.20, 0.20),
+        inference_variance = c(0.01, NA, 0.01, 0.01, 0.04, 0.04),
+        inference_statistic = c(7, NA, 6, 5.5, 0.5, 0.25),
+        condition_pval = c(0.001, NA, 1e-5, 2e-5, 0.62, 0.80),
+        condition_inference_estimable =
+            c(TRUE, FALSE, TRUE, TRUE, TRUE, TRUE),
+        inference_estimable = c(TRUE, FALSE, TRUE, TRUE, TRUE, TRUE),
         stringsAsFactors = FALSE
     )
     fit <- list(
+        edge_dictionary = edge,
         condition_levels = c("A", "B"),
-        padj_threshold = padj_threshold,
+        padj_threshold = 0.05,
+        adjust_method = "BH",
         dictionary_support_table = data.frame(
-            edge_id = c("E1", "E2", "E1", "E3"),
-            source_type = c("global", "global", "condition", "condition"),
-            condition = c(NA, NA, "A", "A"),
-            peak_target_cor = c(0.22, 0.31, 0.2, 0.3),
-            tf_target_cor = c(0.42, 0.51, 0.4, 0.5),
+            edge_id = c(edge$edge_id, edge$edge_id[c(1, 3)]),
+            source_type = c(rep("global", 3), rep("condition", 2)),
+            condition = c(NA, NA, NA, "A", "A"),
+            peak_target_cor = c(0.2, 0.3, 0.4, 0.25, 0.45),
+            tf_target_cor = c(0.3, 0.4, 0.5, 0.35, 0.55),
             stringsAsFactors = FALSE
         ),
         coefficients = coefficient,
@@ -44,80 +56,54 @@ test_that("condition inference requires BH and a valid threshold", {
     fit
 }
 
-test_that("global and local candidate support remain provenance only", {
-    fit <- Pando:::.condition_apply_activity_gate(.activity_fit_fixture())
-    expect_identical(
-        fit$coefficients$global_support,
-        c(TRUE, TRUE, FALSE, TRUE, TRUE, FALSE)
-    )
-    expect_identical(
-        fit$coefficients$local_support,
-        c(TRUE, FALSE, TRUE, FALSE, FALSE, FALSE)
-    )
-    expect_identical(fit$coefficients$dictionary_support, rep(TRUE, 6L))
-    expect_identical(fit$coefficients$active, rep(TRUE, 6L))
-    expect_equal(fit$coefficients$penalty_effect,
-                 fit$coefficients$estimate)
-    expect_identical(
-        fit$projection_policy,
-        "any_condition_padj_exact_edge_union"
-    )
+test_that("one-condition estimability degenerates to the exact t-test P value", {
+    fit <- .edge_gate_fixture()
+    edge <- Pando:::.condition_exact_edge_inference(fit, fit$coefficients)
+    one <- edge[edge$edge_id == "G||TF1||P1", , drop = FALSE]
+    expect_identical(one$edge_df, 1L)
+    expect_identical(one$edge_inference_test, "single_condition_exact_t")
+    expect_equal(one$edge_pval, 0.001, tolerance = 1e-15)
 })
 
-test_that("one significant condition admits the exact edge in every condition", {
-    fit <- Pando:::.condition_apply_activity_gate(.activity_fit_fixture())
-    e1 <- fit$coefficients$edge_id == "E1"
-    e2 <- fit$coefficients$edge_id == "E2"
-    e3 <- fit$coefficients$edge_id == "E3"
-    expect_true(all(fit$coefficients$active_in_regcompass[e1]))
-    expect_true(all(fit$coefficients$active_in_regcompass[e2]))
-    expect_false(any(fit$coefficients$active_in_regcompass[e3]))
-    expect_identical(unique(fit$coefficients$supporting_conditions[e1]), "A")
-    expect_identical(unique(fit$coefficients$supporting_conditions[e2]), "B")
-    expect_identical(unique(fit$coefficients$supporting_conditions[e3]), "")
+test_that("multi-condition edge uses an omnibus Wald chi-square", {
+    fit <- .edge_gate_fixture()
+    edge <- Pando:::.condition_exact_edge_inference(fit, fit$coefficients)
+    two <- edge[edge$edge_id == "G||TF2||P2", , drop = FALSE]
+    expected_statistic <- 0.6^2 / 0.01 + 0.55^2 / 0.01
+    expect_identical(two$edge_df, 2L)
+    expect_identical(two$edge_inference_test,
+                     "independent_condition_wald_chisq")
+    expect_equal(two$edge_statistic, expected_statistic, tolerance = 1e-12)
+    expect_equal(two$edge_pval,
+                 pchisq(expected_statistic, df = 2, lower.tail = FALSE),
+                 tolerance = 1e-15)
 })
 
-test_that("a nonsignificant condition keeps its continuous beta after union admission", {
-    fit <- Pando:::.condition_apply_activity_gate(.activity_fit_fixture())
-    row <- which(fit$coefficients$edge_id == "E1" &
-                 fit$coefficients$condition == "B")
-    expect_false(fit$coefficients$condition_significant[[row]])
-    expect_true(fit$coefficients$active[[row]])
-    expect_true(fit$coefficients$active_in_regcompass[[row]])
-    expect_equal(fit$coefficients$penalty_effect[[row]], 0.6)
+test_that("BH is applied once across exact edges and topology is common", {
+    gated <- Pando:::.condition_apply_activity_gate(.edge_gate_fixture())
+    edge <- gated$edge_inference
+    expect_identical(unique(edge$bh_scope),
+                     "exact_edge_whole_cell_type_network_BH")
+    expect_identical(unique(edge$bh_family_size), 3L)
+    expect_true(edge$edge_supported[edge$edge_id == "G||TF1||P1"])
+    expect_true(edge$edge_supported[edge$edge_id == "G||TF2||P2"])
+    expect_false(edge$edge_supported[edge$edge_id == "G||TF3||P3"])
+    for (id in edge$edge_id) {
+        rows <- gated$coefficients$edge_id == id
+        expect_length(unique(gated$coefficients$active_in_regcompass[rows]), 1L)
+        expect_identical(
+            unique(gated$coefficients$active_in_regcompass[rows]),
+            edge$edge_supported[edge$edge_id == id]
+        )
+    }
 })
 
-test_that("local-only dictionary edge remains fitted even when not handed off", {
-    fit <- Pando:::.condition_apply_activity_gate(.activity_fit_fixture())
-    row <- which(fit$coefficients$edge_id == "E3" &
-                 fit$coefficients$condition == "B")
-    expect_false(fit$coefficients$global_support[[row]])
-    expect_false(fit$coefficients$local_support[[row]])
-    expect_true(fit$coefficients$dictionary_support[[row]])
-    expect_true(fit$coefficients$active[[row]])
-    expect_false(fit$coefficients$active_in_regcompass[[row]])
-    expect_equal(fit$coefficients$penalty_effect[[row]], 0.8)
-})
-
-test_that("local and global support retain their own correlations", {
-    fit <- Pando:::.condition_apply_activity_gate(.activity_fit_fixture())
-    row_a1 <- which(fit$coefficients$edge_id == "E1" &
-                    fit$coefficients$condition == "A")
-    row_b2 <- which(fit$coefficients$edge_id == "E2" &
-                    fit$coefficients$condition == "B")
-    row_b3 <- which(fit$coefficients$edge_id == "E3" &
-                    fit$coefficients$condition == "B")
-    expect_equal(fit$coefficients$peak_target_cor[[row_a1]], 0.2)
-    expect_equal(fit$coefficients$tf_target_cor[[row_a1]], 0.4)
-    expect_equal(fit$coefficients$global_peak_target_cor[[row_a1]], 0.22)
-    expect_equal(fit$coefficients$global_tf_target_cor[[row_a1]], 0.42)
-    expect_true(is.na(fit$coefficients$peak_target_cor[[row_b2]]))
-    expect_equal(fit$coefficients$global_peak_target_cor[[row_b2]], 0.31)
-    expect_true(is.na(fit$coefficients$peak_target_cor[[row_b3]]))
-    expect_true(is.na(fit$coefficients$global_peak_target_cor[[row_b3]]))
-})
-
-test_that("default adjusted-P threshold remains 0.05", {
-    default <- formals(Pando:::.pando_infer_condition_grn_multitask_ridge_one)$padj_threshold
-    expect_equal(eval(default), 0.05)
+test_that("candidate support is provenance and does not recreate local topology", {
+    gated <- Pando:::.condition_apply_activity_gate(.edge_gate_fixture())
+    row <- gated$coefficients$edge_id == "G||TF1||P1" &
+        gated$coefficients$condition == "B"
+    expect_false(gated$coefficients$local_support[row])
+    expect_true(gated$coefficients$global_support[row])
+    expect_true(gated$coefficients$active_in_regcompass[row])
+    expect_equal(gated$coefficients$penalty_effect[row], 0.65)
 })
