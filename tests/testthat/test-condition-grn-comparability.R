@@ -1,24 +1,13 @@
-test_that("Scheme E reproduces the two-condition scalar closed form", {
-    i_delta <- 4
-    d_delta <- 1
-    i_gamma <- matrix(2 * i_delta, 1, 1)
-    d_gamma <- d_delta / sqrt(2)
-    rhs <- as.numeric(i_gamma * d_gamma)
-    block <- Pando:::.condition_scheme_e_block_inverse_roots(
-        i_gamma, p = 1L, k_minus_one = 1L,
-        edge_keep = TRUE, rank_tol = 1e-12
-    )
-    solved <- Pando:::.condition_scheme_e_fista(
-        i_gamma, rhs, block,
-        Pando:::.condition_scheme_e_control(list(
+test_that("E-star reproduces the two-condition scalar closed form", {
+    solved <- Pando:::.condition_E_star_fit(
+        H = matrix(4, 1L, 1L), r = 1.2, information = 4,
+        control = Pando:::.condition_E_star_control(list(
             solver_tol = 1e-12, solver_max_iter = 10000L
         ))
     )
-    expected_delta <- sign(d_delta) *
-        max(abs(d_delta) - 0.25 / sqrt(i_delta), 0)
-    observed_delta <- sqrt(2) * solved$gamma[[1L]]
+    expected <- 0.3 - 0.25 / sqrt(4)
     expect_identical(solved$status, "ok")
-    expect_equal(observed_delta, expected_delta, tolerance = 1e-9)
+    expect_equal(solved$delta[[1L]], expected, tolerance = 1e-9)
     expect_lte(solved$kkt_residual, 1e-9)
 })
 
@@ -36,7 +25,8 @@ test_that("zero-information exact edges are constrained to exact sharing", {
     )
     scaling <- Pando:::.condition_ridge_scaling(x, 1e-8)
     fit <- Pando:::.condition_scheme_e_fit(
-        x, y, scaling, min_residual_df = 1L, inference = FALSE
+        x, y, scaling, min_residual_df = 1L, inference = FALSE,
+        reference_condition = "A"
     )
     expect_identical(fit$status, "ok")
     expect_false(fit$contrast_identifiable[[2L]])
@@ -56,7 +46,8 @@ test_that("cell abundance remains in raw condition information", {
     )
     scaling <- Pando:::.condition_ridge_scaling(x, 1e-8)
     fit <- Pando:::.condition_scheme_e_fit(
-        x, y, scaling, min_residual_df = 1L, inference = FALSE
+        x, y, scaling, min_residual_df = 1L, inference = FALSE,
+        reference_condition = "Large"
     )
     expect_identical(fit$status, "ok")
     ratio <- fit$raw_information["Large", "edge"] /
@@ -65,7 +56,7 @@ test_that("cell abundance remains in raw condition information", {
     expect_equal(unname(fit$condition_weight), c(1, 1))
 })
 
-test_that("three-condition Scheme E is invariant to condition ordering", {
+test_that("three-condition E-star is invariant to row order with fixed reference", {
     set.seed(71)
     n <- c(A = 70L, B = 45L, C = 30L)
     make_x <- function(nn, shift) {
@@ -83,7 +74,8 @@ test_that("three-condition Scheme E is invariant to condition ordering", {
     scaling <- Pando:::.condition_ridge_scaling(x, 1e-8)
     fit <- Pando:::.condition_scheme_e_fit(
         x, y, scaling, min_residual_df = 1L, inference = FALSE,
-        control = list(solver_tol = 1e-10, solver_max_iter = 10000L)
+        control = list(solver_tol = 1e-10, solver_max_iter = 10000L),
+        reference_condition = "A"
     )
     order <- c("C", "A", "B")
     x2 <- x[order]
@@ -91,7 +83,8 @@ test_that("three-condition Scheme E is invariant to condition ordering", {
     scaling2 <- Pando:::.condition_ridge_scaling(x2, 1e-8)
     fit2 <- Pando:::.condition_scheme_e_fit(
         x2, y2, scaling2, min_residual_df = 1L, inference = FALSE,
-        control = list(solver_tol = 1e-10, solver_max_iter = 10000L)
+        control = list(solver_tol = 1e-10, solver_max_iter = 10000L),
+        reference_condition = "A"
     )
     expect_identical(fit$status, "ok")
     expect_identical(fit2$status, "ok")
@@ -99,7 +92,7 @@ test_that("three-condition Scheme E is invariant to condition ordering", {
                  tolerance = 1e-7)
 })
 
-test_that("correlated multi-edge Scheme E reports a converged KKT residual", {
+test_that("correlated multi-edge E-star reports a converged KKT residual", {
     set.seed(101)
     n <- 80L
     xa <- cbind(e1 = rnorm(n), e2 = rnorm(n))
@@ -114,11 +107,14 @@ test_that("correlated multi-edge Scheme E reports a converged KKT residual", {
     scaling <- Pando:::.condition_ridge_scaling(x, 1e-8)
     fit <- Pando:::.condition_scheme_e_fit(
         x, y, scaling, min_residual_df = 1L, inference = TRUE,
-        control = list(solver_tol = 1e-9, solver_max_iter = 10000L)
+        control = list(solver_tol = 1e-9, solver_max_iter = 10000L),
+        reference_condition = "A"
     )
     expect_identical(fit$status, "ok")
     expect_identical(fit$solver_status, "ok")
     expect_true(is.finite(fit$kkt_residual))
     expect_lte(fit$kkt_residual, 1e-7)
     expect_true(all(is.finite(fit$beta)))
+    expect_identical(fit$inference_schema,
+                     "scheme_e_fusion_component_joint_refit_v1")
 })
