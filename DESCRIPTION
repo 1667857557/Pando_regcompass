@@ -18,25 +18,26 @@ Description: Pando jointly uses scRNA-seq and scATAC-seq measurements to infer
     condition. Exact target-TF-region triples passing both configured correlation
     gates in the pooled/global calculation or in at least one condition are
     deduplicated into one frozen common dictionary. Every condition uses this
-    identical ordered dictionary, the original TF-by-ATAC interaction predictor,
-    an equal-condition within-condition RMS predictor scale, condition-specific
-    intercepts and one pooled Gaussian residual scale. Conditional coefficients
-    are estimated jointly by E-star with the fixed production deviation threshold
-    z=0.25. The Q-orthogonal shared component is the unpenalized joint MLE; only
-    identifiable condition-deviation coordinates receive the information-scaled
-    sparse penalty. A predeclared reference ordering is preferred for the
-    identifiable contrast tree, with non-reference identifiable contrasts used
-    when the reference coordinate is not identifiable. Zero-information
-    contrasts are fixed to sharing as a boundary convention and are marked
-    separately from penalty-selected fusion. Exact-zero deviations define fusion
-    components. After that structure is frozen, a reduced joint model with
-    condition-specific intercepts provides full correlated joint covariance,
-    inference estimates, standard errors and Wald P values. P values are BH
-    adjusted within each condition-by-target family. The production effect always
-    remains the continuous E-star coefficient. An exact edge is handed to
-    RegCompass only when every condition has a valid production coefficient and
-    at least one condition has BH-adjusted P < 0.05; once admitted, the edge is
-    retained in every condition with its own continuous production coefficient.
+    identical ordered dictionary and the original TF-by-ATAC interaction
+    predictor with an equal-condition within-condition RMS predictor scale.
+    Production condition coefficients are estimated jointly by E-star with the
+    fixed deviation threshold z=0.25. The Q-orthogonal shared component is the
+    unpenalized joint MLE; only identifiable condition-deviation coordinates
+    receive the information-scaled sparse penalty. Zero-information contrasts
+    are fixed to sharing as a boundary convention and are distinguished from
+    identifiable deviations set exactly to zero by the penalty. E-star fusion
+    metadata are not reused for statistical selection. Formal inference is run
+    separately, without fusion, by fitting the complete frozen target dictionary
+    independently within each condition using a Gaussian linear model with an
+    intercept. Coefficient tests use finite residual-degree-of-freedom t tests;
+    aliased condition coefficients are marked non-estimable rather than treated
+    as zero. Each exact edge then receives one omnibus test across its estimable
+    conditions: a one-condition edge inherits the corresponding exact t-test P
+    value, whereas edges estimable in multiple independent conditions use a
+    multivariate Wald chi-square statistic. Benjamini-Hochberg correction is
+    applied once across all estimable exact edges in the broad-cell-type network.
+    The resulting topology is common to every retained condition, while every
+    admitted condition keeps its own continuous E-star production coefficient.
     Full-data target R-squared remains diagnostic and is not a conditional-GRN
     topology gate. Standard infer_grn retains its independent Gaussian GLM and
     single-task ridge implementations. Target-parallel candidate discovery and
@@ -94,10 +95,10 @@ Suggests:
 Remotes:
     github::immunogenomics/presto
 Config/Pando/ConditionGRNSchema: pando_condition_grn_common_dictionary_v1
-Config/Pando/ConditionGRNModelSchema: pando_condition_grn_Estar_jointse_v1
-Config/Pando/ConditionGRNMethod: global-condition-union-Estar-z025-JSE
-Config/Pando/ConditionProjectionPolicy: any-condition-padj-exact-edge-union
-Config/Pando/ConditionInference: fusion-component-joint-refit-condition-target-BH
+Config/Pando/ConditionGRNModelSchema: pando_condition_grn_Estar_z025_inference_separated_v1
+Config/Pando/ConditionGRNMethod: global-condition-union-Estar-z025-separated-inference
+Config/Pando/ConditionProjectionPolicy: exact-edge-whole-network-BH-common-topology
+Config/Pando/ConditionInference: no-fusion-condition-local-lm-edge-omnibus-whole-network-BH
 Config/Pando/ConditionR2: full-data-diagnostic-only
 Config/Pando/StandardRidgeSchema: pando_standard_grn_single_task_ridge_v1
 Config/Pando/StandardRidgeMethod: single-task-cv-ridge
