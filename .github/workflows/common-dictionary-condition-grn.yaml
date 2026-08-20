@@ -17,7 +17,8 @@ jobs:
       - uses: r-lib/actions/setup-r@v2
         with:
           r-version: '4.5'
-      - name: Validate source architecture
+
+      - name: Validate conditional GRN source architecture
         shell: python
         run: |
           from pathlib import Path
@@ -28,24 +29,18 @@ jobs:
           combined = "\n".join(source.values())
 
           canonical = {
-              "infer_grn.GRNData": "R/grn.R",
               "infer_condition_grn.GRNData": "R/condition_grn.R",
-              "condition_grn_fit.GRNData": "R/condition_grn.R",
-              "aggregate_condition_grn_projection": "R/condition_grn.R",
-              "project_condition_grn_cells": "R/condition_grn_projection.R",
-              "validate_condition_grn_projection_membership":
-                  "R/condition_grn_projection_membership.R",
-          }
-          internal = {
               ".condition_ridge_fit": "R/condition_multitask_ridge.R",
               ".condition_scheme_e_fit": "R/condition_sparse_deviation.R",
               ".condition_ridge_target": "R/condition_multitask_ridge_fit.R",
-              ".condition_bh_by_condition_target":
+              ".condition_no_fusion_condition_fit":
                   "R/condition_multitask_ridge_fit.R",
+              ".condition_exact_edge_inference":
+                  "R/condition_multitask_ridge_significance.R",
               ".condition_apply_activity_gate":
                   "R/condition_multitask_ridge_significance.R",
           }
-          for name, expected_path in {**canonical, **internal}.items():
+          for name, expected_path in canonical.items():
               pattern = re.compile(rf"(?m)^{re.escape(name)}\s*<-\s*function\b")
               locations = [path for path, text in source.items() if pattern.search(text)]
               if locations != [expected_path]:
@@ -55,200 +50,84 @@ jobs:
                   )
 
           forbidden = [
-              ".pando_infer_grn_grndata_impl",
-              ".pando_infer_condition_grn_grndata_impl",
-              ".pando_infer_grn_routed_impl",
-              ".pando_infer_condition_grn_routed_impl",
-              ".pando_merge_cell_type_grn_results_impl",
-              ".pando_infer_condition_grn_base_impl",
-              ".pando_condition_grn_fit_base_impl",
-              ".pando_infer_condition_grn_complete_contract_method",
-              ".pando_condition_grn_fit_complete_contract_method",
-              ".pando_complete_condition_fit_object",
-              ".condition_dictionary_screen",
-              ".condition_subset_dictionary",
-              ".condition_fit_target_matrix",
-              ".condition_fit_dictionary_prepared",
-              ".pando_fixed_glm_target_payload",
-              ".pando_fixed_glm_target_worker",
-              "fit_grn_from_edges <- function",
-              "aggregate_condition_grn_projection_strict",
-              "zzzzz_condition_fit_contract",
-              "pando_condition_grn_multitask_ridge_v3",
-              "global-condition-union-single-no-fusion-ridge",
-              "condition-BH-supported-common-dictionary-ridge",
+              ".condition_joint_inference_design <- function",
+              ".condition_joint_inference_fit <- function",
+              ".condition_joint_contrast <- function",
+              ".condition_bh_by_condition_target <- function",
+              "scheme_e_fusion_component_joint_refit_v1",
+              "condition_union_Estar_z025_jointse",
+              "pando_condition_grn_Estar_jointse_v1",
+              "fusion-component-joint-refit-condition-target-BH",
+              "any-condition-padj-exact-edge-union",
+              "condition_target_BH",
               ".condition_scheme_e_group_prox",
-              ".condition_contrast_basis <- function",
               ".condition_ridge_control <- function",
+              "zzzzz_condition_fit_contract",
           ]
           present = [value for value in forbidden if value in combined]
           if present:
-              raise RuntimeError(f"obsolete/variant condition GRN implementation remains: {present}")
-
-          obsolete_files = [
-              "R/zzz_grn_runtime.R",
-              "R/zzzz_grn_runtime_contract.R",
-              "R/zzzzz_condition_fit_contract.R",
-              "R/condition_fixed_glm_target.R",
-              "man/fit_grn_from_edges.Rd",
-          ]
-          present_files = [path for path in obsolete_files if Path(path).exists()]
-          if present_files:
-              raise RuntimeError(f"obsolete condition files remain: {present_files}")
-
-          namespace = Path("NAMESPACE").read_text()
-          if "export(validate_condition_grn_projection_membership)" not in namespace:
-              raise RuntimeError("projection membership validator is not exported")
-          if "export(aggregate_condition_grn_projection_strict)" in namespace:
-              raise RuntimeError("obsolete strict aggregation variant is still exported")
-          if "export(fit_grn_from_edges)" in namespace:
-              raise RuntimeError("obsolete fixed-dictionary condition GLM is still exported")
+              raise RuntimeError(f"obsolete conditional inference remains: {present}")
 
           description = Path("DESCRIPTION").read_text()
           required_description = [
-              "Config/Pando/ConditionGRNModelSchema: pando_condition_grn_Estar_jointse_v1",
-              "Config/Pando/ConditionGRNMethod: global-condition-union-Estar-z025-JSE",
-              "Config/Pando/ConditionProjectionPolicy: any-condition-padj-exact-edge-union",
-              "Config/Pando/ConditionInference: fusion-component-joint-refit-condition-target-BH",
+              "Config/Pando/ConditionGRNModelSchema: pando_condition_grn_Estar_z025_inference_separated_v1",
+              "Config/Pando/ConditionGRNMethod: global-condition-union-Estar-z025-separated-inference",
+              "Config/Pando/ConditionProjectionPolicy: exact-edge-whole-network-BH-common-topology",
+              "Config/Pando/ConditionInference: no-fusion-condition-local-lm-edge-omnibus-whole-network-BH",
               "Config/Pando/ConditionR2: full-data-diagnostic-only",
           ]
           missing = [x for x in required_description if x not in description]
           if missing:
               raise RuntimeError(f"condition DESCRIPTION contract missing: {missing}")
 
-          condition = Path("R/condition_grn.R").read_text()
-          runtime = Path("R/condition_multitask_ridge_runtime.R").read_text()
-          ridge = Path("R/condition_multitask_ridge.R").read_text()
-          ridge_fit = Path("R/condition_multitask_ridge_fit.R").read_text()
-          significance = Path("R/condition_multitask_ridge_significance.R").read_text()
-          scheme_e = Path("R/condition_sparse_deviation.R").read_text()
-          projection = Path("R/condition_grn_projection.R").read_text()
-          standard_ridge = Path("R/standard_ridge.R").read_text()
+          required = {
+              "R/condition_sparse_deviation.R": [
+                  ".condition_E_star_z <- 0.25",
+                  ".condition_q_orthogonal_decomposition <- function",
+                  ".condition_profile_coordinate_information <- function",
+                  ".condition_E_star_fit <- function",
+                  ".condition_scheme_e_fit <- function",
+                  "shared_by_boundary",
+                  "fused_by_penalty",
+              ],
+              "R/condition_multitask_ridge_fit.R": [
+                  '"condition_union_Estar_z025_inference_separated"',
+                  '"frozen_dictionary_condition_local_gaussian_lm_edge_omnibus_v1"',
+                  ".condition_no_fusion_condition_fit <- function",
+                  "stats::pt(",
+                  "condition_pval",
+                  "inference_variance",
+                  "penalty_effect = estimate",
+              ],
+              "R/condition_multitask_ridge_significance.R": [
+                  ".condition_exact_edge_inference <- function",
+                  '"single_condition_exact_t"',
+                  '"independent_condition_wald_chisq"',
+                  "stats::pchisq(",
+                  "stats::p.adjust(",
+                  '"exact_edge_whole_cell_type_network_BH"',
+                  "edge_supported",
+                  "active_in_regcompass",
+              ],
+              "R/condition_multitask_ridge_runtime.R": [
+                  "global_edges <-",
+                  "condition_edges <- lapply",
+                  "edge_inference = NULL",
+                  ".condition_projection_policy",
+              ],
+              "R/condition_grn_projection.R": [
+                  "active_in_regcompass",
+                  "penalty_effect",
+                  ".condition_projection_policy",
+              ],
+          }
+          for path, needles in required.items():
+              text = source[path]
+              missing = [x for x in needles if x not in text]
+              if missing:
+                  raise RuntimeError(f"{path} contract missing: {missing}")
 
-          required_condition = [
-              "tf_cor = 0.05, peak_cor = 0.05",
-              "union_grn_edges <- function",
-              "source_global",
-              "source_conditions",
-              "anyDuplicated(dictionary$edge_id)",
-          ]
-          missing = [x for x in required_condition if x not in condition]
-          if missing:
-              raise RuntimeError(f"common dictionary source contract missing: {missing}")
-
-          required_runtime = [
-              "tf_cor = 0.05, peak_cor = 0.05",
-              "global_edges <-",
-              "condition_edges <- lapply",
-              "global_edges = global_edges",
-              "dictionary_support_table",
-              "candidate_tf_cor = as.numeric(tf_cor)",
-              "candidate_peak_cor = as.numeric(peak_cor)",
-              ".condition_ridge_fit_contract",
-          ]
-          missing = [x for x in required_runtime if x not in runtime]
-          if missing:
-              raise RuntimeError(f"condition runtime contract missing: {missing}")
-
-          required_ridge = [
-              '"pando_condition_grn_Estar_jointse_v1"',
-              ".condition_ridge_fit <- function",
-              ".condition_scheme_e_fit(",
-              "equal_condition_within_condition_rms",
-          ]
-          missing = [x for x in required_ridge if x not in ridge]
-          if missing:
-              raise RuntimeError(f"E-star entry contract missing: {missing}")
-
-          required_scheme_e = [
-              ".condition_E_star_z <- 0.25",
-              '"information_scaled_sparse_deviation"',
-              ".condition_identifiable_contrast_tree <- function",
-              ".condition_q_orthogonal_decomposition <- function",
-              ".condition_profile_coordinate_information <- function",
-              ".condition_E_star_fit <- function",
-              ".condition_fusion_components <- function",
-              ".condition_joint_inference_design <- function",
-              ".condition_joint_inference_fit <- function",
-              ".condition_scheme_e_fit <- function",
-              "shared_by_boundary",
-              "contrast_identifiable",
-              "fused_by_penalty",
-              "condition_weight = stats::setNames(rep(1, k), conditions)",
-          ]
-          missing = [x for x in required_scheme_e if x not in scheme_e]
-          if missing:
-              raise RuntimeError(f"E-star/JSE core contract missing: {missing}")
-          forbidden_scheme_e = [
-              "fusion_ratio",
-              ".condition_E_star_z <- 0.5",
-              ".condition_E_star_z <- 1",
-              "condition_ridge_control",
-          ]
-          present = [x for x in forbidden_scheme_e if x.lower() in scheme_e.lower()]
-          if present:
-              raise RuntimeError(f"non-primary conditional penalty path remains: {present}")
-
-          required_fit = [
-              '"condition_union_Estar_z025_jointse"',
-              "beta_shared",
-              "condition_deviation",
-              "delta_beta",
-              "raw_information_condition",
-              "profile_information_delta",
-              "inference_estimate",
-              "inference_se",
-              "inference_estimable",
-              "solver_status",
-              "kkt_residual",
-              "penalty_value",
-              ".condition_bh_by_condition_target <- function",
-              '"condition_target_BH"',
-          ]
-          missing = [x for x in required_fit if x not in ridge_fit]
-          if missing:
-              raise RuntimeError(f"E-star/JSE output contract missing: {missing}")
-
-          required_significance = [
-              "global_support",
-              "local_support",
-              "coefficient$dictionary_support <- TRUE",
-              "condition_significant",
-              "edge_union_supported",
-              "supporting_conditions",
-              "all_conditions_fit_valid",
-              "active_in_regcompass",
-              '"any_condition_padj_exact_edge_union"',
-              "penalty_effect",
-          ]
-          missing = [x for x in required_significance if x not in significance]
-          if missing:
-              raise RuntimeError(f"condition activity contract missing: {missing}")
-
-          required_projection = [
-              ".condition_resolve_projection_targets",
-              ".condition_validate_projection_cells",
-              "active_in_regcompass",
-              "penalty_effect",
-              "fitted paired cell(s)",
-          ]
-          missing = [x for x in required_projection if x not in projection]
-          if missing:
-              raise RuntimeError(f"projection contract is incomplete: {missing}")
-
-          required_standard = [
-              ".pando_standard_ridge_control <- function",
-              ".pando_standard_ridge_target <- function",
-          ]
-          missing = [x for x in required_standard if x not in standard_ridge]
-          if missing:
-              raise RuntimeError(f"standard ridge separation contract missing: {missing}")
-
-          profile_test = Path("tests/testthat/test-scheme-e-profile-information.R")
-          if not profile_test.exists():
-              raise RuntimeError("E-star/JSE numerical regression test is missing")
-
-      - name: Parse package sources
+      - name: Parse package sources and tests
         shell: Rscript {0}
         run: |
           stopifnot(nrow(read.dcf("DESCRIPTION")) == 1L)
@@ -258,10 +137,13 @@ jobs:
           )
           for (file in files) parse(file = file)
 
-      - name: Run lightweight E-star/JSE invariants
+      - name: Run lightweight conditional GRN invariants
         shell: Rscript {0}
         run: |
+          source("R/condition_multitask_ridge.R")
           source("R/condition_sparse_deviation.R")
+          source("R/condition_multitask_ridge_fit.R")
+          source("R/condition_multitask_ridge_significance.R")
 
           control <- .condition_E_star_control(list(
             solver_tol = 1e-12, solver_max_iter = 10000L
@@ -288,36 +170,48 @@ jobs:
           stopifnot(max(abs(D %*% geometry$R - diag(4))) < 1e-10)
           stopifnot(max(abs(crossprod(A, Q %*% geometry$R))) < 1e-10)
 
-          H <- matrix(c(5, 2, 2, 4), 2, 2)
-          info <- .condition_profile_coordinate_information(H, 1e-12)
-          stopifnot(max(abs(info$information - 1 / diag(solve(H)))) < 1e-12)
+          set.seed(17)
+          x <- cbind(e1 = rnorm(80), e2 = rnorm(80))
+          x[, 2] <- 0.45 * x[, 1] + rnorm(80, sd = 0.8)
+          y <- 1.2 + x %*% c(0.8, -0.35) + rnorm(80, sd = 0.4)
+          scaling <- .condition_ridge_scaling(list(A = x, B = x), 1e-8)
+          one <- .condition_no_fusion_condition_fit(
+            x, as.numeric(y), scaling, rank_tol = 1e-12,
+            min_residual_df = 1L
+          )
+          direct <- summary(lm(as.numeric(y) ~ x))$coefficients
+          stopifnot(identical(one$status, "ok"))
+          stopifnot(max(abs(one$estimate - direct[-1, 1])) < 1e-8)
+          stopifnot(max(abs(one$se - direct[-1, 2])) < 1e-8)
+          stopifnot(max(abs(one$pval - direct[-1, 4])) < 1e-8)
 
-          make_fixture <- function(information, beta = 0.7) {
-            x <- lapply(information, function(one) {
-              a <- sqrt(one / 2)
-              matrix(c(-a, 0, a), ncol = 1,
-                     dimnames = list(NULL, "edge"))
-            })
-            names(x) <- paste0("C", seq_along(x))
-            residual_df <- 3L * length(x) - (length(x) + 1L)
-            residual_scale <- sqrt(residual_df / (6 * length(x)))
-            residual <- residual_scale * c(1, -2, 1)
-            y <- lapply(x, function(one) beta * one[, 1] + residual)
-            names(y) <- names(x)
-            list(x = x, y = y)
-          }
-          fixture <- make_fixture(c(100, 10, 10))
-          scaling <- list(center = c(edge = 0), scale = c(edge = 1))
-          joint <- .condition_joint_inference_design(
-            fixture$x, fixture$y, scaling, 1L,
-            list(component = matrix(1L, 3L, 1L)), 1e-12
+          fit <- list(
+            edge_dictionary = data.frame(
+              edge_id = c("G||TF1||P1", "G||TF2||P2"),
+              target = "G", tf = c("TF1", "TF2"),
+              region = c("P1", "P2"), atac_feature_id = c("P1", "P2"),
+              candidate_index = 1:2, stringsAsFactors = FALSE
+            ),
+            condition_levels = c("A", "B"), adjust_method = "BH",
+            padj_threshold = 0.05
           )
-          rows <- .condition_joint_inference_fit(
-            joint, scaling, 1L, 3L, 1L, names(fixture$x)
+          coef <- data.frame(
+            edge_id = rep(fit$edge_dictionary$edge_id, each = 2),
+            condition = rep(c("A", "B"), 2), fit_status = "ok",
+            penalty_effect = 1,
+            inference_estimate = c(0.5, NA, 0.4, 0.35),
+            inference_variance = c(0.01, NA, 0.01, 0.01),
+            inference_statistic = c(5, NA, 4, 3.5),
+            condition_pval = c(1e-4, NA, 2e-4, 5e-4),
+            condition_inference_estimable = c(TRUE, FALSE, TRUE, TRUE),
+            stringsAsFactors = FALSE
           )
-          stopifnot(identical(joint$status, "ok"))
-          stopifnot(abs(joint$sigma2 - 1) < 1e-10)
-          stopifnot(max(abs(rows$se[, 1] - 1 / sqrt(120))) < 1e-10)
+          edge <- .condition_exact_edge_inference(fit, coef)
+          stopifnot(edge$edge_inference_test[[1]] == "single_condition_exact_t")
+          stopifnot(abs(edge$edge_pval[[1]] - 1e-4) < 1e-15)
+          stopifnot(edge$edge_inference_test[[2]] == "independent_condition_wald_chisq")
+          stopifnot(identical(edge$bh_scope,
+                              rep("exact_edge_whole_cell_type_network_BH", 2)))
 
       - name: Build source package
         run: R CMD build --no-build-vignettes --no-manual .
