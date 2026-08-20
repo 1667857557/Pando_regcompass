@@ -76,7 +76,9 @@ Each edge uses an equal-condition within-condition RMS scale, rather than a pool
 \deqn{Q_c=X_c^TX_c/\widehat\sigma_g^2.}
 No \eqn{n_{total}/(Kn_c)} condition-size equalization weight is used.
 
-Let \eqn{A=\mathbf 1_K\otimes I_p}. On the identifiable contrast tree, Pando constructs a right inverse \eqn{B_0} and
+Let \eqn{A=\mathbf 1_K\otimes I_p}. For every informative exact edge, Pando first constructs a full spanning tree with \eqn{K-1} condition contrasts. Identifiable contrasts are preferred, using the first retained condition as the predefined reference when its contrasts are identifiable; if that reference coordinate is not identifiable, an identifiable non-reference contrast is allowed before zero-information boundary edges complete the tree. The condition ordering must therefore be fixed by the experimental design before fitting and must not be chosen after inspecting the GRN result.
+
+With contrast operator \eqn{D}, Pando constructs a right inverse \eqn{B_0} and
 \deqn{R=B_0-A(A^TQA)^+A^TQB_0.}
 This gives \eqn{DR=I} and \eqn{A^TQR=0}. Therefore the stacked coefficient is decomposed as
 \deqn{\beta=A\mu+R\delta}
@@ -86,7 +88,7 @@ and is not empirically shrunk toward zero.
 
 For \eqn{H=R^TQR} and \eqn{r=R^Th}, production uses the fixed E-star threshold \eqn{z=0.25}:
 \deqn{\widehat\delta=\arg\min_\delta\left\{\frac12\delta^TH\delta-r^T\delta+0.25\sum_j\sqrt{I_j}|\delta_j|\right\}.}
-The information \eqn{I_j} is obtained from the full correlated profile information, not a diagonal approximation. A zero-information contrast is fixed to \eqn{\delta_j=0} as a deterministic boundary convention and is marked \code{shared_by_boundary}; this is distinct from an identifiable contrast fused to zero by the penalty. The production coefficient is
+The information \eqn{I_j} is obtained from the full correlated profile information, not a diagonal approximation. Every full-tree coordinate remains in the production geometry. A zero-information coordinate has \eqn{I_j=0} and is constrained to \eqn{\delta_j=0} as a deterministic boundary convention; it is marked \code{shared_by_boundary}. This is distinct from an identifiable coordinate fused exactly to zero by the penalty, which is marked \code{fused_by_penalty}. The production coefficient is
 \deqn{\widehat\beta^E=A\widehat\mu+R\widehat\delta.}
 Stored \code{estimate} and \code{penalty_effect} are this same continuous \eqn{\widehat\beta^E}, back-transformed to raw TF-by-ATAC units.
 
