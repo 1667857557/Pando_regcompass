@@ -161,6 +161,14 @@ project_condition_grn_cells <- function(
              call. = FALSE)
     }
     coefficient <- as.data.frame(fit$coefficients, stringsAsFactors = FALSE)
+    coefficient_required <- c(
+        "edge_id", "target", "tf", "region", "condition",
+        "estimate", "penalty_effect", "active_in_regcompass"
+    )
+    if (!all(coefficient_required %in% colnames(coefficient))) {
+        stop("The condition fit lacks E-star/RegCompass projection fields.",
+             call. = FALSE)
+    }
     resolved_targets <- .condition_resolve_projection_targets(
         targets, fit$target_genes
     )
@@ -190,15 +198,16 @@ project_condition_grn_cells <- function(
             paste(coefficient$edge_id, coefficient$condition, sep = "@@")
         )
     )
-    # In the multi-task ridge condition path, `penalty_effect` is the final
-    # condition-specific coefficient only when that edge is estimable and its
-    # final BH-adjusted ridge-Wald P value is below fit$padj_threshold; it is
-    # zero otherwise. `significant_only = FALSE` remains an explicit diagnostic
-    # option that projects all fitted coefficients from the shared dictionary.
+    # `penalty_effect` is always the continuous production E-star coefficient.
+    # For the production/RegCompass projection, `significant_only = TRUE`
+    # therefore gates exact edges with the any-condition BH union first and
+    # then retains each admitted condition's own continuous coefficient.
     effect <- if (isTRUE(significant_only)) {
-        coefficient$penalty_effect
+        value <- as.numeric(coefficient$penalty_effect)
+        value[!(coefficient$active_in_regcompass %in% TRUE)] <- 0
+        value
     } else {
-        coefficient$estimate
+        as.numeric(coefficient$estimate)
     }
     effect[!is.finite(effect)] <- 0
     for (j in seq_len(nrow(coefficient))) {
@@ -224,7 +233,7 @@ project_condition_grn_cells <- function(
         is.character(fit$projection_policy) &&
         length(fit$projection_policy) == 1L &&
         !is.na(fit$projection_policy) && nzchar(fit$projection_policy)
-    ) fit$projection_policy else "penalty_effect"
+    ) fit$projection_policy else .condition_significant_projection_policy
     answer <- list(
         schema_version = "pando_condition_projection_common_dictionary_v1",
         gene_score = gene_score,
@@ -243,7 +252,7 @@ project_condition_grn_cells <- function(
         coefficient_scale = fit$coefficient_scale,
         projection_policy = if (isTRUE(significant_only)) {
             default_policy
-        } else "all_estimable_condition_coefficients"
+        } else "all_finite_condition_coefficients"
     )
     class(answer) <- c("PandoConditionProjection", "list")
     answer
