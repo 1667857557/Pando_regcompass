@@ -48,6 +48,25 @@ jobs:
                       f"{expected_path}; found {locations}"
                   )
 
+          internal_canonical = {
+              ".condition_ridge_fit": "R/condition_multitask_ridge.R",
+              ".condition_ridge_target": "R/condition_multitask_ridge_fit.R",
+              ".condition_apply_activity_gate":
+                  "R/condition_multitask_ridge_significance.R",
+          }
+          for name, expected_path in internal_canonical.items():
+              pattern = re.compile(
+                  rf"(?m)^{re.escape(name)}\s*<-\s*function\b"
+              )
+              locations = [
+                  path for path, text in source.items() if pattern.search(text)
+              ]
+              if locations != [expected_path]:
+                  raise RuntimeError(
+                      f"{name} must be modified in its canonical source file; "
+                      f"expected {expected_path}, found {locations}"
+                  )
+
           forbidden = [
               ".pando_infer_grn_grndata_impl",
               ".pando_infer_condition_grn_grndata_impl",
@@ -59,8 +78,6 @@ jobs:
               ".pando_infer_condition_grn_complete_contract_method",
               ".pando_condition_grn_fit_complete_contract_method",
               ".pando_complete_condition_fit_object",
-              ".condition_ridge_refit_contract",
-              ".condition_ridge_refit_contract_one_pass",
               ".condition_dictionary_screen",
               ".condition_subset_dictionary",
               ".condition_fit_target_matrix",
@@ -71,6 +88,9 @@ jobs:
               "statistical_support_pending_local_pando_gate",
               "aggregate_condition_grn_projection_strict",
               "zzzzz_condition_fit_contract",
+              "pando_condition_grn_multitask_ridge_v3",
+              "global-condition-union-single-no-fusion-ridge",
+              "condition-BH-supported-common-dictionary-ridge",
           ]
           present = [value for value in forbidden if value in combined]
           if present:
@@ -101,9 +121,11 @@ jobs:
 
           description = Path("DESCRIPTION").read_text()
           required_description = [
-              "Config/Pando/ConditionGRNModelSchema: pando_condition_grn_multitask_ridge_v3",
-              "Config/Pando/ConditionGRNMethod: global-condition-union-single-no-fusion-ridge",
-              "Config/Pando/ConditionProjectionPolicy: condition-BH-supported-common-dictionary-ridge",
+              "Config/Pando/ConditionGRNModelSchema: pando_condition_grn_sparse_deviation_v4",
+              "Config/Pando/ConditionGRNMethod: global-condition-union-scheme-E-exact-edge-z025",
+              "Config/Pando/ConditionProjectionPolicy: continuous-common-dictionary-scheme-E",
+              "Config/Pando/ConditionInference: scheme-E-z025-primary-BH-diagnostic-only",
+              "Config/Pando/ConditionR2: full-data-diagnostic-only",
           ]
           missing = [x for x in required_description if x not in description]
           if missing:
@@ -114,6 +136,8 @@ jobs:
           ridge = Path("R/condition_multitask_ridge.R").read_text()
           ridge_fit = Path("R/condition_multitask_ridge_fit.R").read_text()
           significance = Path("R/condition_multitask_ridge_significance.R").read_text()
+          scheme_e = Path("R/condition_sparse_deviation.R").read_text()
+          standard_ridge = Path("R/standard_ridge.R").read_text()
           required_condition = [
               "tf_cor = 0.05, peak_cor = 0.05",
               "union_grn_edges <- function",
@@ -138,16 +162,57 @@ jobs:
           if missing:
               raise RuntimeError(f"condition runtime contract missing: {missing}")
           required_ridge = [
-              '"pando_condition_grn_multitask_ridge_v3"',
-              ".condition_ridge_penalty <- function(k, p)",
-              "diag(k * p)",
+              '"pando_condition_grn_sparse_deviation_v4"',
+              ".condition_ridge_fit <- function",
+              ".condition_scheme_e_fit(",
               "equal_condition_within_condition_rms",
+              "Cell number remains in X'X",
           ]
           missing = [x for x in required_ridge if x not in ridge]
           if missing:
-              raise RuntimeError(f"no-fusion ridge contract missing: {missing}")
-          if "fusion_ratio" in ridge:
-              raise RuntimeError("ridge solver still contains fusion_ratio")
+              raise RuntimeError(f"Scheme-E ridge entry contract missing: {missing}")
+          required_scheme_e = [
+              ".condition_scheme_e_z <- 0.25",
+              '"exact_edge_sparse_deviation"',
+              ".condition_contrast_basis <- function",
+              ".condition_scheme_e_identifiable_edges <- function",
+              ".condition_scheme_e_fista <- function",
+              ".condition_scheme_e_fit <- function",
+              "no n_total/(K*n_c) reweighting is applied",
+              "shared_by_boundary",
+              "contrast_identifiable",
+              "fused_by_penalty",
+              "condition_weight = stats::setNames(rep(1, k), conditions)",
+          ]
+          missing = [x for x in required_scheme_e if x not in scheme_e]
+          if missing:
+              raise RuntimeError(f"Scheme-E solver contract missing: {missing}")
+          forbidden_scheme_e = [
+              "fusion_ratio",
+              ".condition_scheme_e_z <- 0.5",
+              ".condition_scheme_e_z <- 1",
+              "huber",
+              "quadratic deviation",
+          ]
+          present = [x for x in forbidden_scheme_e if x.lower() in scheme_e.lower()]
+          if present:
+              raise RuntimeError(f"non-primary conditional penalty path remains: {present}")
+          required_fit = [
+              '"condition_union_scheme_e_exact_edge_z025"',
+              ".condition_profile_information_export <- function",
+              "fit$profile_information / 2",
+              "beta_shared",
+              "condition_deviation",
+              "delta_beta",
+              "raw_information_condition",
+              "profile_information_delta",
+              "solver_status",
+              "kkt_residual",
+              "penalty_value",
+          ]
+          missing = [x for x in required_fit if x not in ridge_fit]
+          if missing:
+              raise RuntimeError(f"Scheme-E output contract missing: {missing}")
           if "statistical_support_pending_local_pando_gate" in ridge_fit:
               raise RuntimeError("obsolete local-support post-fit gate remains")
           required_significance = [
@@ -155,20 +220,33 @@ jobs:
               "local_support",
               "coefficient$dictionary_support <- TRUE",
               "current_scope_correlation_support",
-              "active <- statistically_supported",
-              "condition_bh_supported_common_dictionary_ridge_effects",
+              "active <- is.finite(estimate)",
+              "condition_wise_BH_adjusted_wald_diagnostic_only",
+              "all_finite_scheme_e_coefficients_on_fixed_common_dictionary",
               "penalty_effect",
           ]
           missing = [x for x in required_significance if x not in significance]
           if missing:
               raise RuntimeError(f"condition activity contract missing: {missing}")
           forbidden_activity = [
+              "active <- statistically_supported",
               "active <- statistically_supported & coefficient$dictionary_support",
               "active <- statistically_supported & (global_support | local_support)",
           ]
           present = [x for x in forbidden_activity if x in significance]
           if present:
-              raise RuntimeError(f"candidate provenance still vetoes fitted activity: {present}")
+              raise RuntimeError(f"BH/candidate provenance still vetoes fitted activity: {present}")
+          required_standard = [
+              ".standard_ridge_control <- function",
+              ".standard_ridge_fit <- function",
+          ]
+          missing = [x for x in required_standard if x not in standard_ridge]
+          if missing:
+              raise RuntimeError(f"standard ridge separation contract missing: {missing}")
+
+          profile_test = Path("tests/testthat/test-scheme-e-profile-information.R")
+          if not profile_test.exists():
+              raise RuntimeError("Scheme-E profile-information regression test is missing")
 
           projection = Path("R/condition_grn_projection.R").read_text()
           required_projection = [
@@ -213,6 +291,8 @@ jobs:
         run: |
           source("R/condition_grn_projection.R")
           source("R/condition_grn_projection_membership.R")
+          source("R/condition_sparse_deviation.R")
+          source("R/condition_multitask_ridge_fit.R")
           stopifnot(identical(
             .condition_resolve_projection_targets(
               c("tp53", "slc22a17"), c("TP53", "Slc22a17")
@@ -259,5 +339,23 @@ jobs:
           stopifnot(identical(
             as.character(selected$cell_id), c("cell1", "cell2")
           ))
+
+          qa <- matrix(c(7.0, 1.2, 1.2, 3.5), 2L, 2L)
+          qb <- matrix(c(2.5, -0.4, -0.4, 5.0), 2L, 2L)
+          basis <- .condition_contrast_basis(2L)
+          h_mu_mu <- qa + qb
+          h_mu_gamma <- basis[1L, 1L] * qa + basis[2L, 1L] * qb
+          h_gamma_gamma <- basis[1L, 1L]^2 * qa + basis[2L, 1L]^2 * qb
+          profile_gamma <- h_gamma_gamma -
+            crossprod(h_mu_gamma, solve(h_mu_mu, h_mu_gamma))
+          i_delta <- solve(solve(qa) + solve(qb))
+          stopifnot(max(abs(profile_gamma / 2 - i_delta)) < 1e-12)
+          raw_scale <- c(2.0, 0.5)
+          fit_stub <- list(
+            beta = matrix(0, nrow = 2L, ncol = 2L),
+            profile_information = diag(profile_gamma) * raw_scale^2
+          )
+          exported <- .condition_profile_information_export(fit_stub)
+          stopifnot(max(abs(exported - diag(i_delta) * raw_scale^2)) < 1e-12)
       - name: Build source package
         run: R CMD build --no-build-vignettes --no-manual .
