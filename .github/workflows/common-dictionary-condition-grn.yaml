@@ -236,8 +236,8 @@ jobs:
           if present:
               raise RuntimeError(f"BH/candidate provenance still vetoes fitted activity: {present}")
           required_standard = [
-              ".standard_ridge_control <- function",
-              ".standard_ridge_fit <- function",
+              ".pando_standard_ridge_control <- function",
+              ".pando_standard_ridge_target <- function",
           ]
           missing = [x for x in required_standard if x not in standard_ridge]
           if missing:
