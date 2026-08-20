@@ -1,4 +1,4 @@
-test_that("conditional R2 is full-data Scheme E diagnostic", {
+test_that("conditional R2 is full-data E-star diagnostic", {
   set.seed(11)
   n <- 40L
   cells <- list(A = paste0("a", seq_len(n)), B = paste0("b", seq_len(n)))
@@ -20,16 +20,19 @@ test_that("conditional R2 is full-data Scheme E diagnostic", {
     atac_feature_id = "P1", candidate_index = 1L, source_global = TRUE,
     source_conditions = "A;B", n_sources = 3L, stringsAsFactors = FALSE
   )
-  control <- Pando:::.condition_ridge_control()
+  control <- Pando:::.condition_E_star_control()
   result <- Pando:::.condition_ridge_target(
     prepared = prepared, edges = edges, cells_by_condition = cells,
-    folds = NULL, control = control, min_residual_df = 1L,
-    rank_action = "mark"
+    control = control, min_residual_df = 1L,
+    rank_action = "mark", reference_condition = "A"
   )
   expect_true(all(is.finite(result$fit$rsq)))
   expect_true(all(result$fit$rsq <= 1 + 1e-12))
-  expect_true(all(result$fit$penalty_family == "exact_edge_sparse_deviation"))
+  expect_true(all(result$fit$penalty_family ==
+                  "information_scaled_sparse_deviation"))
   expect_true(all(result$fit$deviation_z == 0.25))
+  expect_true(all(result$fit$rsq_definition ==
+                  "scheme_e_z025_full_data_R2_diagnostic"))
   expect_false(any(c("lambda", "lambda_min", "cv_mse", "rsq_oof") %in%
                    names(result$fit)))
 })
