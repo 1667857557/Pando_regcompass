@@ -849,6 +849,7 @@ condition_grn_fit.GRNData <- function(
     if (length(missing)) {
         stop("Condition GRN fit was not found for: ",
              paste(missing, collapse = ", "), call. = FALSE
+        )
     }
     answer <- fits[cell_type]
     if (length(answer) == 1L) answer[[1L]] else answer
