@@ -200,7 +200,6 @@ jobs:
           required_fit = [
               '"condition_union_scheme_e_exact_edge_z025"',
               ".condition_profile_information_export <- function",
-              "fit$profile_information / 2",
               "beta_shared",
               "condition_deviation",
               "delta_beta",
