@@ -96,7 +96,7 @@ test_that("external dictionaries preserve domain and motif support", {
                  "without motif support")
 })
 
-test_that("condition API exposes one fixed Scheme E design", {
+test_that("condition API exposes one fixed E-star/JSE production design", {
     formal_names <- names(formals(Pando:::infer_condition_grn.GRNData))
     expect_true(all(c(
         "tf_cor", "peak_cor", "adjust_method", "padj_threshold",
@@ -108,7 +108,7 @@ test_that("condition API exposes one fixed Scheme E design", {
         "candidate_screen", "condition_mix", "condition_weight",
         "nlambda", "lambda", "outer_nfolds", "inner_nfolds",
         "lambda_selection", "engine_control", "scale", "fusion_ratio",
-        "scheme_e_z"
+        "scheme_e_z", "z", "condition_ridge_control"
     ) %in% formal_names))
     description <- utils::packageDescription("Pando")
     expect_identical(
@@ -117,10 +117,14 @@ test_that("condition API exposes one fixed Scheme E design", {
     )
     expect_identical(
         description[["Config/Pando/ConditionGRNModelSchema"]],
-        "pando_condition_grn_sparse_deviation_v4"
+        "pando_condition_grn_Estar_jointse_v1"
     )
     expect_identical(
         description[["Config/Pando/ConditionGRNMethod"]],
-        "global-condition-union-scheme-E-exact-edge-z025"
+        "global-condition-union-Estar-z025-JSE"
+    )
+    expect_identical(
+        description[["Config/Pando/ConditionProjectionPolicy"]],
+        "any-condition-padj-exact-edge-union"
     )
 })
