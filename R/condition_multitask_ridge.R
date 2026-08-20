@@ -1,14 +1,10 @@
-# Common-dictionary conditional GRN solver entry points.
+# Common-dictionary conditional GRN entry points.
 #
-# Conditional fits use Scheme E exact-edge sparse deviations with z = 0.25.
-# The public condition-GRN API is unchanged; `condition_ridge_control` remains
-# the compatibility name for numerical solver controls only.
+# The existing condition-GRN path is implemented directly as E-star/JSE with
+# the fixed production threshold z = 0.25. Predictor construction and scaling
+# stay on the exact TF-peak-target dictionary used by every condition.
 
-.condition_multitask_ridge_schema <- "pando_condition_grn_sparse_deviation_v4"
-
-.condition_ridge_control <- function(control = list()) {
-    .condition_scheme_e_control(control)
-}
+.condition_multitask_ridge_schema <- "pando_condition_grn_Estar_jointse_v1"
 
 .condition_ridge_predictors <- function(prepared, edges, cells_by_condition) {
     out <- lapply(cells_by_condition, function(cells) {
@@ -33,11 +29,6 @@
         stop("Conditions do not share one finite ordered predictor dictionary.",
              call. = FALSE)
     }
-
-    # Condition-specific intercepts remove between-condition mean shifts. Every
-    # exact edge then receives one common scale computed from the equal-condition
-    # RMS of its within-condition variation. Cell number remains in X'X and is
-    # deliberately not cancelled by a condition-size weight.
     pooled <- do.call(rbind, x)
     center <- colMeans(pooled)
     within_variance <- vapply(seq_len(ncol(x[[1L]])), function(j) {
@@ -68,13 +59,14 @@
 
 .condition_ridge_fit <- function(
     x, y, scaling, min_residual_df = 1L, inference = TRUE,
-    control = list()) {
+    control = list(), reference_condition = NULL) {
     .condition_scheme_e_fit(
         x = x,
         y = y,
         scaling = scaling,
         min_residual_df = min_residual_df,
         inference = inference,
-        control = control
+        control = control,
+        reference_condition = reference_condition
     )
 }
