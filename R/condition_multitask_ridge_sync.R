@@ -1,4 +1,5 @@
-# Synchronize stored Pando Network objects with the final E-star/JSE fit.
+# Synchronize stored Pando Network objects with the final E-star production,
+# separate no-fusion inference, and common exact-edge topology contract.
 
 .condition_update_network_significance <- function(object, fit) {
     for (condition in fit$condition_levels) {

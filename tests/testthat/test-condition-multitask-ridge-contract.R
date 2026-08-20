@@ -3,37 +3,34 @@ test_that("public condition API exposes design controls but not z/CV controls", 
     expect_true(all(c(
         "cell_type_col", "condition_col", "tf_cor", "peak_cor",
         "min_cells_per_condition", "rank_action", "min_residual_df",
-        "parallel", "BPPARAM", "parallel_scope", "fallback_args"
+        "reference_condition", "parallel", "BPPARAM", "parallel_scope",
+        "fallback_args"
     ) %in% args))
     expect_false(any(c(
         "ridge_control", "condition_ridge_control", "scheme_e_z", "z",
-        "lambda_grid", "lambda_rule", "cv_folds"
+        "lambda_grid", "lambda_rule", "cv_folds", "fusion_ratio"
     ) %in% args))
     expect_equal(eval(formals(Pando:::infer_condition_grn.GRNData)$tf_cor), 0.05)
     expect_equal(eval(formals(Pando:::infer_condition_grn.GRNData)$peak_cor), 0.05)
 })
 
-test_that("condition model is fixed E-star/JSE z=0.25", {
+test_that("conditional production schema is fixed E-star z=0.25", {
     expect_identical(
         Pando:::.condition_multitask_ridge_schema,
-        "pando_condition_grn_Estar_jointse_v1"
+        "pando_condition_grn_Estar_z025_inference_separated_v1"
     )
     expect_identical(
         Pando:::.condition_fit_engine,
-        "condition_union_Estar_z025_jointse"
+        "condition_union_Estar_z025_inference_separated"
+    )
+    expect_identical(
+        Pando:::.condition_inference_schema,
+        "frozen_dictionary_condition_local_gaussian_lm_edge_omnibus_v1"
     )
     expect_equal(Pando:::.condition_E_star_z, 0.25)
     expect_identical(
         Pando:::.condition_E_star_penalty_family,
         "information_scaled_sparse_deviation"
-    )
-    control <- Pando:::.condition_E_star_control()
-    expect_false(any(c(
-        "scheme_e_z", "z", "lambda_grid", "lambda_rule", "cv_folds"
-    ) %in% names(control)))
-    expect_error(
-        Pando:::.condition_E_star_control(list(scheme_e_z = 0.5)),
-        "Unknown `condition_e_control` field", fixed = TRUE
     )
 })
 
@@ -57,68 +54,30 @@ test_that("condition scaling is common and immune to condition mean shifts", {
     )
 })
 
-.contract_activity_fixture <- function() {
-    coefficient <- data.frame(
-        edge_id = rep(c("E1", "E2", "E3"), 2L),
-        target = "G",
-        condition = rep(c("A", "B"), each = 3L),
-        estimate = c(0.5, 0.4, 0.3, 0.6, 0.7, 0.8),
-        penalty_effect = c(0.5, 0.4, 0.3, 0.6, 0.7, 0.8),
-        pval = c(0.003, 0.1, 0.2, 0.3, 0.003, 0.2),
-        padj = c(0.01, 0.20, 0.30, 0.50, 0.01, 0.40),
-        inference_estimable = TRUE,
-        condition_significant = c(TRUE, FALSE, FALSE, FALSE, TRUE, FALSE),
-        fusion_component_id = rep(c("component1", "component1", "component1"), 2L),
-        shared_edge = FALSE,
-        stringsAsFactors = FALSE
+test_that("no-fusion condition inference reproduces Gaussian lm coefficients", {
+    set.seed(27)
+    x <- cbind(e1 = rnorm(90), e2 = rnorm(90))
+    x[, 2] <- 0.35 * x[, 1] + rnorm(90, sd = 0.9)
+    y <- 1.1 + 0.8 * x[, 1] - 0.3 * x[, 2] + rnorm(90, sd = 0.4)
+    scaling <- Pando:::.condition_ridge_scaling(list(A = x, B = x), 1e-8)
+    fit <- Pando:::.condition_no_fusion_condition_fit(
+        x, y, scaling, rank_tol = 1e-12, min_residual_df = 1L
     )
-    fit <- list(
-        condition_levels = c("A", "B"),
-        padj_threshold = 0.05,
-        dictionary_support_table = data.frame(
-            edge_id = c("E1", "E2", "E1", "E3"),
-            source_type = c("global", "global", "condition", "condition"),
-            condition = c(NA, NA, "A", "A"),
-            peak_target_cor = c(0.22, 0.31, 0.2, 0.3),
-            tf_target_cor = c(0.42, 0.51, 0.4, 0.5),
-            stringsAsFactors = FALSE
-        ),
-        coefficients = coefficient,
-        fit = data.frame(
-            target = c("G", "G"), condition = c("A", "B"),
-            fit_status = c("ok", "ok"), stringsAsFactors = FALSE
-        )
-    )
-    class(fit) <- c("ConditionGRNFit", "list")
-    fit
-}
-
-test_that("BH annotates conditions while RegCompass admission is exact-edge union", {
-    gated <- Pando:::.condition_apply_activity_gate(.contract_activity_fixture())
-    expect_identical(gated$coefficients$active, rep(TRUE, 6L))
-    expect_identical(
-        gated$coefficients$condition_significant,
-        c(TRUE, FALSE, FALSE, FALSE, TRUE, FALSE)
-    )
-    expect_equal(gated$coefficients$penalty_effect,
-                 gated$coefficients$estimate)
-    expect_identical(
-        gated$coefficients$active_in_regcompass,
-        c(TRUE, TRUE, FALSE, TRUE, TRUE, FALSE)
-    )
-    expect_identical(
-        gated$coefficients$supporting_conditions,
-        c("A", "B", "", "A", "B", "")
-    )
+    expected <- summary(stats::lm(y ~ x))$coefficients[-1, , drop = FALSE]
+    expect_identical(fit$status, "ok")
+    expect_equal(fit$estimate, expected[, 1], tolerance = 1e-8)
+    expect_equal(fit$se, expected[, 2], tolerance = 1e-8)
+    expect_equal(fit$statistic, expected[, 3], tolerance = 1e-8)
+    expect_equal(fit$pval, expected[, 4], tolerance = 1e-8)
 })
 
-test_that("dictionary and handoff policies encode E-star/JSE union", {
+test_that("dictionary and projection policies encode common edge topology", {
     expect_identical(
         Pando:::.condition_fit_dictionary_policy,
         "global_and_condition_union_pando_correlation_supported_frozen_dictionary"
     )
     expect_identical(
-        Pando:::.condition_significant_projection_policy,
-        "any_condition_padj_exact_edge_union"
+        Pando:::.condition_projection_policy,
+        "exact_edge_whole_network_BH_common_topology"
     )
 })

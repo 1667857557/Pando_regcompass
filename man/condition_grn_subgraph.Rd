@@ -9,7 +9,7 @@ condition_grn_subgraph(fit, condition, significant_only = TRUE)
 \arguments{
 \item{fit}{A common-dictionary \code{ConditionGRNFit}.}
 \item{condition}{Fitted condition label.}
-\item{significant_only}{If \code{TRUE}, return the exact-edge RegCompass union admitted by all-condition fit validity plus any-condition \code{padj < padj_threshold}, retaining the selected condition's own continuous \code{penalty_effect}. This is not a condition-local significance filter.}
+\item{significant_only}{If \code{TRUE}, return only exact edges supported by the whole-network edge-level BH topology, retaining the selected condition's own continuous \code{penalty_effect}. Because topology is common, every condition returns the same supported exact-edge IDs.}
 }
 \value{An edge table for the selected condition.}
-\description{Extracts one condition from the frozen common dictionary. With \code{significant_only = TRUE}, every condition sees the same admitted exact-edge topology defined by \code{active_in_regcompass}; condition specificity remains in the continuous E-star production coefficient.}
+\description{Extracts one condition from the frozen common dictionary. With \code{significant_only = TRUE}, all conditions share the exact-edge topology defined by \code{active_in_regcompass}; condition specificity remains in the continuous E-star z=0.25 production coefficient.}

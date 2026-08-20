@@ -622,14 +622,15 @@ union_grn_edges <- function(global_edges = NULL, condition_edges) {
 #' on all eligible-condition cells pooled together and independently in every
 #' condition. Exact TF-peak-target triples passing both configured correlation
 #' gates in either scope are deduplicated into one frozen common dictionary.
-#' Every retained condition is estimated in one K-condition E-star model at the
-#' fixed production deviation threshold z=0.25. The shared component is the
-#' unpenalized joint MLE, identifiable condition deviations receive the
-#' information-scaled sparse penalty, and zero-information tree coordinates are
-#' fixed to sharing. E-star fusion components define a reduced joint covariance;
-#' joint-refit Wald p-values are BH-adjusted within each condition x target
-#' family. RegCompass admission uses the any-condition adjusted-p-value union
-#' with an all-condition fit-validity requirement. With fewer than two usable
+#' Production coefficients are estimated jointly by E-star at the single fixed
+#' deviation threshold z=0.25. E-star fusion/boundary metadata are retained only
+#' as properties of the production estimator. Formal significance is computed
+#' separately, without fusion, from condition-local Gaussian linear models on the
+#' same frozen target dictionaries. Each exact edge receives one omnibus P value
+#' across its estimable conditions, followed by one BH correction across all
+#' exact edges in the broad-cell-type network. The resulting edge topology is
+#' common to all retained conditions; condition specificity remains in each
+#' condition's continuous E-star coefficient. With fewer than two usable
 #' conditions, standard Pando is used instead.
 #'
 #' @param object A `GRNData` object after motif matching.
@@ -644,22 +645,25 @@ union_grn_edges <- function(global_edges = NULL, condition_edges) {
 #'   discovery after ordinary range validation.
 #' @param min_cells_per_condition Minimum cells retained per condition.
 #' @param small_condition_action Error, drop the condition, or skip the cell type.
-#' @param adjust_method,padj_threshold Conditional E-star/JSE requires BH. Raw
-#'   joint-refit Wald p-values are adjusted within each condition x target
-#'   family and condition support requires strict `padj < padj_threshold`.
+#' @param adjust_method,padj_threshold Exact-edge inference requires BH. A raw
+#'   edge P value is built from the estimable condition-local no-fusion tests,
+#'   and BH is applied once across all estimable exact edges in the cell type.
+#'   Edge support requires strict `edge_padj < padj_threshold`.
 #' @param rank_action,min_residual_df Identifiable-subspace and residual-degree-
-#'   of-freedom controls for the joint E-star fit.
+#'   of-freedom controls for production and no-fusion inference.
 #' @param reference_condition Optional predefined reference condition for the
-#'   K-condition contrast-tree geometry. It must be present and retained in every
-#'   fitted cell type. When `NULL`, the first retained condition is used. This is
-#'   a design coordinate, not a data-driven tuning parameter.
+#'   K-condition E-star contrast-tree geometry. It must be present and retained
+#'   in every fitted cell type. When `NULL`, the first retained condition is used.
+#'   This is a production-model coordinate, not an inference tuning parameter.
 #' @param BPPARAM Optional BiocParallel parameter.
 #' @param parallel_scope Automatic, cell-type, or target-level parallel scope.
 #' @param fallback_args Arguments used only by standard Pando fallback. The
 #'   conditional route does not accept ridge-CV/lambda, alternative-z, or
 #'   fusion-ratio controls.
 #' @param ... Must be empty.
-#' @return A `GRNData` object with common-dictionary E-star/JSE condition fits.
+#' @return A `GRNData` object with a frozen common dictionary, E-star z=0.25
+#'   production coefficients, separate no-fusion inference, and one common
+#'   exact-edge topology for all retained conditions.
 #' @export
 infer_condition_grn <- function(object, ...) {
     UseMethod(generic = "infer_condition_grn", object = object)
@@ -844,7 +848,7 @@ condition_grn_fit.GRNData <- function(
     missing <- setdiff(cell_type, names(fits))
     if (length(missing)) {
         stop("Condition GRN fit was not found for: ",
-             paste(missing, collapse = ", "), call. = FALSE)
+             paste(missing, collapse = ", "), call. = FALSE
     }
     answer <- fits[cell_type]
     if (length(answer) == 1L) answer[[1L]] else answer
@@ -854,10 +858,10 @@ condition_grn_fit.GRNData <- function(
 #'
 #' @param fit A `ConditionGRNFit`.
 #' @param condition Fitted condition label.
-#' @param significant_only If `TRUE`, return the exact-edge RegCompass union
-#'   admitted by all-condition fit validity plus any-condition
-#'   `padj < padj_threshold`, retaining the selected condition's own continuous
-#'   `penalty_effect`. This is not a condition-local significance filter.
+#' @param significant_only If `TRUE`, return only exact edges supported by the
+#'   whole-network edge-level BH topology, retaining the selected condition's own
+#'   continuous `penalty_effect`. Because topology is common, every condition
+#'   returns the same supported exact-edge IDs.
 #' @return Edge table for the selected condition.
 #' @export
 condition_grn_subgraph <- function(fit, condition, significant_only = TRUE) {
@@ -875,7 +879,7 @@ condition_grn_subgraph <- function(fit, condition, significant_only = TRUE) {
     ]
     if (isTRUE(significant_only)) {
         if (!"active_in_regcompass" %in% colnames(answer)) {
-            stop("The condition fit lacks exact-edge RegCompass union flags.",
+            stop("The condition fit lacks common exact-edge topology flags.",
                  call. = FALSE)
         }
         answer <- answer[
@@ -889,15 +893,14 @@ condition_grn_subgraph <- function(fit, condition, significant_only = TRUE) {
 #'
 #' Reconstructs TF RNA multiplied by peak ATAC on the original unscaled input and
 #' applies the continuous condition-specific E-star production coefficient.
-#' With `significant_only = TRUE`, projection first applies the RegCompass
-#' exact-edge any-condition BH union and then retains every admitted condition's
-#' own `penalty_effect`; it does not rebuild a condition-local significance
-#' topology.
+#' With `significant_only = TRUE`, projection first applies the common exact-edge
+#' topology defined by whole-network edge-level BH and then retains every
+#' condition's own continuous `penalty_effect`.
 #'
 #' @param object Fitted `GRNData` object.
 #' @param fit A `ConditionGRNFit`.
 #' @param targets Optional target subset.
-#' @param significant_only Use the RegCompass exact-edge union before applying
+#' @param significant_only Use the common exact-edge BH topology before applying
 #'   continuous `penalty_effect`; if `FALSE`, project all finite estimates.
 #' @param return_edge_contributions Return the cell-by-edge matrix.
 #' @return A `PandoConditionProjection` list.

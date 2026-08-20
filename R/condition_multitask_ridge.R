@@ -1,10 +1,12 @@
 # Common-dictionary conditional GRN entry points.
 #
-# The existing condition-GRN path is implemented directly as E-star/JSE with
-# the fixed production threshold z = 0.25. Predictor construction and scaling
-# stay on the exact TF-peak-target dictionary used by every condition.
+# The production condition-GRN path is implemented directly as E-star with the
+# fixed threshold z = 0.25. Predictor construction and scaling stay on the exact
+# TF-peak-target dictionary used by every condition. Formal edge inference is
+# deliberately separate and does not condition on E-star-selected fusion.
 
-.condition_multitask_ridge_schema <- "pando_condition_grn_Estar_jointse_v1"
+.condition_multitask_ridge_schema <-
+    "pando_condition_grn_Estar_z025_inference_separated_v1"
 
 .condition_ridge_predictors <- function(prepared, edges, cells_by_condition) {
     out <- lapply(cells_by_condition, function(cells) {
@@ -58,14 +60,13 @@
 }
 
 .condition_ridge_fit <- function(
-    x, y, scaling, min_residual_df = 1L, inference = TRUE,
+    x, y, scaling, min_residual_df = 1L,
     control = list(), reference_condition = NULL) {
     .condition_scheme_e_fit(
         x = x,
         y = y,
         scaling = scaling,
         min_residual_df = min_residual_df,
-        inference = inference,
         control = control,
         reference_condition = reference_condition
     )
