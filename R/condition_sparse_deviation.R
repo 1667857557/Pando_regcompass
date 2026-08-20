@@ -2,6 +2,9 @@
 #
 # Production uses one fixed deviation threshold z = 0.25. The shared component
 # is the joint MLE; only identifiable condition contrasts are sparsified.
+# A full K-1 contrast tree is retained for every exact edge. Tree coordinates
+# that are not identifiable remain in the geometry with information zero and are
+# therefore fixed to delta = 0 as the deterministic boundary convention.
 # Equality selected by E-star is then used to build a reduced joint model for
 # covariance, Wald inference and downstream condition-by-target BH adjustment.
 
@@ -73,6 +76,7 @@
 }
 
 .condition_blockdiag <- function(blocks) {
+    if (!length(blocks)) return(matrix(numeric(), 0L, 0L))
     size <- vapply(blocks, nrow, integer(1))
     out <- matrix(0, sum(size), sum(size))
     offset <- 0L
@@ -161,14 +165,20 @@
     if (length(vertices) < 2L) return(edges[FALSE, , drop = FALSE])
     edges <- edges[
         edges$condition_a_index %in% vertices &
-        edges$condition_b_index %in% vertices &
-        edges$pair_estimable %in% TRUE, , drop = FALSE
+        edges$condition_b_index %in% vertices, , drop = FALSE
     ]
     if (!nrow(edges)) return(edges)
     reference_edge <- edges$condition_a_index == reference_index |
         edges$condition_b_index == reference_index
+    # Identifiable edges always precede boundary edges. Among identifiable
+    # choices, a predefined-reference star is preferred when it is available;
+    # otherwise the highest-information non-reference edge is allowed. Boundary
+    # edges are used only to complete the spanning tree, never to replace an
+    # identifiable contrast.
     edges <- edges[order(
-        !reference_edge, -as.numeric(edges$pair_information),
+        !(edges$pair_estimable %in% TRUE),
+        !reference_edge,
+        -as.numeric(edges$pair_information),
         edges$condition_a_index, edges$condition_b_index
     ), , drop = FALSE]
     parent <- seq_len(max(vertices))
@@ -187,7 +197,12 @@
         parent[[rb]] <- ra
         if (sum(selected) == length(vertices) - 1L) break
     }
-    edges[selected, , drop = FALSE]
+    answer <- edges[selected, , drop = FALSE]
+    if (nrow(answer) != length(vertices) - 1L) {
+        stop("Unable to construct a full condition contrast tree.",
+             call. = FALSE)
+    }
+    answer
 }
 
 .condition_identifiable_contrast_tree <- function(
@@ -201,66 +216,41 @@
     pair_information <- .condition_pair_information(
         Q, p, conditions, rank_tol
     )
-    selected_rows <- list()
+    selected_rows <- vector("list", p)
     boundary <- vector("list", p)
     vertices_used <- vector("list", p)
     for (edge in seq_len(p)) {
         candidate <- pair_information[
-            pair_information$edge_index == edge &
-            pair_information$pair_estimable %in% TRUE, , drop = FALSE
+            pair_information$edge_index == edge, , drop = FALSE
         ]
-        components <- .condition_graph_component(seq_len(k), candidate)
-        informative_components <- components[lengths(components) >= 2L]
-        if (!length(informative_components)) {
-            boundary[[edge]] <- seq_len(k)
-            vertices_used[[edge]] <- integer()
-            next
-        }
-        contains_reference <- vapply(
-            informative_components,
-            function(x) reference_index %in% x,
-            logical(1)
-        )
-        if (any(contains_reference)) {
-            component <- informative_components[[which(contains_reference)[[1L]]]]
-        } else {
-            sizes <- lengths(informative_components)
-            component <- informative_components[[which.max(sizes)]]
-        }
         tree <- .condition_maximum_spanning_tree(
-            component, candidate, reference_index
+            seq_len(k), candidate, reference_index
         )
-        if (nrow(tree)) {
-            tree$contrast_coordinate <- paste0(
-                tree$condition_b, "-", tree$condition_a
-            )
-            selected_rows[[length(selected_rows) + 1L]] <- tree
-            vertices_used[[edge]] <- sort(unique(c(
-                tree$condition_a_index, tree$condition_b_index
-            )))
-            boundary[[edge]] <- setdiff(seq_len(k), vertices_used[[edge]])
-        } else {
-            vertices_used[[edge]] <- integer()
-            boundary[[edge]] <- seq_len(k)
-        }
+        tree$contrast_coordinate <- paste0(
+            tree$condition_b, "-", tree$condition_a
+        )
+        tree$tree_edge_index <- seq_len(nrow(tree))
+        selected_rows[[edge]] <- tree
+        identifiable_vertices <- sort(unique(c(
+            tree$condition_a_index[tree$pair_estimable %in% TRUE],
+            tree$condition_b_index[tree$pair_estimable %in% TRUE]
+        )))
+        vertices_used[[edge]] <- identifiable_vertices
+        boundary[[edge]] <- sort(unique(c(
+            tree$condition_a_index[!(tree$pair_estimable %in% TRUE)],
+            tree$condition_b_index[!(tree$pair_estimable %in% TRUE)]
+        )))
     }
-    selected <- if (length(selected_rows)) {
-        do.call(rbind, selected_rows)
-    } else {
-        pair_information[FALSE, , drop = FALSE]
-    }
-    if (nrow(selected)) {
-        rownames(selected) <- NULL
-        D <- matrix(0, nrow(selected), k * p)
-        for (i in seq_len(nrow(selected))) {
-            edge <- selected$edge_index[[i]]
-            a <- selected$condition_a_index[[i]]
-            b <- selected$condition_b_index[[i]]
-            D[i, (a - 1L) * p + edge] <- -1
-            D[i, (b - 1L) * p + edge] <- 1
-        }
-    } else {
-        D <- matrix(0, 0L, k * p)
+    selected <- do.call(rbind, selected_rows)
+    rownames(selected) <- NULL
+    selected$contrast_index <- seq_len(nrow(selected))
+    D <- matrix(0, nrow(selected), k * p)
+    for (i in seq_len(nrow(selected))) {
+        edge <- selected$edge_index[[i]]
+        a <- selected$condition_a_index[[i]]
+        b <- selected$condition_b_index[[i]]
+        D[i, (a - 1L) * p + edge] <- -1
+        D[i, (b - 1L) * p + edge] <- 1
     }
     list(
         D = D,
@@ -312,8 +302,7 @@
     information <- numeric(nrow(H))
     estimable <- logical(nrow(H))
     for (j in seq_len(nrow(H))) {
-        unit <- numeric(nrow(H))
-        unit[[j]] <- 1
+        unit <- numeric(nrow(H)); unit[[j]] <- 1
         residual <- unit - projector[j, ]
         ok <- max(abs(residual)) <= max(1e-8, 20 * rank_tol)
         variance <- inverse[j, j]
@@ -336,23 +325,31 @@
     nonzero <- active & abs(delta) > 1e-12
     zero <- active & !nonzero
     value[nonzero] <- abs(
-        gradient[nonzero] +
-        z * weights[nonzero] * sign(delta[nonzero])
+        gradient[nonzero] + z * weights[nonzero] * sign(delta[nonzero])
     )
-    value[zero] <- pmax(
-        0, abs(gradient[zero]) - z * weights[zero]
-    )
+    value[zero] <- pmax(0, abs(gradient[zero]) - z * weights[zero])
     max(value[active])
 }
 
-.condition_E_star_fit <- function(H, r, information, control) {
+.condition_E_star_fit <- function(
+    H, r, information, control = .condition_E_star_control()) {
+    control <- .condition_E_star_control(control)
     if (!length(r)) {
         return(list(
             delta = numeric(), status = "ok", iterations = 0L,
             kkt_residual = 0, objective = 0
         ))
     }
-    active <- is.finite(information) & information > 0
+    H <- (as.matrix(H) + t(as.matrix(H))) / 2
+    r <- as.numeric(r)
+    information <- as.numeric(information)
+    if (!identical(dim(H), c(length(r), length(r))) ||
+        length(information) != length(r) || any(!is.finite(H)) ||
+        any(!is.finite(r)) || any(!is.finite(information)) ||
+        any(information < 0)) {
+        stop("Invalid E-star profile system.", call. = FALSE)
+    }
+    active <- information > 0
     delta <- numeric(length(r))
     if (!any(active)) {
         return(list(
@@ -392,10 +389,10 @@
             next_value, current_gradient, weights,
             rep(TRUE, length(index)), .condition_E_star_z
         )
-        objective <- 0.5 * drop(crossprod(
-            next_value, Hs %*% next_value
-        )) - drop(crossprod(rs, next_value)) +
-            .condition_E_star_z * sum(weights * abs(next_value))
+        full_delta <- numeric(length(r)); full_delta[index] <- next_value
+        objective <- 0.5 * drop(crossprod(full_delta, H %*% full_delta)) -
+            drop(crossprod(r, full_delta)) +
+            .condition_E_star_z * sum(sqrt(information) * abs(full_delta))
         step <- sqrt(sum((next_value - current)^2))
         scale <- 1 + sqrt(sum(current^2))
         current <- next_value
@@ -427,73 +424,45 @@
         for (link in links) {
             a <- as.integer(link[[1L]])
             b <- as.integer(link[[2L]])
-            ra <- root(a)
-            rb <- root(b)
+            ra <- root(a); rb <- root(b)
             if (ra != rb) parent[[rb]] <- ra
         }
     }
     roots <- vapply(seq_len(k), root, integer(1))
-    unique_root <- unique(roots)
-    match(roots, unique_root)
+    match(roots, unique(roots))
 }
 
-.condition_fusion_components <- function(
-    tree, delta, p, conditions, control) {
+.condition_fusion_components <- function(tree, delta, p, conditions, control) {
     k <- length(conditions)
     component <- matrix(NA_integer_, k, p)
     boundary_condition <- matrix(FALSE, k, p)
     fused_by_penalty <- logical(p)
     shared_by_boundary <- logical(p)
     tree_metadata <- tree$metadata
-    if (nrow(tree_metadata)) {
-        tree_metadata$delta <- delta
-        if (!"contrast_identifiable" %in% colnames(tree_metadata)) {
-            tree_metadata$contrast_identifiable <- TRUE
-        }
-        tree_metadata$fused_by_penalty <-
-            tree_metadata$contrast_identifiable %in% TRUE &
-            abs(delta) <= control$fusion_tol
-    } else {
-        tree_metadata$delta <- numeric()
-        tree_metadata$contrast_identifiable <- logical()
-        tree_metadata$fused_by_penalty <- logical()
+    tree_metadata$delta <- as.numeric(delta)
+    if (!"contrast_identifiable" %in% colnames(tree_metadata)) {
+        tree_metadata$contrast_identifiable <- FALSE
     }
+    tree_metadata$shared_by_boundary <-
+        !(tree_metadata$contrast_identifiable %in% TRUE)
+    tree_metadata$fused_by_penalty <-
+        tree_metadata$contrast_identifiable %in% TRUE &
+        abs(tree_metadata$delta) <= control$fusion_tol
+    tree_metadata$equality_selected <-
+        tree_metadata$shared_by_boundary | tree_metadata$fused_by_penalty
     for (edge in seq_len(p)) {
         links <- list()
         index <- which(tree_metadata$edge_index == edge)
-        if (length(index)) {
-            for (j in index) {
-                a <- tree_metadata$condition_a_index[[j]]
-                b <- tree_metadata$condition_b_index[[j]]
-                if (!(tree_metadata$contrast_identifiable[[j]] %in% TRUE)) {
-                    links[[length(links) + 1L]] <- c(a, b)
-                    shared_by_boundary[[edge]] <- TRUE
-                    boundary_condition[c(a, b), edge] <- TRUE
-                } else if (tree_metadata$fused_by_penalty[[j]]) {
-                    links[[length(links) + 1L]] <- c(a, b)
-                    fused_by_penalty[[edge]] <- TRUE
-                }
-            }
-        }
-        boundary <- tree$boundary_conditions[[edge]]
-        if (length(boundary)) {
-            shared_by_boundary[[edge]] <- TRUE
-            boundary_condition[boundary, edge] <- TRUE
-            vertices <- tree$vertices_used[[edge]]
-            anchor <- if (tree$reference_index %in% vertices) {
-                tree$reference_index
-            } else if (length(vertices)) {
-                vertices[[1L]]
-            } else {
-                tree$reference_index
-            }
-            for (node in setdiff(boundary, anchor)) {
-                links[[length(links) + 1L]] <- c(anchor, node)
-            }
-            if (!length(vertices)) {
-                for (node in setdiff(seq_len(k), anchor)) {
-                    links[[length(links) + 1L]] <- c(anchor, node)
-                }
+        for (j in index) {
+            if (!tree_metadata$equality_selected[[j]]) next
+            a <- tree_metadata$condition_a_index[[j]]
+            b <- tree_metadata$condition_b_index[[j]]
+            links[[length(links) + 1L]] <- c(a, b)
+            if (tree_metadata$shared_by_boundary[[j]]) {
+                shared_by_boundary[[edge]] <- TRUE
+                boundary_condition[c(a, b), edge] <- TRUE
+            } else if (tree_metadata$fused_by_penalty[[j]]) {
+                fused_by_penalty[[edge]] <- TRUE
             }
         }
         component[, edge] <- .condition_union_find_components(k, links)
@@ -560,24 +529,27 @@
         return(list(
             status = "insufficient_joint_inference_df",
             component_index = component_index,
-            component_key = component_key
+            component_key = component_key,
+            fusion = fusion
         ))
     }
     sigma2 <- sum(residual^2) / residual_df
     covariance <- sigma2 * decomposition$inverse
     list(
-        status = "ok",
-        design = z,
-        theta = theta,
-        covariance = covariance,
-        projector = decomposition$projector,
-        rank = decomposition$rank,
-        residual_df = residual_df,
-        sigma2 = sigma2,
-        component_index = component_index,
-        component_key = component_key,
-        standardized = standardized
+        status = "ok", design = z, theta = theta,
+        covariance = covariance, projector = decomposition$projector,
+        rank = decomposition$rank, residual_df = residual_df,
+        sigma2 = sigma2, component_index = component_index,
+        component_key = component_key, standardized = standardized,
+        fusion = fusion
     )
+}
+
+.condition_joint_inference_covariance <- function(joint) {
+    if (!is.list(joint) || !identical(joint$status, "ok")) {
+        stop("A valid joint inference design is required.", call. = FALSE)
+    }
+    joint$covariance
 }
 
 .condition_joint_inference_fit <- function(
@@ -586,17 +558,9 @@
         NA_real_, k, p_full,
         dimnames = list(conditions, names(scaling$scale))
     )
-    estimable <- matrix(
-        FALSE, k, p_full,
-        dimnames = dimnames(estimate)
-    )
-    component_id <- matrix(
-        NA_character_, k, p_full,
-        dimnames = dimnames(estimate)
-    )
-    hypothesis_id <- matrix(
-        NA_character_, k, p_full,
-        dimnames = dimnames(estimate)
+    estimable <- matrix(FALSE, k, p_full, dimnames = dimnames(estimate))
+    component_id <- hypothesis_id <- matrix(
+        NA_character_, k, p_full, dimnames = dimnames(estimate)
     )
     if (!identical(joint$status, "ok")) {
         return(list(
@@ -606,15 +570,12 @@
             sigma2 = NA_real_, residual_df = NA_integer_, rank = NA_integer_
         ))
     }
-    n_condition <- k
-    p <- length(keep)
     for (condition in seq_len(k)) {
-        for (local_edge in seq_len(p)) {
+        for (local_edge in seq_along(keep)) {
             full_edge <- keep[[local_edge]]
             component <- joint$component_index[condition, local_edge]
-            column <- n_condition + component
-            unit <- numeric(length(joint$theta))
-            unit[[column]] <- 1
+            column <- k + component
+            unit <- numeric(length(joint$theta)); unit[[column]] <- 1
             residual <- unit - joint$projector[column, ]
             ok <- max(abs(residual)) <= 1e-7
             component_id[condition, full_edge] <- paste0(
@@ -635,9 +596,8 @@
             estimable[condition, full_edge] <- is.finite(std) && std > 0
             if (estimable[condition, full_edge]) {
                 statistic[condition, full_edge] <- value / std
-                pval[condition, full_edge] <- 2 * stats::pnorm(
-                    -abs(statistic[condition, full_edge])
-                )
+                pval[condition, full_edge] <-
+                    2 * stats::pnorm(-abs(statistic[condition, full_edge]))
             }
         }
     }
@@ -650,34 +610,73 @@
     )
 }
 
+.condition_boundary_path <- function(fusion, edge, a, b) {
+    if (fusion$component[a, edge] != fusion$component[b, edge]) return(FALSE)
+    tree <- fusion$contrast_tree[
+        fusion$contrast_tree$edge_index == edge &
+        fusion$contrast_tree$equality_selected %in% TRUE, , drop = FALSE
+    ]
+    if (!nrow(tree)) return(FALSE)
+    k <- nrow(fusion$component)
+    adjacency <- vector("list", k)
+    for (i in seq_len(nrow(tree))) {
+        u <- tree$condition_a_index[[i]]
+        v <- tree$condition_b_index[[i]]
+        boundary <- tree$shared_by_boundary[[i]] %in% TRUE
+        adjacency[[u]][[length(adjacency[[u]]) + 1L]] <- c(v, boundary)
+        adjacency[[v]][[length(adjacency[[v]]) + 1L]] <- c(u, boundary)
+    }
+    queue <- list(c(a, 0L)); seen <- rep(FALSE, k); seen[[a]] <- TRUE
+    while (length(queue)) {
+        state <- queue[[1L]]; queue <- queue[-1L]
+        node <- as.integer(state[[1L]])
+        boundary_used <- as.logical(state[[2L]])
+        if (node == b) return(boundary_used)
+        for (link in adjacency[[node]]) {
+            next_node <- as.integer(link[[1L]])
+            if (seen[[next_node]]) next
+            seen[[next_node]] <- TRUE
+            queue[[length(queue) + 1L]] <- c(
+                next_node,
+                as.integer(boundary_used || as.logical(link[[2L]]))
+            )
+        }
+    }
+    FALSE
+}
+
 .condition_joint_contrast <- function(
     joint, scaling, keep, condition_a, condition_b, local_edge) {
     if (!identical(joint$status, "ok")) {
         return(list(
             estimate = NA_real_, se = NA_real_, statistic = NA_real_,
-            pval = NA_real_, estimable = FALSE, same_component = FALSE
+            pval = NA_real_, estimable = FALSE, same_component = FALSE,
+            boundary_shared = FALSE
         ))
     }
     component_a <- joint$component_index[condition_a, local_edge]
     component_b <- joint$component_index[condition_b, local_edge]
     if (component_a == component_b) {
+        boundary_shared <- .condition_boundary_path(
+            joint$fusion, local_edge, condition_a, condition_b
+        )
         return(list(
-            estimate = 0, se = NA_real_, statistic = NA_real_,
-            pval = NA_real_, estimable = TRUE, same_component = TRUE
+            estimate = 0, se = NA_real_, statistic = NA_real_, pval = NA_real_,
+            estimable = !boundary_shared, same_component = TRUE,
+            boundary_shared = boundary_shared
         ))
     }
     k <- nrow(joint$component_index)
     column_a <- k + component_a
     column_b <- k + component_b
-    l <- numeric(length(joint$theta))
-    l[[column_a]] <- -1
-    l[[column_b]] <- 1
+    l <- numeric(length(joint$theta)); l[[column_a]] <- -1; l[[column_b]] <- 1
     residual <- as.numeric(l - l %*% joint$projector)
     ok <- max(abs(residual)) <= 1e-7
     if (!ok) {
         return(list(
             estimate = NA_real_, se = NA_real_, statistic = NA_real_,
-            pval = NA_real_, estimable = FALSE, same_component = FALSE
+            pval = NA_real_, estimable = FALSE, same_component = FALSE,
+            boundary_shared = FALSE
         ))
     }
     raw_scale <- scaling$scale[[keep[[local_edge]]]]
@@ -686,15 +685,16 @@
     if (!is.finite(variance) || variance <= 0) {
         return(list(
             estimate = estimate, se = NA_real_, statistic = NA_real_,
-            pval = NA_real_, estimable = FALSE, same_component = FALSE
+            pval = NA_real_, estimable = FALSE, same_component = FALSE,
+            boundary_shared = FALSE
         ))
     }
     se <- sqrt(variance)
     statistic <- estimate / se
     list(
         estimate = estimate, se = se, statistic = statistic,
-        pval = 2 * stats::pnorm(-abs(statistic)),
-        estimable = TRUE, same_component = FALSE
+        pval = 2 * stats::pnorm(-abs(statistic)), estimable = TRUE,
+        same_component = FALSE, boundary_shared = FALSE
     )
 }
 
@@ -708,6 +708,7 @@
     if (k < 2L || !identical(names(y), conditions) ||
         any(vapply(seq_along(x), function(i) {
             !is.matrix(x[[i]]) || nrow(x[[i]]) != length(y[[i]]) ||
+                !identical(colnames(x[[i]]), colnames(x[[1L]])) ||
                 any(!is.finite(x[[i]])) || any(!is.finite(y[[i]]))
         }, logical(1)))) {
         return(list(status = "nonfinite_or_misaligned_input"))
@@ -721,34 +722,24 @@
 
     informative <- as.logical(scaling$informative)
     beta <- beta_z <- deviation_z <- matrix(
-        0, k, p_full,
-        dimnames = list(conditions, colnames(x[[1L]]))
+        0, k, p_full, dimnames = list(conditions, colnames(x[[1L]]))
     )
-    shared_z <- numeric(p_full)
+    shared_z <- numeric(p_full); names(shared_z) <- colnames(beta)
     raw_information <- matrix(0, k, p_full, dimnames = dimnames(beta))
-    zero_variance <- matrix(
-        FALSE, k, p_full, dimnames = dimnames(beta)
-    )
+    zero_variance <- matrix(FALSE, k, p_full, dimnames = dimnames(beta))
     for (i in seq_len(k)) {
         value <- apply(x[[i]], 2L, stats::var)
-        zero_variance[i, ] <- !is.finite(value) |
-            value <= scaling$floor^2
+        zero_variance[i, ] <- !is.finite(value) | value <= scaling$floor^2
     }
 
     if (!any(informative)) {
         intercept <- vapply(y, mean, numeric(1))
-        prediction <- Map(
-            function(value, a) rep(a, length(value)), y, intercept
-        )
+        prediction <- Map(function(value, a) rep(a, length(value)), y, intercept)
         rsq <- vapply(y, function(value) {
             if (stats::var(value) > 0) 0 else NA_real_
         }, numeric(1))
-        empty_inference <- matrix(
-            NA_real_, k, p_full, dimnames = dimnames(beta)
-        )
-        empty_bool <- matrix(
-            FALSE, k, p_full, dimnames = dimnames(beta)
-        )
+        empty_inference <- matrix(NA_real_, k, p_full, dimnames = dimnames(beta))
+        empty_bool <- matrix(FALSE, k, p_full, dimnames = dimnames(beta))
         return(list(
             status = "ok", beta = beta, beta_z = beta_z,
             shared_z = shared_z, deviation_z = deviation_z,
@@ -767,12 +758,9 @@
             fusion_component_id = matrix(
                 "component1", k, p_full, dimnames = dimnames(beta)
             ),
-            boundary_condition = matrix(
-                TRUE, k, p_full, dimnames = dimnames(beta)
-            ),
-            contrast_tree = data.frame(),
-            solver_status = "ok", kkt_residual = 0,
-            iterations = 0L, objective = 0,
+            boundary_condition = matrix(TRUE, k, p_full, dimnames = dimnames(beta)),
+            contrast_tree = data.frame(), solver_status = "ok",
+            kkt_residual = 0, iterations = 0L, objective = 0,
             penalty_family = .condition_E_star_penalty_family,
             penalty_value = .condition_E_star_z,
             reference_condition = reference_condition,
@@ -789,34 +777,25 @@
             inference_hypothesis_id = matrix(
                 NA_character_, k, p_full, dimnames = dimnames(beta)
             ),
-            inference_sigma2 = NA_real_,
-            inference_residual_df = NA_integer_,
-            inference_rank = NA_integer_,
-            orthogonality_error = 0, dr_error = 0,
+            inference_sigma2 = NA_real_, inference_residual_df = NA_integer_,
+            inference_rank = NA_integer_, orthogonality_error = 0, dr_error = 0,
             joint_inference = NULL
         ))
     }
 
     keep <- which(informative)
     p <- length(keep)
-    gram_raw <- rhs_raw <- vector("list", k)
-    xc <- yc <- vector("list", k)
-    raw_rank <- integer(k)
-    raw_kappa <- numeric(k)
-    sse_raw <- numeric(k)
+    gram_raw <- rhs_raw <- xc <- yc <- vector("list", k)
+    raw_rank <- integer(k); raw_kappa <- numeric(k); sse_raw <- numeric(k)
     for (i in seq_len(k)) {
-        zmat <- sweep(
-            x[[i]][, keep, drop = FALSE],
-            2L, scaling$center[keep], "-"
-        )
+        zmat <- sweep(x[[i]][, keep, drop = FALSE], 2L,
+                      scaling$center[keep], "-")
         zmat <- sweep(zmat, 2L, scaling$scale[keep], "/")
         xc[[i]] <- sweep(zmat, 2L, colMeans(zmat), "-")
         yc[[i]] <- as.numeric(y[[i]]) - mean(y[[i]])
         gram_raw[[i]] <- crossprod(xc[[i]])
         rhs_raw[[i]] <- as.numeric(crossprod(xc[[i]], yc[[i]]))
-        decomposition <- .condition_symmetric_pinv(
-            gram_raw[[i]], control$rank_tol
-        )
+        decomposition <- .condition_symmetric_pinv(gram_raw[[i]], control$rank_tol)
         raw_rank[[i]] <- decomposition$rank
         raw_kappa[[i]] <- .condition_ridge_kappa(cbind(1, zmat))
         ols <- as.numeric(decomposition$inverse %*% rhs_raw[[i]])
@@ -829,15 +808,12 @@
         return(list(status = "insufficient_df"))
     }
     pooled_y_scale <- stats::var(unlist(y, use.names = FALSE))
-    variance_floor <- .Machine$double.eps * max(
-        1, pooled_y_scale, na.rm = TRUE
-    )
+    variance_floor <- .Machine$double.eps * max(1, pooled_y_scale, na.rm = TRUE)
     sigma2 <- max(sum(sse_raw) / residual_df, variance_floor)
     q <- lapply(gram_raw, function(one) one / sigma2)
     h_condition <- lapply(rhs_raw, function(one) one / sigma2)
     for (i in seq_len(k)) {
-        raw_information[i, keep] <- diag(q[[i]]) *
-            scaling$scale[keep]^2
+        raw_information[i, keep] <- diag(q[[i]]) * scaling$scale[keep]^2
     }
 
     Q <- .condition_blockdiag(q)
@@ -845,87 +821,68 @@
     A <- kronecker(matrix(1, nrow = k, ncol = 1), diag(p))
     tree <- .condition_identifiable_contrast_tree(
         Q = Q, p = p, conditions = conditions,
-        reference_condition = reference_condition,
-        rank_tol = control$rank_tol
+        reference_condition = reference_condition, rank_tol = control$rank_tol
     )
     geometry <- .condition_q_orthogonal_decomposition(
         Q, A, tree$D, control$rank_tol
     )
     shared_score <- as.numeric(crossprod(A, h))
     mu <- as.numeric(geometry$shared_inverse %*% shared_score)
-    if (ncol(geometry$R)) {
-        H <- crossprod(geometry$R, Q %*% geometry$R)
-        H <- (H + t(H)) / 2
-        r <- as.numeric(crossprod(geometry$R, h))
-        coordinate_information <- .condition_profile_coordinate_information(
-            H, control$rank_tol
-        )
-        solved <- .condition_E_star_fit(
-            H, r, coordinate_information$information, control
-        )
-        if (!identical(solved$status, "ok")) {
-            return(list(
-                status = "solver_failed",
-                solver_status = solved$status,
-                kkt_residual = solved$kkt_residual,
-                iterations = solved$iterations
-            ))
-        }
-        delta <- solved$delta
-        beta_vector <- as.numeric(A %*% mu + geometry$R %*% delta)
-        tree$metadata$profile_information <-
-            coordinate_information$information
-        tree$metadata$contrast_identifiable <-
-            coordinate_information$estimable
-    } else {
-        H <- matrix(0, 0L, 0L)
-        delta <- numeric()
-        solved <- list(
-            status = "ok", iterations = 0L,
-            kkt_residual = 0, objective = 0
-        )
-        beta_vector <- as.numeric(A %*% mu)
+    H <- crossprod(geometry$R, Q %*% geometry$R)
+    H <- (H + t(H)) / 2
+    r <- as.numeric(crossprod(geometry$R, h))
+    coordinate_information <- .condition_profile_coordinate_information(
+        H, control$rank_tol
+    )
+    solved <- .condition_E_star_fit(
+        H, r, coordinate_information$information, control
+    )
+    if (!identical(solved$status, "ok")) {
+        return(list(
+            status = "solver_failed", solver_status = solved$status,
+            kkt_residual = solved$kkt_residual, iterations = solved$iterations
+        ))
     }
+    delta <- solved$delta
+    beta_vector <- as.numeric(A %*% mu + geometry$R %*% delta)
+    tree$metadata$profile_information <- coordinate_information$information
+    tree$metadata$contrast_identifiable <- coordinate_information$estimable
+    tree$metadata$shared_by_boundary <- !coordinate_information$estimable
+    tree$metadata$delta_standardized <- delta
+    tree$metadata$delta <- delta /
+        scaling$scale[keep[tree$metadata$edge_index]]
 
     beta_z_small <- matrix(beta_vector, nrow = k, byrow = TRUE)
-    beta_small <- sweep(
-        beta_z_small, 2L, scaling$scale[keep], "/"
-    )
+    beta_small <- sweep(beta_z_small, 2L, scaling$scale[keep], "/")
     beta_z[, keep] <- beta_z_small
     beta[, keep] <- beta_small
     shared_z[keep] <- mu
     deviation_z[, keep] <- sweep(beta_z_small, 2L, mu, "-")
 
-    fusion <- .condition_fusion_components(
-        tree, delta, p, conditions, control
-    )
+    fusion <- .condition_fusion_components(tree, delta, p, conditions, control)
     fusion_component_id <- matrix(
         NA_character_, k, p_full, dimnames = dimnames(beta)
     )
-    boundary_condition <- matrix(
-        TRUE, k, p_full, dimnames = dimnames(beta)
-    )
+    boundary_condition <- matrix(TRUE, k, p_full, dimnames = dimnames(beta))
     for (local_edge in seq_len(p)) {
         full_edge <- keep[[local_edge]]
         fusion_component_id[, full_edge] <- paste0(
             "component", fusion$component[, local_edge]
         )
-        boundary_condition[, full_edge] <-
-            fusion$boundary_condition[, local_edge]
+        boundary_condition[, full_edge] <- fusion$boundary_condition[, local_edge]
     }
     profile_information <- rep(0, p_full)
     contrast_identifiable <- rep(FALSE, p_full)
-    if (nrow(fusion$contrast_tree)) {
-        for (local_edge in seq_len(p)) {
-            index <- fusion$contrast_tree$edge_index == local_edge &
-                fusion$contrast_tree$contrast_identifiable %in% TRUE
-            value <- fusion$contrast_tree$profile_information[index]
-            value <- value[is.finite(value) & value > 0]
-            if (length(value)) {
-                full_edge <- keep[[local_edge]]
-                profile_information[[full_edge]] <- min(value)
-                contrast_identifiable[[full_edge]] <- TRUE
-            }
+    for (local_edge in seq_len(p)) {
+        index <- fusion$contrast_tree$edge_index == local_edge
+        value <- fusion$contrast_tree$profile_information[index]
+        identifiable_here <- fusion$contrast_tree$contrast_identifiable[index] %in% TRUE
+        if (any(identifiable_here)) {
+            full_edge <- keep[[local_edge]]
+            raw_info <- value[identifiable_here] * scaling$scale[[full_edge]]^2
+            raw_info <- raw_info[is.finite(raw_info) & raw_info > 0]
+            if (length(raw_info)) profile_information[[full_edge]] <- min(raw_info)
+            contrast_identifiable[[full_edge]] <- TRUE
         }
     }
     shared_by_boundary <- rep(TRUE, p_full)
@@ -939,28 +896,21 @@
         .condition_joint_inference_design(
             x, y, scaling, keep, fusion, control$rank_tol
         )
-    } else {
-        list(status = "not_requested")
-    }
+    } else list(status = "not_requested", fusion = fusion)
     joint_rows <- .condition_joint_inference_fit(
         joint, scaling, keep, k, p_full, conditions
     )
 
-    intercept <- numeric(k)
-    prediction <- vector("list", k)
-    rsq <- numeric(k)
+    intercept <- numeric(k); prediction <- vector("list", k); rsq <- numeric(k)
     for (i in seq_len(k)) {
         intercept[[i]] <- mean(y[[i]]) -
             sum(colMeans(x[[i]][, keep, drop = FALSE]) * beta_small[i, ])
         prediction[[i]] <- as.numeric(
-            intercept[[i]] +
-            x[[i]][, keep, drop = FALSE] %*% beta_small[i, ]
+            intercept[[i]] + x[[i]][, keep, drop = FALSE] %*% beta_small[i, ]
         )
         residual <- as.numeric(y[[i]]) - prediction[[i]]
         tss <- sum((as.numeric(y[[i]]) - mean(y[[i]]))^2)
-        rsq[[i]] <- if (tss > 0) {
-            1 - sum(residual^2) / tss
-        } else NA_real_
+        rsq[[i]] <- if (tss > 0) 1 - sum(residual^2) / tss else NA_real_
     }
     names(intercept) <- names(prediction) <- names(rsq) <- conditions
 
@@ -980,10 +930,8 @@
         fusion_component_id = fusion_component_id,
         boundary_condition = boundary_condition,
         contrast_tree = fusion$contrast_tree,
-        solver_status = solved$status,
-        kkt_residual = solved$kkt_residual,
-        iterations = solved$iterations,
-        objective = solved$objective,
+        solver_status = solved$status, kkt_residual = solved$kkt_residual,
+        iterations = solved$iterations, objective = solved$objective,
         penalty_family = .condition_E_star_penalty_family,
         penalty_value = .condition_E_star_z,
         reference_condition = reference_condition,
