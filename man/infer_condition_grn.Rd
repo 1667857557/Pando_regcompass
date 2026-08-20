@@ -31,6 +31,7 @@ infer_condition_grn(object, ...)
   padj_threshold = 0.05,
   rank_action = c("mark", "error"),
   min_residual_df = 1L,
+  reference_condition = NULL,
   parallel = FALSE,
   BPPARAM = NULL,
   parallel_scope = c("auto", "cell_type", "target"),
@@ -55,6 +56,7 @@ infer_condition_grn(object, ...)
 \item{adjust_method, padj_threshold}{Conditional E-star/JSE inference requires BH. Raw joint-refit Wald P values are adjusted within each condition-by-target family. An exact edge is statistically supported for a condition only when \code{padj < padj_threshold}; equality is strict, so \code{padj == padj_threshold} is not significant.}
 \item{rank_action}{With \code{"mark"}, raw rank deficiency is retained and handled through identifiable subspaces and explicit boundary-sharing metadata. \code{"error"} requests strict failure when a condition's raw common-dictionary design is rank deficient.}
 \item{min_residual_df}{Minimum pooled effective residual degrees of freedom required for the production fit.}
+\item{reference_condition}{Optional predefined reference condition for the K-condition contrast-tree geometry. It must be present and retained in every fitted cell type. When \code{NULL}, the first retained condition is used. This is a design coordinate and is not selected from the fitted GRN results.}
 \item{parallel}{Enable target/cell-type parallel execution.}
 \item{BPPARAM}{\code{NULL}, \code{FALSE}, or a \code{BiocParallelParam}.}
 \item{parallel_scope}{Parallelization level: \code{"auto"}, \code{"cell_type"}, or \code{"target"}.}
@@ -76,7 +78,7 @@ Each edge uses an equal-condition within-condition RMS scale, rather than a pool
 \deqn{Q_c=X_c^TX_c/\widehat\sigma_g^2.}
 No \eqn{n_{total}/(Kn_c)} condition-size equalization weight is used.
 
-Let \eqn{A=\mathbf 1_K\otimes I_p}. For every informative exact edge, Pando first constructs a full spanning tree with \eqn{K-1} condition contrasts. Identifiable contrasts are preferred, using the first retained condition as the predefined reference when its contrasts are identifiable; if that reference coordinate is not identifiable, an identifiable non-reference contrast is allowed before zero-information boundary edges complete the tree. The condition ordering must therefore be fixed by the experimental design before fitting and must not be chosen after inspecting the GRN result.
+Let \eqn{A=\mathbf 1_K\otimes I_p}. For every informative exact edge, Pando first constructs a full spanning tree with \eqn{K-1} condition contrasts. Identifiable contrasts are preferred around the predefined \code{reference_condition}; if that reference coordinate is not identifiable, an identifiable non-reference contrast is allowed before zero-information boundary edges complete the tree. The reference must be fixed from experimental design before fitting and must not be selected after inspecting GRN results. If \code{reference_condition=NULL}, Pando uses the first retained condition and records that resolved reference in the fit contract.
 
 With contrast operator \eqn{D}, Pando constructs a right inverse \eqn{B_0} and
 \deqn{R=B_0-A(A^TQA)^+A^TQB_0.}
