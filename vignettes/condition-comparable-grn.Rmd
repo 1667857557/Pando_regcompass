@@ -33,6 +33,7 @@ fit_object <- infer_condition_grn(
   padj_threshold = 0.05,
   rank_action = "mark",
   min_residual_df = 1L,
+  reference_condition = "Control",
   parallel = TRUE
 )
 ```
@@ -44,11 +45,12 @@ The parameters normally adjusted for a dataset are:
 - `small_condition_action`: `"error"`, `"drop_condition"`, or `"skip_cell_type"` for undersized conditions.
 - `padj_threshold`: strict BH threshold for condition-edge support; `padj == padj_threshold` is not significant.
 - `rank_action`, `min_residual_df`: estimability and residual-degree-of-freedom controls.
+- `reference_condition`: predefined experimental reference for the K-condition contrast-tree geometry. It must be present and retained in every fitted cell type. This is a design coordinate, not a tuning or sensitivity parameter. If omitted, the first retained condition is used and recorded.
 - `parallel`, `BPPARAM`, `parallel_scope`: execution controls.
 
 Conditional ridge/CV controls such as `condition_ridge_control`, `lambda_grid`, `lambda_rule`, and `cv_folds`, as well as `scheme_e_z`, `z`, and `fusion_ratio`, are obsolete on this route and are rejected rather than silently ignored. Standard one-condition `infer_grn()` keeps its independent standard-model controls.
 
-For `K >= 3`, the E-star geometry uses a design ordering of conditions. The current API takes the first retained condition as the predefined reference and records it in `reference_condition`; therefore the input condition ordering must be fixed by the experimental design before fitting and must not be rearranged after inspecting the GRN result. When the reference coordinate is not identifiable for an exact edge, the solver uses an identifiable non-reference contrast first and completes the spanning tree with zero-information boundary coordinates.
+For `K >= 3`, the predefined `reference_condition` is used to prefer a reference-star geometry whenever the relevant contrasts are identifiable. When a reference contrast for an exact edge is not identifiable, the solver first retains an identifiable non-reference contrast if available and then completes the spanning tree with zero-information boundary coordinates. The reference must be fixed from the experimental design before fitting and must not be selected after inspecting the GRN result.
 
 # Common exact-edge dictionary
 
