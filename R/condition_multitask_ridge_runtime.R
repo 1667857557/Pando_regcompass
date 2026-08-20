@@ -96,6 +96,7 @@
     small_condition_action = c("error", "drop_condition", "skip_cell_type"),
     adjust_method = "BH", padj_threshold = 0.05,
     rank_action = c("mark", "error"), min_residual_df = 1L,
+    reference_condition = NULL,
     parallel = FALSE, overwrite = FALSE, fallback_args = list(),
     verbose = TRUE, ...) {
     dots <- list(...)
@@ -111,6 +112,15 @@
     }
     if (!is.list(fallback_args)) {
         stop("`fallback_args` must be a list.", call. = FALSE)
+    }
+    if (!is.null(reference_condition)) {
+        reference_condition <- as.character(reference_condition)
+        if (length(reference_condition) != 1L || is.na(reference_condition) ||
+            !nzchar(trimws(reference_condition)) ||
+            reference_condition != trimws(reference_condition)) {
+            stop("`reference_condition` must be NULL or one complete condition label.",
+                 call. = FALSE)
+        }
     }
     obsolete <- intersect(
         names(fallback_args),
@@ -244,7 +254,19 @@
             }
             next
         }
-        reference_condition <- eligible[[1L]]
+        reference_condition_one <- if (is.null(reference_condition)) {
+            eligible[[1L]]
+        } else {
+            reference_condition
+        }
+        if (!reference_condition_one %in% eligible) {
+            stop(
+                "Predefined `reference_condition` `", reference_condition_one,
+                "` is not retained for cell type `", type_label,
+                "`. It must be present and pass `min_cells_per_condition`.",
+                call. = FALSE
+            )
+        }
 
         cells_by_condition <- stats::setNames(
             lapply(eligible, function(condition) {
@@ -340,7 +362,7 @@
                 "E_star_z025_primary_fusion_component_joint_refit",
             cell_type = type_label,
             condition_levels = eligible,
-            reference_condition = reference_condition,
+            reference_condition = reference_condition_one,
             condition_col = condition_col,
             cell_type_col = cell_type_col,
             condition_cell_ids = cells_by_condition,
@@ -389,7 +411,7 @@
             network_index[[length(network_index) + 1L]] <- data.frame(
                 cell_type = type_label,
                 condition = condition,
-                reference_condition = reference_condition,
+                reference_condition = reference_condition_one,
                 network_name = network_names[[condition]],
                 n_cells = length(cells_by_condition[[condition]]),
                 n_dictionary_edges = nrow(fitted$fit$edge_dictionary),
@@ -429,6 +451,7 @@
         .condition_fit_dictionary_policy
     object@grn@params$condition_projection_policy <-
         .condition_significant_projection_policy
+    object@grn@params$condition_reference_condition <- reference_condition
     object@grn@params$condition_e_control <- control
     object@grn@params$condition_grn_fits <- fits
     object@grn@params$condition_network_index <-
