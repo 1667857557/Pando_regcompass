@@ -1,4 +1,4 @@
-# Global-plus-condition common-dictionary E-star/JSE integration.
+# Global-plus-condition common-dictionary E-star integration.
 
 .condition_candidate_support_table <- function(
     global_edges = NULL, condition_edges) {
@@ -319,8 +319,7 @@
             !setequal(
                 as.character(dictionary$edge_id),
                 as.character(support_summary$edge_id)
-            ) ||
-            any(support_summary$n_sources < 1L)) {
+            ) || any(support_summary$n_sources < 1L)) {
             stop("Global/condition Pando support audit is inconsistent.",
                  call. = FALSE)
         }
@@ -339,8 +338,7 @@
                     network_name, "__", .condition_safe_label(type_label),
                     "__condition__", .condition_safe_label(condition)
                 )
-            }, character(1)),
-            eligible
+            }, character(1)), eligible
         )
         conflicts <- intersect(network_names, names(object@grn@networks))
         if (length(conflicts) && !isTRUE(overwrite)) {
@@ -355,11 +353,10 @@
             model_schema = .condition_multitask_ridge_schema,
             fit_engine = .condition_fit_engine,
             coefficient_scale = "raw_tf_atac_interaction_units",
-            internal_predictor_scale =
-                "equal_condition_within_condition_rms",
-            inference_schema = .condition_E_star_inference_schema,
+            internal_predictor_scale = "equal_condition_within_condition_rms",
+            inference_schema = .condition_inference_schema,
             inference_scope =
-                "E_star_z025_primary_fusion_component_joint_refit",
+                "no_fusion_condition_local_lm_exact_edge_omnibus_whole_network_BH",
             cell_type = type_label,
             condition_levels = eligible,
             reference_condition = reference_condition_one,
@@ -373,15 +370,16 @@
             candidate_peak_cor = as.numeric(peak_cor),
             coefficients = NULL,
             contrasts = NULL,
+            edge_inference = NULL,
             fit = NULL,
             network_names = network_names,
             padj_threshold = padj_threshold,
             adjust_method = "BH",
-            bh_scope = "condition_target_BH",
+            bh_scope = "exact_edge_whole_cell_type_network_BH",
             scale = FALSE,
             interaction = ":",
             projection_effect_column = "penalty_effect",
-            projection_policy = .condition_significant_projection_policy,
+            projection_policy = .condition_projection_policy,
             fit_dictionary_policy = .condition_fit_dictionary_policy,
             target_genes = unique(as.character(dictionary$target)),
             rna_assay = prepared$params$rna_assay,
@@ -415,9 +413,9 @@
                 network_name = network_names[[condition]],
                 n_cells = length(cells_by_condition[[condition]]),
                 n_dictionary_edges = nrow(fitted$fit$edge_dictionary),
-                n_condition_significant_edges =
-                    sum(one$condition_significant %in% TRUE),
-                n_regcompass_union_edges =
+                n_condition_inference_estimable =
+                    sum(one$condition_inference_estimable %in% TRUE),
+                n_regcompass_edges =
                     sum(one$active_in_regcompass %in% TRUE),
                 n_locally_supported_edges =
                     sum(one$local_support %in% TRUE),
@@ -428,7 +426,7 @@
                 n_active_edges =
                     sum(one$active_in_regcompass %in% TRUE),
                 n_significant_edges =
-                    sum(one$condition_significant %in% TRUE),
+                    sum(one$edge_supported %in% TRUE),
                 stringsAsFactors = FALSE
             )
         }
@@ -443,18 +441,14 @@
     object@grn@params$condition_levels <- condition_levels
     object@grn@params$cell_type_col <- cell_type_col
     object@grn@params$condition_coefficients_calculated <- TRUE
-    object@grn@params$condition_grn_schema <-
-        .condition_common_dictionary_schema
+    object@grn@params$condition_grn_schema <- .condition_common_dictionary_schema
     object@grn@params$condition_grn_model_schema <-
         .condition_multitask_ridge_schema
-    object@grn@params$condition_grn_method <-
-        .condition_fit_dictionary_policy
-    object@grn@params$condition_projection_policy <-
-        .condition_significant_projection_policy
+    object@grn@params$condition_grn_method <- .condition_fit_dictionary_policy
+    object@grn@params$condition_projection_policy <- .condition_projection_policy
     object@grn@params$condition_reference_condition <- reference_condition
     object@grn@params$condition_e_control <- control
     object@grn@params$condition_grn_fits <- fits
-    object@grn@params$condition_network_index <-
-        do.call(rbind, network_index)
+    object@grn@params$condition_network_index <- do.call(rbind, network_index)
     object
 }
