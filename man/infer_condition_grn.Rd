@@ -3,7 +3,7 @@
 \name{infer_condition_grn}
 \alias{infer_condition_grn}
 \alias{infer_condition_grn.GRNData}
-\title{Infer comparable condition-specific Pando GRNs}
+\title{Infer comparable condition-specific Pando GRNs with E-star/JSE}
 \usage{
 infer_condition_grn(object, ...)
 
@@ -43,51 +43,62 @@ infer_condition_grn(object, ...)
 \arguments{
 \item{object}{A \code{GRNData} object after motif matching.}
 \item{cell_type_col}{Broad cell-type metadata column.}
-\item{condition_col}{Condition column. NULL, absent, or fewer than two levels selects standard per-cell-type Pando.}
+\item{condition_col}{Condition metadata column. If NULL, absent, or containing fewer than two levels, the standard per-cell-type Pando path is used.}
 \item{cell_type}{Optional cell-type subset.}
 \item{genes}{Target genes.}
-\item{network_name}{Prefix for generated networks.}
-\item{peak_to_gene_method, upstream, downstream, extend, only_tss, peak_to_gene_domains}{Regulatory-domain controls.}
-\item{rna_layer, peak_layer, peak_value_type}{RNA and ATAC layers and peak-value semantics used consistently for discovery, fitting, and projection.}
-\item{tf_cor, peak_cor}{Absolute Pando candidate-discovery correlation thresholds. Both default to 0.05, remain adjustable, and are evaluated on all eligible-condition cells pooled together and independently within each condition.}
-\item{min_cells_per_condition}{Minimum paired cells per fitted condition.}
+\item{network_name}{Prefix for generated condition networks.}
+\item{peak_to_gene_method, upstream, downstream, extend, only_tss, peak_to_gene_domains}{Regulatory-domain controls used during candidate construction.}
+\item{rna_layer, peak_layer, peak_value_type}{RNA and ATAC layers and ATAC value semantics used consistently for candidate discovery, fitting, inference, and projection.}
+\item{tf_cor, peak_cor}{Absolute Pando candidate-discovery correlation thresholds. Candidate discovery is run on all eligible-condition cells pooled together and independently within each condition; the exact union is then frozen.}
+\item{min_cells_per_condition}{Minimum paired cells required for each fitted condition.}
 \item{small_condition_action}{Action for undersized conditions.}
-\item{adjust_method, padj_threshold}{Condition ridge inference requires BH adjustment. \code{padj_threshold}, default 0.05, determines whether an estimable condition-specific ridge coefficient is active after the common dictionary has been frozen.}
-\item{rank_action}{With \code{"mark"}, raw rank deficiency is retained as a diagnostic because ridge remains identifiable. \code{"error"} requests strict failure.}
-\item{min_residual_df}{Minimum effective residual degrees of freedom for the regularized fit.}
-\item{parallel}{Enable parallel execution.}
+\item{adjust_method, padj_threshold}{Conditional E-star/JSE inference requires BH. Raw joint-refit Wald P values are adjusted within each condition-by-target family. An exact edge is statistically supported for a condition only when \code{padj < padj_threshold}; equality is strict, so \code{padj == padj_threshold} is not significant.}
+\item{rank_action}{With \code{"mark"}, raw rank deficiency is retained and handled through identifiable subspaces and explicit boundary-sharing metadata. \code{"error"} requests strict failure when a condition's raw common-dictionary design is rank deficient.}
+\item{min_residual_df}{Minimum pooled effective residual degrees of freedom required for the production fit.}
+\item{parallel}{Enable target/cell-type parallel execution.}
 \item{BPPARAM}{\code{NULL}, \code{FALSE}, or a \code{BiocParallelParam}.}
 \item{parallel_scope}{Parallelization level: \code{"auto"}, \code{"cell_type"}, or \code{"target"}.}
 \item{overwrite}{Replace generated networks with matching names.}
-\item{fallback_args}{Additional arguments for the standard fallback. The reserved \code{condition_ridge_control} element can contain \code{lambda_grid}, \code{lambda_rule}, \code{cv_folds}, \code{seed}, and \code{scale_floor}. Cross-condition fusion is not supported.}
+\item{fallback_args}{Additional arguments used only by the standard Pando fallback when a conditional analysis is not applicable. Conditional E-star does not accept ridge-CV, lambda, fusion-ratio, or alternative-z controls through this list.}
 \item{verbose}{Display progress messages.}
 \item{...}{Must be empty.}
 }
-\value{A \code{GRNData} containing condition-specific Pando \code{Network} objects and their frozen common-dictionary ridge fit contracts.}
-\description{For each multi-condition cell type, Pando performs pooled/global and condition-specific candidate discovery, exact deduplicated TF-peak-target union, and one common-lambda no-fusion ridge fit on the frozen shared dictionary.}
+\value{A \code{GRNData} containing condition-specific Pando \code{Network} objects and a \code{ConditionGRNFit} contract. Every condition network retains the complete frozen exact-edge dictionary and its continuous production coefficient.}
+\description{For each multi-condition cell type, Pando freezes one exact target-TF-region dictionary and performs one K-condition E-star fit with fixed production deviation threshold z=0.25, followed by fusion-component joint-SE inference.}
 \details{
-For exact edge \eqn{e=(g,f,r)}, candidate discovery preserves the original Pando peak-target and TF-target correlation gates. Let \eqn{G_e} denote that the edge passes both gates on all eligible-condition cells pooled together and \eqn{L_{e,c}} that it passes both gates within condition \eqn{c}. The fitted common dictionary is
-\deqn{D_g=\operatorname{unique}\{D_{g,global}\cup\bigcup_cD_{g,c}\}.}
-Deduplication uses the complete target-TF-region triple. Pooled/global support reduces candidate false negatives from unstable small-condition correlations; condition-local support is retained separately. The configured \code{tf_cor} and \code{peak_cor} values are stored with the fit and are not fixed to their defaults.
+For exact edge \eqn{e=(g,t,p)}, pooled/global and condition-local candidate discovery preserve the Pando regulatory-domain, motif, peak-target-correlation and TF-target-correlation logic. The common dictionary is
+\deqn{D_T=D_{global}\cup D_1\cup\cdots\cup D_K,}
+with deduplication on the complete \code{(target, TF, peak)} coordinate. Once the dictionary is frozen, every condition fits the same ordered coordinates; marginal correlation support remains provenance and is not reapplied as a post-fit condition-local topology veto.
 
-The correlation gates determine dictionary admission only. Once an exact edge belongs to \eqn{D_g}, it is retained as a predictor in every fitted condition even when that condition did not itself pass the marginal-correlation gates.
+The paired-cell predictor remains
+\deqn{x_{cie}=RNA_{ci,TF(e)}ATAC_{ci,peak(e)}.}
+Each edge uses an equal-condition within-condition RMS scale, rather than a pooled-cell variance dominated by a large condition. The likelihood still retains the real condition information difference through \eqn{X_c^T X_c}. Each condition has its own intercept, and one target-specific pooled residual variance defines
+\deqn{Q_c=X_c^TX_c/\widehat\sigma_g^2.}
+No \eqn{n_{total}/(Kn_c)} condition-size equalization weight is used.
 
-For edge \eqn{e} in condition \eqn{c}, the predictor remains the Pando interaction
-\deqn{x_{eic}=RNA_{TF(e),i}ATAC_{peak(e),i}.}
-Every condition uses the same ordered dictionary. Predictors use an equal-condition RMS within-condition scaling and stored coefficients are back-transformed to raw TF-by-ATAC units.
+Let \eqn{A=\mathbf 1_K\otimes I_p}. On the identifiable contrast tree, Pando constructs a right inverse \eqn{B_0} and
+\deqn{R=B_0-A(A^TQA)^+A^TQB_0.}
+This gives \eqn{DR=I} and \eqn{A^TQR=0}. Therefore the stacked coefficient is decomposed as
+\deqn{\beta=A\mu+R\delta}
+with a Q-orthogonal shared component and deviation component. The shared component is always the joint MLE
+\deqn{\widehat\mu=(A^TQA)^+A^Th}
+and is not empirically shrunk toward zero.
 
-For \eqn{K} conditions the numerical objective is proportional to
-\deqn{\frac{1}{K}\sum_c\frac{||y_c-X_c\beta_c||_2^2}{n_c}+\lambda\sum_c||\beta_c||_2^2.}
-There is no cross-condition fusion term. Conditions therefore share dictionary coordinates, scaling convention, and one target-specific CV-selected lambda while retaining independently estimated coefficient blocks. Ridge keeps the penalized system identifiable under severe collinearity and raw rank deficiency.
+For \eqn{H=R^TQR} and \eqn{r=R^Th}, production uses the fixed E-star threshold \eqn{z=0.25}:
+\deqn{\widehat\delta=\arg\min_\delta\left\{\frac12\delta^TH\delta-r^T\delta+0.25\sum_j\sqrt{I_j}|\delta_j|\right\}.}
+The information \eqn{I_j} is obtained from the full correlated profile information, not a diagonal approximation. A zero-information contrast is fixed to \eqn{\delta_j=0} as a deterministic boundary convention and is marked \code{shared_by_boundary}; this is distinct from an identifiable contrast fused to zero by the penalty. The production coefficient is
+\deqn{\widehat\beta^E=A\widehat\mu+R\widehat\delta.}
+Stored \code{estimate} and \code{penalty_effect} are this same continuous \eqn{\widehat\beta^E}, back-transformed to raw TF-by-ATAC units.
 
-Condition-specific approximate ridge-Wald P values are BH adjusted. Because every coefficient row already belongs to the frozen common dictionary, an edge is active in condition \eqn{c} when its own coefficient is estimable and its adjusted P value is below \code{padj_threshold}:
-\deqn{A_{e,c}=1\{estimable_{e,c}\land padj_{e,c}<\tau\}.}
-The pooled/global and condition-local flags \eqn{G_e} and \eqn{L_{e,c}} remain candidate-provenance annotations and are not reapplied as a post-fit veto. Consequently an edge admitted globally or by another condition can still be active in condition \eqn{c} when that condition's own ridge coefficient is BH-supported.
+Exact zero deviations define a fusion graph across conditions for each exact edge. After this structure is frozen, Pando constructs a reduced joint model with condition-specific intercepts and one coefficient for each edge-by-fusion-component. Its full covariance is computed from the reduced joint design. The resulting \code{inference_estimate}, \code{inference_se}, Wald statistic and raw P value are inference-only fields; they never overwrite \code{estimate} or \code{penalty_effect}. Fully or partially shared components therefore borrow uncertainty information across the conditions that share that component while retaining covariance with correlated nuisance predictors.
 
-The exported effect is
-\deqn{penalty\_effect_{e,c}=A_{e,c}\widehat\beta_{e,c}.}
+Raw condition-edge P values are adjusted independently within each \code{condition x target} family. Let \eqn{q_{c,e}} denote this BH-adjusted P value. The RegCompass handoff flag for exact edge \eqn{e} is
+\deqn{G_e=1\{\text{all conditions have valid production coefficients}\}\,1\{\exists c:q_{c,e}<\tau\}.}
+If \eqn{G_e=1}, the edge is retained in every condition and each condition keeps its own continuous \eqn{\widehat\beta^E_{c,e}}. Thus significance power differences do not create condition-specific edge-presence topology after handoff; condition specificity is represented by continuous coefficient differences.
 
-Direct contrasts use \eqn{\Delta\beta_e=\beta_{e,A}-\beta_{e,B}} on the same coefficient coordinate. Coefficient and contrast P values remain approximate and conditional on data-dependent candidate discovery and CV-selected ridge regularization; they are not exact post-selection inference.
+Pairwise contrasts are reconstructed from the same joint condition coefficients, so for three conditions they close exactly, for example \eqn{\Delta_{JM}=\Delta_{CM}-\Delta_{CJ}}. A contrast fixed by zero information is marked as a boundary stabilization and must not be interpreted as evidence of biological equality.
 
-When the condition column is absent or has fewer than two levels, the standard per-cell-type Pando fallback is used.
+Target \eqn{R^2=1-RSS/TSS} is retained as a full-data Pando-equivalent model diagnostic. It is not a hard gate for the conditional RegCompass handoff and is not used to choose z. The conditional production path exposes no alternative z grid or sensitivity-selection API; z=0.25 is fixed.
+
+When the condition column is absent or has fewer than two levels, the standard per-cell-type Pando fallback is used and its standard model controls remain separate from this conditional contract.
 }
