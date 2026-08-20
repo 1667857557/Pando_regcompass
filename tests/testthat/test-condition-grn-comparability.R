@@ -157,3 +157,25 @@ test_that("correlated multi-edge E-star reports a converged KKT residual", {
     expect_identical(fit$inference_schema,
                      "scheme_e_fusion_component_joint_refit_v1")
 })
+
+test_that("condition subgraphs use the exact-edge RegCompass union", {
+    fit <- list(
+        schema_version = Pando:::.condition_common_dictionary_schema,
+        condition_levels = c("A", "B"),
+        coefficients = data.frame(
+            edge_id = rep(c("g||t1||p1", "g||t2||p2"), each = 2L),
+            condition = rep(c("A", "B"), times = 2L),
+            significant = c(TRUE, FALSE, FALSE, FALSE),
+            active_in_regcompass = c(TRUE, TRUE, FALSE, FALSE),
+            penalty_effect = c(1.0, 0.8, 0.3, 0.2),
+            stringsAsFactors = FALSE
+        )
+    )
+    class(fit) <- c("ConditionGRNFit", "list")
+    a <- condition_grn_subgraph(fit, "A", significant_only = TRUE)
+    b <- condition_grn_subgraph(fit, "B", significant_only = TRUE)
+    expect_identical(as.character(a$edge_id), "g||t1||p1")
+    expect_identical(as.character(b$edge_id), "g||t1||p1")
+    expect_false(b$significant[[1L]])
+    expect_equal(b$penalty_effect[[1L]], 0.8)
+})
