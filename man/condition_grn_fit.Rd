@@ -3,7 +3,7 @@
 \name{condition_grn_fit}
 \alias{condition_grn_fit}
 \alias{condition_grn_fit.GRNData}
-\title{Extract E-star/JSE common-dictionary condition GRN fits}
+\title{Extract common-dictionary conditional GRN fits}
 \usage{
 condition_grn_fit(object, ...)
 
@@ -15,5 +15,5 @@ condition_grn_fit(object, ...)
 \item{...}{Must be empty. Unknown arguments are rejected.}
 }
 \value{One \code{ConditionGRNFit} or a named list of fits.}
-\description{Returns the frozen exact target-TF-region dictionary, E-star z=0.25 production coefficients, fusion-component JSE fields, condition-by-target BH results, exact-edge RegCompass union flags, target diagnostics, contrast tables, solver diagnostics, and assay provenance.}
-\details{The production effect is stored in both \code{estimate} and \code{penalty_effect}. \code{inference_estimate} and \code{inference_se} are obtained from the selected fusion-component joint refit and are inference-only fields. \code{condition_significant} records strict \code{padj < padj_threshold} within a condition-by-target BH family. \code{active_in_regcompass} is an exact-edge union flag: it is true for all condition rows of an edge only when every condition has a valid continuous production coefficient and at least one condition is BH-supported. Target \code{rsq} is diagnostic only for the conditional handoff.}
+\description{Returns the frozen exact target-TF-region dictionary, fixed-z E-star production coefficients, separate no-fusion condition-local inference, exact-edge omnibus inference, whole-network BH topology, target diagnostics, production contrast tables, solver diagnostics, and assay provenance.}
+\details{The production effect is stored in both \code{estimate} and \code{penalty_effect}. Condition-local \code{inference_estimate}, \code{inference_se}, \code{condition_pval}, and \code{condition_inference_estimable} come from an unpenalized Gaussian linear model fit on the complete frozen target dictionary and do not use E-star-selected fusion. The \code{edge_inference} table stores one \code{edge_pval} and \code{edge_padj} per exact edge. Benjamini-Hochberg correction is applied once across all estimable exact edges in the broad-cell-type network. \code{active_in_regcompass} therefore has the same value for every condition row of one exact edge, while each condition retains its own continuous E-star coefficient. Target \code{rsq} is diagnostic only for the conditional handoff.}
