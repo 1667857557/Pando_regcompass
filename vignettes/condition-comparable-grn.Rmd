@@ -15,11 +15,11 @@ knitr::opts_chunk$set(eval = FALSE, collapse = TRUE, comment = "#>")
 
 The input must be a `GRNData` object with paired RNA and ATAC cells, gene annotation, regulatory regions, and motif matches from `find_motifs()`.
 
-For RegCompass, the regulatory regions are normally initialized from the predefined union of phastCons and SCREEN cCRE regions before motif matching. The complete mathematical specification is in `docs/mathematical-model.md`.
+For RegCompass, regulatory regions are normally initialized from the predefined phastCons + SCREEN cCRE union before motif matching. The conditional model uses the paired-cell predictor `RNA(TF) * ATAC(peak)`; RNA and ATAC inputs therefore have to refer to the same cells.
 
-# Condition GRN
+# Production conditional GRN
 
-Only parameters that normally need analysis-specific adjustment are shown below. The default candidate thresholds are `tf_cor = 0.05` and `peak_cor = 0.05`; they are ordinary adjustable parameters rather than fixed parts of the model contract.
+The production conditional engine is fixed to E-star/JSE with `z = 0.25`. There is no alternative-z grid, conditional ridge-CV lambda, fusion-ratio parameter, or data-driven sensitivity selection in this workflow.
 
 ```r
 fit_object <- infer_condition_grn(
@@ -30,53 +30,128 @@ fit_object <- infer_condition_grn(
   tf_cor = 0.05,
   peak_cor = 0.05,
   min_cells_per_condition = 300L,
+  padj_threshold = 0.05,
+  rank_action = "mark",
+  min_residual_df = 1L,
   parallel = TRUE
 )
 ```
 
-For each cell type with at least two eligible conditions, Pando runs the original Pando candidate logic twice in scope: once on all eligible-condition cells pooled together and once within each condition. An exact TF-peak-target edge enters the frozen common dictionary when it passes both `tf_cor` and `peak_cor` in the pooled/global calculation or in at least one condition. The edge union is deduplicated on the complete `(target, tf, region)` triple.
+The parameters normally adjusted for a dataset are:
 
-Every condition is then fitted once against exactly that same ordered dictionary using the TF-by-ATAC interaction predictor and ordinary ridge regularization. Conditions share the dictionary, predictor-scaling convention, and target-specific CV-selected lambda, but coefficients are not fused or shrunk toward coefficients from other conditions.
+- `tf_cor`, `peak_cor`: absolute Pando candidate-discovery correlation thresholds; both default to `0.05`.
+- `min_cells_per_condition`: minimum paired cells retained for each condition.
+- `small_condition_action`: `"error"`, `"drop_condition"`, or `"skip_cell_type"` for undersized conditions.
+- `padj_threshold`: strict BH threshold for condition-edge support; `padj == padj_threshold` is not significant.
+- `rank_action`, `min_residual_df`: estimability and residual-degree-of-freedom controls.
+- `parallel`, `BPPARAM`, `parallel_scope`: execution controls.
 
-Important adjustable parameters:
+Conditional ridge/CV controls such as `condition_ridge_control`, `lambda_grid`, `lambda_rule`, and `cv_folds`, as well as `scheme_e_z`, `z`, and `fusion_ratio`, are obsolete on this route and are rejected rather than silently ignored. Standard one-condition `infer_grn()` keeps its independent standard-model controls.
 
-- `tf_cor`, `peak_cor`: Pando candidate-discovery thresholds used independently in the pooled/global and condition-specific screens; both default to `0.05`, but valid user-supplied values are preserved.
-- `min_cells_per_condition`: minimum paired cells required for a condition fit.
-- `small_condition_action`: optional behavior for undersized conditions.
-- `padj_threshold`: condition-wise BH threshold used to activate fitted ridge effects; default `0.05`.
-- `rank_action`, `min_residual_df`: optional numerical/estimability controls.
+For `K >= 3`, the E-star geometry uses a design ordering of conditions. The current API takes the first retained condition as the predefined reference and records it in `reference_condition`; therefore the input condition ordering must be fixed by the experimental design before fitting and must not be rearranged after inspecting the GRN result. When the reference coordinate is not identifiable for an exact edge, the solver uses an identifiable non-reference contrast first and completes the spanning tree with zero-information boundary coordinates.
 
-Ridge tuning is normally left at its defaults. If needed, advanced controls are passed through `fallback_args = list(condition_ridge_control = list(...))`; available fields are `lambda_grid`, `lambda_rule`, `cv_folds`, `seed`, and `scale_floor`. There is no cross-condition fusion parameter.
+# Common exact-edge dictionary
+
+For each broad cell type, Pando runs candidate discovery on all eligible-condition cells pooled together and independently in every condition. Exact `(target, TF, region)` triples passing both configured correlation gates in the pooled/global calculation or in at least one condition are deduplicated into one frozen dictionary.
+
+Every retained condition then uses exactly the same ordered edge dictionary. Candidate correlation support is provenance only after the dictionary is frozen; it is not reapplied as a condition-local topology filter.
+
+Each exact edge uses an equal-condition within-condition RMS scale,
+
+\[
+s_e = \sqrt{K^{-1}\sum_c n_c^{-1}\sum_i(x_{cie}-\bar x_{ce})^2},
+\]
+
+while the Gaussian information retains the real condition cell counts through `X_c'X_c`. There is no `n_total / (K n_c)` condition-size equalization.
+
+# E-star production coefficient
+
+For stacked condition coefficients, E-star uses
+
+\[
+\beta = A\mu + R\delta, \qquad A^T Q R = 0, \qquad D R = I.
+\]
+
+The shared component is the unpenalized joint MLE and is not shrunk toward zero. Only identifiable deviation coordinates are penalized:
+
+\[
+\hat\delta = \arg\min_\delta\left[\frac12\delta^T H\delta-r^T\delta+0.25\sum_j\sqrt{I_j}|\delta_j|\right].
+\]
+
+For a scalar contrast this reduces to
+
+\[
+\hat\delta = \operatorname{sign}(d)\left(|d|-0.25/\sqrt{I}\right)_+.
+\]
+
+The full spanning contrast tree is retained in the production geometry. If a tree coordinate has zero profile information, its deviation is fixed exactly to zero and is marked `shared_by_boundary`; an identifiable coordinate shrunk exactly to zero is instead marked `fused_by_penalty`. These are different audit states.
+
+`estimate` and `penalty_effect` are the same continuous production E-star coefficient in raw TF-by-ATAC units. Joint inference never overwrites them.
+
+# Fusion-component joint inference
+
+Exact-zero tree deviations define per-edge fusion components. After the E-star structure is frozen, Pando constructs the equality-constrained reduced joint design with condition-specific intercepts and computes the full correlated covariance. This produces inference-only fields:
+
+```text
+inference_schema
+inference_component_id
+inference_hypothesis_id
+inference_estimate
+inference_se
+inference_statistic
+inference_estimable
+pval
+```
+
+Shared or partially shared edge components therefore borrow uncertainty information across the conditions in the same component while retaining covariance with the other correlated TF-by-ATAC predictors.
+
+Raw P values are adjusted separately within each `condition x target` family. The coefficient table records `bh_scope = "condition_target_BH"` and the corresponding family size.
+
+# Exact-edge RegCompass union
+
+For an exact edge `e`, Pando records whether every condition has a valid production coefficient and whether at least one condition has `padj < padj_threshold`. The RegCompass admission rule is:
+
+\[
+\text{edge_union_supported}_e =
+\left[\forall c:\;\text{fit_status}_{c,g(e)}=\text{"ok"}\;\land\;\beta^E_{c,e}\text{ finite}\right]
+\land
+\left[\exists c:\;q_{c,e}<\text{padj_threshold}\right].
+\]
+
+If an exact edge is admitted, `active_in_regcompass = TRUE` for every condition row of that edge. A nonsignificant small condition therefore keeps its own continuous `penalty_effect`; it is not converted into a missing edge merely because its local power is lower.
+
+`active` / `pando_estimation_active` and `active_in_regcompass` have different meanings: the former indicates a finite production E-star coefficient on the frozen dictionary, whereas the latter indicates admission to the common RegCompass topology.
+
+Target full-data `R2 = 1 - RSS/TSS` is retained as a model diagnostic. It is not a conditional handoff gate and is not used to select `z`.
 
 # Outputs
 
-Each fitted condition is stored as a standard Pando `Network`. The coefficient table retains both candidate provenance and the fitted effect:
+Use `condition_grn_fit()` to retrieve the complete fit contract. Important coefficient fields include:
 
 ```text
-tf target region edge_id estimate std_err statistic pval padj
-statistically_supported global_support local_support active penalty_effect
+target tf region edge_id condition z
+estimate penalty_effect beta_shared condition_deviation
+contrast_identifiable shared_by_boundary boundary_condition
+fused_by_penalty fusion_component_id shared_edge
+raw_information_condition profile_information
+inference_estimate inference_se inference_statistic inference_estimable
+pval padj bh_scope bh_family_size condition_significant
+edge_union_supported supporting_conditions n_supporting_conditions
+all_conditions_fit_valid active_in_regcompass
+rsq fit_status solver_status objective kkt_residual iterations
 ```
 
-`global_support` means the exact edge passed pooled/global Pando correlation screening. `local_support` means it passed screening inside that condition. These columns describe dictionary-admission provenance only. Once an edge is present in the common dictionary, it remains a fitted predictor in every condition.
-
-An edge is `active` when its own condition-specific ridge coefficient is estimable and passes condition-wise BH. Therefore an edge admitted by pooled/global support or by another condition can still be active in the current condition even if the current condition's marginal `tf_cor` or `peak_cor` did not pass. This avoids reapplying the same small-sample-sensitive marginal-correlation filter after the joint predictor model has already been fitted.
-
-`penalty_effect` is the active condition-specific ridge coefficient in the original TF-by-ATAC units and is zero otherwise. The full `estimate` is retained for diagnostics and contrasts.
-
-Use `condition_grn_fit()` to retrieve the cell-type fit and `condition_grn_subgraph()` to retrieve one condition's active edge table.
+`condition_grn_subgraph(..., significant_only = TRUE)` and `project_condition_grn_cells(..., significant_only = TRUE)` use the exact-edge union handoff, not condition-local significance.
 
 ```r
 fit <- condition_grn_fit(fit_object, cell_type = "T_cell")
+
 edges <- condition_grn_subgraph(
   fit,
   condition = "Control",
   significant_only = TRUE
 )
-```
 
-# Projection and aggregation
-
-```r
 projection <- project_condition_grn_cells(
   fit_object,
   fit = fit,
@@ -90,4 +165,4 @@ metacell_projection <- aggregate_condition_grn_projection(
 )
 ```
 
-For an active edge, paired-cell projection uses `penalty_effect * RNA(TF) * ATAC(peak)` and is aggregated only after cell-level target scores are calculated.
+Projection uses the admitted condition's continuous `penalty_effect * RNA(TF) * ATAC(peak)` on paired cells and aggregates only after cell-level regulatory scores are computed.
