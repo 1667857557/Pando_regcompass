@@ -27,10 +27,14 @@
                 list(
                     estimate = NA_real_, se = NA_real_,
                     statistic = NA_real_, pval = NA_real_,
-                    estimable = FALSE, same_component = FALSE
+                    estimable = FALSE, same_component = FALSE,
+                    boundary_shared = FALSE
                 )
             }
-            contrast_status <- if (isTRUE(joint$same_component)) {
+            contrast_status <- if (isTRUE(joint$same_component) &&
+                                   isTRUE(joint$boundary_shared)) {
+                "shared_by_boundary"
+            } else if (isTRUE(joint$same_component)) {
                 "fused_by_E"
             } else if (!isTRUE(joint$estimable)) {
                 "not_estimable"
