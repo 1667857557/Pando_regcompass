@@ -3,7 +3,7 @@
 \name{condition_grn_fit}
 \alias{condition_grn_fit}
 \alias{condition_grn_fit.GRNData}
-\title{Extract common-dictionary condition GRN fits}
+\title{Extract E-star/JSE common-dictionary condition GRN fits}
 \usage{
 condition_grn_fit(object, ...)
 
@@ -14,5 +14,6 @@ condition_grn_fit(object, ...)
 \item{cell_type}{Optional fitted cell type.}
 \item{...}{Must be empty. Unknown arguments are rejected.}
 }
-\value{One \code{ConditionGRNFit} or a named list.}
-\description{Returns the exact edge dictionary, condition coefficient table, fit diagnostics, network names, significance rule and assay provenance.}
+\value{One \code{ConditionGRNFit} or a named list of fits.}
+\description{Returns the frozen exact target-TF-region dictionary, E-star z=0.25 production coefficients, fusion-component JSE fields, condition-by-target BH results, exact-edge RegCompass union flags, target diagnostics, contrast tables, solver diagnostics, and assay provenance.}
+\details{The production effect is stored in both \code{estimate} and \code{penalty_effect}. \code{inference_estimate} and \code{inference_se} are obtained from the selected fusion-component joint refit and are inference-only fields. \code{condition_significant} records strict \code{padj < padj_threshold} within a condition-by-target BH family. \code{active_in_regcompass} is an exact-edge union flag: it is true for all condition rows of an edge only when every condition has a valid continuous production coefficient and at least one condition is BH-supported. Target \code{rsq} is diagnostic only for the conditional handoff.}
