@@ -1,46 +1,132 @@
-# One-pass common-dictionary E-star/JSE fit for conditional GRNs.
+# One-pass common-dictionary E-star production plus separate inference.
 
-.condition_fit_engine <- "condition_union_Estar_z025_jointse"
+.condition_fit_engine <-
+    "condition_union_Estar_z025_inference_separated"
+.condition_inference_schema <-
+    "frozen_dictionary_condition_local_gaussian_lm_edge_omnibus_v1"
 
-.condition_ridge_contrasts <- function(
-    fit, edges, scaling) {
+.condition_no_fusion_condition_fit <- function(
+    x, y, scaling, rank_tol = 1e-10, min_residual_df = 1L) {
+    p_full <- ncol(x)
+    estimate <- se <- statistic <- pval <- variance <- rep(NA_real_, p_full)
+    estimable <- rep(FALSE, p_full)
+    keep <- which(as.logical(scaling$informative))
+    if (!length(keep)) {
+        return(list(
+            status = "no_informative_predictor", estimate = estimate,
+            se = se, statistic = statistic, pval = pval,
+            variance = variance, estimable = estimable,
+            sigma2 = NA_real_, residual_df = length(y) - 1L, rank = 1L
+        ))
+    }
+    z <- sweep(x[, keep, drop = FALSE], 2L, scaling$center[keep], "-")
+    z <- sweep(z, 2L, scaling$scale[keep], "/")
+    design <- cbind(`(Intercept)` = 1, z)
+    decomposition <- .condition_symmetric_pinv(
+        crossprod(design), rank_tol = rank_tol
+    )
+    theta <- as.numeric(
+        decomposition$inverse %*% crossprod(design, as.numeric(y))
+    )
+    residual <- as.numeric(y) - as.numeric(design %*% theta)
+    residual_df <- nrow(design) - decomposition$rank
+    if (!is.finite(residual_df) || residual_df < min_residual_df) {
+        return(list(
+            status = "insufficient_df", estimate = estimate,
+            se = se, statistic = statistic, pval = pval,
+            variance = variance, estimable = estimable,
+            sigma2 = NA_real_, residual_df = as.integer(residual_df),
+            rank = as.integer(decomposition$rank)
+        ))
+    }
+    y_scale <- stats::var(as.numeric(y))
+    variance_floor <- .Machine$double.eps * max(1, y_scale, na.rm = TRUE)
+    sigma2 <- max(sum(residual^2) / residual_df, variance_floor)
+    covariance <- sigma2 * decomposition$inverse
+    projector <- decomposition$projector
+    for (local_edge in seq_along(keep)) {
+        full_edge <- keep[[local_edge]]
+        column <- 1L + local_edge
+        unit <- numeric(ncol(design)); unit[[column]] <- 1
+        projection_error <- max(abs(unit - projector[column, ]))
+        ok <- is.finite(projection_error) &&
+            projection_error <= max(1e-8, 20 * rank_tol)
+        raw_scale <- scaling$scale[[full_edge]]
+        value <- theta[[column]] / raw_scale
+        var_value <- covariance[column, column] / raw_scale^2
+        if (!ok || !is.finite(var_value) || var_value <= 0) next
+        std <- sqrt(var_value)
+        stat <- value / std
+        estimate[[full_edge]] <- value
+        se[[full_edge]] <- std
+        statistic[[full_edge]] <- stat
+        pval[[full_edge]] <- 2 * stats::pt(
+            -abs(stat), df = residual_df
+        )
+        variance[[full_edge]] <- var_value
+        estimable[[full_edge]] <- TRUE
+    }
+    list(
+        status = "ok", estimate = estimate, se = se,
+        statistic = statistic, pval = pval, variance = variance,
+        estimable = estimable, sigma2 = sigma2,
+        residual_df = as.integer(residual_df),
+        rank = as.integer(decomposition$rank)
+    )
+}
+
+.condition_no_fusion_inference <- function(
+    x, y, scaling, rank_tol = 1e-10, min_residual_df = 1L) {
+    conditions <- names(x)
+    p <- ncol(x[[1L]])
+    estimate <- se <- statistic <- pval <- variance <- matrix(
+        NA_real_, length(conditions), p,
+        dimnames = list(conditions, colnames(x[[1L]]))
+    )
+    estimable <- matrix(FALSE, length(conditions), p, dimnames = dimnames(estimate))
+    sigma2 <- residual_df <- rank <- rep(NA_real_, length(conditions))
+    status <- rep(NA_character_, length(conditions))
+    names(sigma2) <- names(residual_df) <- names(rank) <- names(status) <- conditions
+    for (i in seq_along(conditions)) {
+        one <- .condition_no_fusion_condition_fit(
+            x = x[[i]], y = y[[i]], scaling = scaling,
+            rank_tol = rank_tol, min_residual_df = min_residual_df
+        )
+        estimate[i, ] <- one$estimate
+        se[i, ] <- one$se
+        statistic[i, ] <- one$statistic
+        pval[i, ] <- one$pval
+        variance[i, ] <- one$variance
+        estimable[i, ] <- one$estimable
+        sigma2[[i]] <- one$sigma2
+        residual_df[[i]] <- one$residual_df
+        rank[[i]] <- one$rank
+        status[[i]] <- one$status
+    }
+    list(
+        schema = .condition_inference_schema,
+        estimate = estimate, se = se, statistic = statistic,
+        pval = pval, variance = variance, estimable = estimable,
+        sigma2 = sigma2, residual_df = residual_df,
+        rank = rank, status = status
+    )
+}
+
+.condition_ridge_contrasts <- function(fit, edges) {
     conditions <- rownames(fit$beta)
     if (length(conditions) < 2L) return(data.frame())
     pairs <- utils::combn(seq_along(conditions), 2L, simplify = FALSE)
-    keep <- fit$informative_index
     out <- list()
     for (pair in pairs) {
         a <- pair[[1L]]
         b <- pair[[2L]]
         for (edge in seq_len(nrow(edges))) {
-            production_delta <- as.numeric(
-                fit$beta[b, edge] - fit$beta[a, edge]
+            estimate_a <- as.numeric(fit$beta[a, edge])
+            estimate_b <- as.numeric(fit$beta[b, edge])
+            same_component <- identical(
+                as.character(fit$fusion_component_id[a, edge]),
+                as.character(fit$fusion_component_id[b, edge])
             )
-            local_edge <- match(edge, keep)
-            joint <- if (!is.na(local_edge)) {
-                .condition_joint_contrast(
-                    fit$joint_inference, scaling, keep,
-                    condition_a = a, condition_b = b,
-                    local_edge = local_edge
-                )
-            } else {
-                list(
-                    estimate = NA_real_, se = NA_real_,
-                    statistic = NA_real_, pval = NA_real_,
-                    estimable = FALSE, same_component = FALSE,
-                    boundary_shared = FALSE
-                )
-            }
-            contrast_status <- if (isTRUE(joint$same_component) &&
-                                   isTRUE(joint$boundary_shared)) {
-                "shared_by_boundary"
-            } else if (isTRUE(joint$same_component)) {
-                "fused_by_E"
-            } else if (!isTRUE(joint$estimable)) {
-                "not_estimable"
-            } else {
-                "ok"
-            }
             out[[length(out) + 1L]] <- data.frame(
                 tf = edges$tf[[edge]],
                 target = edges$target[[edge]],
@@ -50,18 +136,15 @@
                 condition_a = conditions[[a]],
                 condition_b = conditions[[b]],
                 contrast = paste0(conditions[[b]], "-", conditions[[a]]),
-                estimate_a = as.numeric(fit$beta[a, edge]),
-                estimate_b = as.numeric(fit$beta[b, edge]),
-                contrast_estimate = production_delta,
-                inference_contrast_estimate = joint$estimate,
-                contrast_se = joint$se,
-                contrast_statistic = joint$statistic,
-                contrast_pval = joint$pval,
-                contrast_estimable = isTRUE(joint$estimable) &&
-                    !isTRUE(joint$same_component),
+                estimate_a = estimate_a,
+                estimate_b = estimate_b,
+                contrast_estimate = estimate_b - estimate_a,
+                contrast_estimable = is.finite(estimate_a) && is.finite(estimate_b),
                 contrast_identifiable =
                     fit$contrast_identifiable[[edge]] %in% TRUE,
-                contrast_status = contrast_status,
+                contrast_status = if (same_component) {
+                    "same_Estar_component"
+                } else "ok",
                 shared_by_boundary =
                     fit$shared_by_boundary[[edge]] %in% TRUE,
                 fused_by_penalty =
@@ -72,7 +155,6 @@
                 penalty_family = fit$penalty_family,
                 penalty_value = fit$penalty_value,
                 reference_condition = fit$reference_condition,
-                inference_schema = fit$inference_schema,
                 solver_status = fit$solver_status,
                 objective = fit$objective,
                 kkt_residual = fit$kkt_residual,
@@ -94,12 +176,8 @@
     names(y) <- names(cells_by_condition)
     scaling <- .condition_ridge_scaling(x, control$scale_floor)
     fit <- .condition_ridge_fit(
-        x = x,
-        y = y,
-        scaling = scaling,
-        min_residual_df = min_residual_df,
-        inference = TRUE,
-        control = control,
+        x = x, y = y, scaling = scaling,
+        min_residual_df = min_residual_df, control = control,
         reference_condition = reference_condition
     )
     if (!identical(fit$status, "ok")) {
@@ -120,11 +198,15 @@
         stop(
             "Raw common-dictionary design is rank deficient for target `",
             edges$target[[1L]],
-            "`; E-star marks non-identifiable contrasts instead of drifting, ",
-            "but rank_action='error' requested failure.",
+            "`; rank_action='error' requested failure.",
             call. = FALSE
         )
     }
+    inference <- .condition_no_fusion_inference(
+        x = x, y = y, scaling = scaling,
+        rank_tol = control$rank_tol,
+        min_residual_df = min_residual_df
+    )
 
     shared <- fit$shared_z / scaling$scale
     deviation <- sweep(fit$deviation_z, 2L, scaling$scale, "/")
@@ -137,10 +219,11 @@
     for (i in seq_along(cells_by_condition)) {
         condition <- names(cells_by_condition)[[i]]
         estimate <- as.numeric(fit$beta[i, ])
-        inference_estimate <- as.numeric(fit$inference_estimate[i, ])
-        inference_se <- as.numeric(fit$inference_se[i, ])
-        inference_statistic <- as.numeric(fit$inference_statistic[i, ])
-        pval <- as.numeric(fit$inference_pval[i, ])
+        inference_estimate <- as.numeric(inference$estimate[i, ])
+        inference_se <- as.numeric(inference$se[i, ])
+        inference_statistic <- as.numeric(inference$statistic[i, ])
+        condition_pval <- as.numeric(inference$pval[i, ])
+        inference_estimable <- as.logical(inference$estimable[i, ])
         coefficients[[i]] <- data.frame(
             tf = edges$tf,
             target = edges$target,
@@ -157,44 +240,36 @@
             shared_estimate = as.numeric(shared),
             condition_deviation = as.numeric(deviation[i, ]),
             delta_beta = as.numeric(deviation[i, ]),
-            contrast_coordinate = NA_character_,
-            contrast_identifiable =
-                as.logical(fit$contrast_identifiable),
-            shared_by_boundary =
-                as.logical(fit$shared_by_boundary),
-            boundary_condition =
-                as.logical(fit$boundary_condition[i, ]),
-            fused_by_penalty =
-                as.logical(fit$fused_by_penalty),
-            fusion_component_id =
-                as.character(fit$fusion_component_id[i, ]),
+            contrast_identifiable = as.logical(fit$contrast_identifiable),
+            shared_by_boundary = as.logical(fit$shared_by_boundary),
+            boundary_condition = as.logical(fit$boundary_condition[i, ]),
+            fused_by_penalty = as.logical(fit$fused_by_penalty),
+            fusion_component_id = as.character(fit$fusion_component_id[i, ]),
             shared_edge = as.logical(fit$shared_edge),
-            raw_information_condition =
-                as.numeric(fit$raw_information[i, ]),
-            profile_information =
-                as.numeric(fit$profile_information),
-            profile_information_delta =
-                as.numeric(fit$profile_information),
+            raw_information_condition = as.numeric(fit$raw_information[i, ]),
+            profile_information = as.numeric(fit$profile_information),
+            profile_information_delta = as.numeric(fit$profile_information),
             condition_number = fit$raw_kappa[[i]],
             sigma2_common = fit$sigma2,
-            inference_schema = fit$inference_schema,
-            inference_component_id =
-                as.character(fit$inference_component_id[i, ]),
-            inference_hypothesis_id =
-                as.character(fit$inference_hypothesis_id[i, ]),
+            inference_schema = .condition_inference_schema,
             inference_estimate = inference_estimate,
             inference_se = inference_se,
+            inference_variance = as.numeric(inference$variance[i, ]),
             inference_statistic = inference_statistic,
-            inference_estimable =
-                as.logical(fit$inference_estimable[i, ]),
+            inference_estimable = inference_estimable,
+            condition_inference_estimable = inference_estimable,
+            condition_pval = condition_pval,
+            condition_inference_residual_df = inference$residual_df[[i]],
+            condition_inference_sigma2 = inference$sigma2[[i]],
+            condition_inference_status = inference$status[[i]],
             std_err = inference_se,
             statistic = inference_statistic,
-            pval = pval,
+            pval = condition_pval,
+            padj = NA_real_,
             estimable = is.finite(estimate),
             zero_variance = as.logical(fit$zero_variance[i, ]),
-            condition_informative =
-                as.logical(condition_informative[i, ]),
-            aliased = !as.logical(fit$contrast_identifiable),
+            condition_informative = as.logical(condition_informative[i, ]),
+            aliased = !inference_estimable,
             reference_condition = fit$reference_condition,
             penalty_family = fit$penalty_family,
             penalty_value = fit$penalty_value,
@@ -224,9 +299,10 @@
             fit_status = "ok",
             intercept = fit$intercept[[i]],
             sigma2_common = fit$sigma2,
-            inference_sigma2 = fit$inference_sigma2,
-            inference_residual_df = fit$inference_residual_df,
-            inference_rank = fit$inference_rank,
+            inference_sigma2 = inference$sigma2[[i]],
+            inference_residual_df = inference$residual_df[[i]],
+            inference_rank = inference$rank[[i]],
+            inference_status = inference$status[[i]],
             reference_condition = fit$reference_condition,
             deviation_z = fit$penalty_value,
             penalty_family = fit$penalty_family,
@@ -238,15 +314,13 @@
             nvariables_dictionary = nrow(edges),
             nvariables_contrast_identifiable =
                 sum(fit$contrast_identifiable %in% TRUE),
-            n_shared_by_boundary =
-                sum(fit$shared_by_boundary %in% TRUE),
-            n_fused_by_penalty =
-                sum(fit$fused_by_penalty %in% TRUE),
+            n_shared_by_boundary = sum(fit$shared_by_boundary %in% TRUE),
+            n_fused_by_penalty = sum(fit$fused_by_penalty %in% TRUE),
             n_shared_edges = sum(fit$shared_edge %in% TRUE),
             n_zero_variance = sum(fit$zero_variance[i, ]),
             condition_weight = 1,
             predictor_scale_reference = scaling$reference,
-            inference_schema = fit$inference_schema,
+            inference_schema = .condition_inference_schema,
             orthogonality_error = fit$orthogonality_error,
             dr_error = fit$dr_error,
             stringsAsFactors = FALSE
@@ -254,7 +328,7 @@
     }
     list(
         coefficients = do.call(rbind, coefficients),
-        contrasts = .condition_ridge_contrasts(fit, edges, scaling),
+        contrasts = .condition_ridge_contrasts(fit, edges),
         fit = do.call(rbind, fits),
         scaling = scaling,
         contrast_tree = fit$contrast_tree,
@@ -269,39 +343,6 @@
             dr_error = fit$dr_error
         )
     )
-}
-
-.condition_bh_by_condition_target <- function(
-    coefficient, method = "BH") {
-    coefficient$padj <- NA_real_
-    key <- paste(
-        as.character(coefficient$condition),
-        as.character(coefficient$target),
-        sep = "\001"
-    )
-    for (family in unique(key)) {
-        index <- which(key == family)
-        valid <- index[
-            coefficient$inference_estimable[index] %in% TRUE &
-            is.finite(as.numeric(coefficient$pval[index]))
-        ]
-        if (length(valid)) {
-            coefficient$padj[valid] <- stats::p.adjust(
-                as.numeric(coefficient$pval[valid]), method = method
-            )
-        }
-    }
-    coefficient$bh_scope <- "condition_target_BH"
-    family_size <- integer(nrow(coefficient))
-    for (family in unique(key)) {
-        index <- which(key == family)
-        family_size[index] <- sum(
-            coefficient$inference_estimable[index] %in% TRUE &
-            is.finite(as.numeric(coefficient$pval[index]))
-        )
-    }
-    coefficient$bh_family_size <- family_size
-    coefficient
 }
 
 .condition_ridge_fit_contract_one_pass <- function(
@@ -320,7 +361,7 @@
     }
     targets <- unique(as.character(fit$edge_dictionary$target))
     names(targets) <- targets
-    if (is.null(progress_phase)) progress_phase <- "condition_Estar_JSE"
+    if (is.null(progress_phase)) progress_phase <- "condition_Estar_z025"
     if (is.null(progress_label)) progress_label <- fit$cell_type %||% ""
 
     result <- .pando_target_payload_map(
@@ -350,15 +391,6 @@
     rownames(coefficient) <- rownames(fit_table) <- NULL
     if (is.data.frame(contrast) && nrow(contrast)) rownames(contrast) <- NULL
 
-    coefficient <- .condition_bh_by_condition_target(
-        coefficient, method = fit$adjust_method
-    )
-    coefficient$condition_significant <-
-        coefficient$inference_estimable %in% TRUE &
-        is.finite(coefficient$padj) &
-        coefficient$padj < fit$padj_threshold
-    coefficient$statistically_supported <- coefficient$condition_significant
-    coefficient$significant <- coefficient$condition_significant
     coefficient$penalty_effect <- coefficient$estimate
     coefficient$direction <- ifelse(
         coefficient$estimate > 0, "positive",
@@ -367,48 +399,22 @@
     coefficient$effect_definition <-
         "E_star_z025_continuous_condition_coefficient_raw_tf_atac_units"
     coefficient$inference_scope <-
-        "fusion_component_joint_refit_selected_structure_wald"
-
-    if (is.data.frame(contrast) && nrow(contrast)) {
-        contrast$contrast_padj <- NA_real_
-        key <- paste(
-            contrast$condition_a, contrast$condition_b,
-            contrast$target, sep = "\001"
-        )
-        for (family in unique(key)) {
-            index <- which(key == family)
-            valid <- index[
-                contrast$contrast_estimable[index] %in% TRUE &
-                is.finite(contrast$contrast_pval[index])
-            ]
-            if (length(valid)) {
-                contrast$contrast_padj[valid] <- stats::p.adjust(
-                    contrast$contrast_pval[valid],
-                    method = fit$adjust_method
-                )
-            }
-        }
-        contrast$contrast_significant <-
-            contrast$contrast_estimable %in% TRUE &
-            is.finite(contrast$contrast_padj) &
-            contrast$contrast_padj < fit$padj_threshold
-        contrast$inference_scope <-
-            "fusion_component_joint_refit_pairwise_contrast"
-    }
+        "frozen_dictionary_no_fusion_condition_local_gaussian_lm"
 
     fit$model_schema <- .condition_multitask_ridge_schema
     fit$fit_engine <- .condition_fit_engine
     fit$coefficient_scale <- "raw_tf_atac_interaction_units"
     fit$internal_predictor_scale <- "equal_condition_within_condition_rms"
-    fit$inference_schema <- .condition_E_star_inference_schema
+    fit$inference_schema <- .condition_inference_schema
     fit$inference_scope <-
-        "E_star_z025_primary_fusion_component_joint_refit"
+        "separate_no_fusion_condition_local_lm_then_exact_edge_omnibus"
     fit$coefficients <- coefficient
     fit$contrasts <- contrast
+    fit$edge_inference <- NULL
     fit$fit <- fit_table
     fit$scale <- FALSE
     fit$projection_effect_column <- "penalty_effect"
-    fit$projection_policy <- "any_condition_padj_exact_edge_union"
+    fit$projection_policy <- "exact_edge_whole_network_BH_common_topology"
     fit$condition_e_control <- control
     fit$deviation_penalty <- list(
         family = .condition_E_star_penalty_family,
@@ -434,7 +440,7 @@
             coefs = coefs_one,
             fit = fit_one,
             params = list(
-                method = "condition_Estar_JSE",
+                method = "condition_Estar_z025",
                 family = "gaussian_identity",
                 fit_mode = "frozen_common_dictionary_Estar_z025",
                 condition = condition,
@@ -449,13 +455,11 @@
                 rna_layer = prepared$rna_layer,
                 peak_layer = prepared$peak_layer,
                 peak_value_type = prepared$peak_value_type,
-                preprocessing_fingerprint =
-                    prepared$preprocessing_fingerprint,
+                preprocessing_fingerprint = prepared$preprocessing_fingerprint,
                 adjust_method = fit$adjust_method,
                 padj_threshold = fit$padj_threshold,
-                bh_scope = "condition_target_BH",
-                projection_policy =
-                    "any_condition_padj_exact_edge_union",
+                bh_scope = "exact_edge_whole_cell_type_network_BH",
+                projection_policy = fit$projection_policy,
                 deviation_penalty = fit$deviation_penalty,
                 inference_schema = fit$inference_schema,
                 condition_e_control = control
