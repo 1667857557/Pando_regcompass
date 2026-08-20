@@ -649,6 +649,10 @@ union_grn_edges <- function(global_edges = NULL, condition_edges) {
 #'   family and condition support requires strict `padj < padj_threshold`.
 #' @param rank_action,min_residual_df Identifiable-subspace and residual-degree-
 #'   of-freedom controls for the joint E-star fit.
+#' @param reference_condition Optional predefined reference condition for the
+#'   K-condition contrast-tree geometry. It must be present and retained in every
+#'   fitted cell type. When `NULL`, the first retained condition is used. This is
+#'   a design coordinate, not a data-driven tuning parameter.
 #' @param BPPARAM Optional BiocParallel parameter.
 #' @param parallel_scope Automatic, cell-type, or target-level parallel scope.
 #' @param fallback_args Arguments used only by standard Pando fallback. The
@@ -676,6 +680,7 @@ infer_condition_grn.GRNData <- function(
     small_condition_action = c("error", "drop_condition", "skip_cell_type"),
     adjust_method = "BH", padj_threshold = 0.05,
     rank_action = c("mark", "error"), min_residual_df = 1L,
+    reference_condition = NULL,
     parallel = FALSE, BPPARAM = NULL,
     parallel_scope = c("auto", "cell_type", "target"),
     overwrite = FALSE, fallback_args = list(), verbose = TRUE, ...) {
@@ -754,6 +759,7 @@ infer_condition_grn.GRNData <- function(
             padj_threshold = padj_threshold,
             rank_action = rank_action,
             min_residual_df = min_residual_df,
+            reference_condition = reference_condition,
             parallel = inner_parallel,
             overwrite = overwrite,
             fallback_args = fallback_args,
