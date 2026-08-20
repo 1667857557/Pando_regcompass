@@ -1,6 +1,10 @@
-test_that("standard ridge is the K=1 condition ridge penalty", {
-  p <- 4L
-  expect_equal(.condition_ridge_penalty(1L, p), diag(p))
+test_that("standard ridge has an independent CV ridge solver", {
+  control <- Pando:::.pando_standard_ridge_control()
+  expect_true(all(control$lambda_grid > 0))
+  expect_identical(control$lambda_rule, "1se")
+  expect_false("scheme_e_z" %in% names(control))
+  expect_true(is.function(Pando:::.pando_standard_ridge_numeric))
+  expect_true(is.function(Pando:::.pando_standard_ridge_cv))
 })
 
 test_that("standard infer_grn keeps glm default and exposes ridge controls", {
@@ -20,20 +24,14 @@ test_that("standard ridge accepts Gaussian identity only", {
   expect_false(.pando_standard_ridge_family_ok(stats::poisson()))
 })
 
-test_that("standard ridge routing lives in canonical infer_grn method", {
+test_that("standard ridge routing remains separate from Scheme E", {
   body_text <- paste(deparse(body(infer_grn.GRNData)), collapse = "\n")
   expect_match(body_text, "identical(method, \"ridge\")", fixed = TRUE)
   expect_match(body_text, ".pando_standard_ridge_fit", fixed = TRUE)
-  expect_match(
-    paste(deparse(body(.pando_standard_ridge_fit)), collapse = "\n"),
-    ".condition_ridge_fit_contract_one_pass", fixed = TRUE
+  standard_text <- paste(
+    deparse(body(Pando:::.pando_standard_ridge_fit)), collapse = "\n"
   )
-  expect_false(exists(
-    ".pando_standard_ridge_infer_impl",
-    envir = asNamespace("Pando"), inherits = FALSE
-  ))
-  expect_false(exists(
-    ".pando_standard_ridge_method",
-    envir = asNamespace("Pando"), inherits = FALSE
-  ))
+  expect_match(standard_text, ".pando_standard_ridge_control", fixed = TRUE)
+  expect_match(standard_text, ".pando_standard_ridge_target_worker", fixed = TRUE)
+  expect_false(grepl("condition_scheme_e", standard_text, fixed = TRUE))
 })

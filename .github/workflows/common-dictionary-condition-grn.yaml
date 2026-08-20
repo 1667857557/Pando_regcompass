@@ -32,20 +32,26 @@ jobs:
               "infer_condition_grn.GRNData": "R/condition_grn.R",
               "condition_grn_fit.GRNData": "R/condition_grn.R",
               "aggregate_condition_grn_projection": "R/condition_grn.R",
+              "project_condition_grn_cells": "R/condition_grn_projection.R",
               "validate_condition_grn_projection_membership":
                   "R/condition_grn_projection_membership.R",
           }
-          for name, expected_path in canonical.items():
-              pattern = re.compile(
-                  rf"(?m)^{re.escape(name)}\s*<-\s*function\b"
-              )
-              locations = [
-                  path for path, text in source.items() if pattern.search(text)
-              ]
+          internal = {
+              ".condition_ridge_fit": "R/condition_multitask_ridge.R",
+              ".condition_scheme_e_fit": "R/condition_sparse_deviation.R",
+              ".condition_ridge_target": "R/condition_multitask_ridge_fit.R",
+              ".condition_bh_by_condition_target":
+                  "R/condition_multitask_ridge_fit.R",
+              ".condition_apply_activity_gate":
+                  "R/condition_multitask_ridge_significance.R",
+          }
+          for name, expected_path in {**canonical, **internal}.items():
+              pattern = re.compile(rf"(?m)^{re.escape(name)}\s*<-\s*function\b")
+              locations = [path for path, text in source.items() if pattern.search(text)]
               if locations != [expected_path]:
                   raise RuntimeError(
-                      f"{name} must have one canonical direct definition in "
-                      f"{expected_path}; found {locations}"
+                      f"{name} must have one direct definition in {expected_path}; "
+                      f"found {locations}"
                   )
 
           forbidden = [
@@ -59,8 +65,6 @@ jobs:
               ".pando_infer_condition_grn_complete_contract_method",
               ".pando_condition_grn_fit_complete_contract_method",
               ".pando_complete_condition_fit_object",
-              ".condition_ridge_refit_contract",
-              ".condition_ridge_refit_contract_one_pass",
               ".condition_dictionary_screen",
               ".condition_subset_dictionary",
               ".condition_fit_target_matrix",
@@ -68,15 +72,18 @@ jobs:
               ".pando_fixed_glm_target_payload",
               ".pando_fixed_glm_target_worker",
               "fit_grn_from_edges <- function",
-              "statistical_support_pending_local_pando_gate",
               "aggregate_condition_grn_projection_strict",
               "zzzzz_condition_fit_contract",
+              "pando_condition_grn_multitask_ridge_v3",
+              "global-condition-union-single-no-fusion-ridge",
+              "condition-BH-supported-common-dictionary-ridge",
+              ".condition_scheme_e_group_prox",
+              ".condition_contrast_basis <- function",
+              ".condition_ridge_control <- function",
           ]
           present = [value for value in forbidden if value in combined]
           if present:
-              raise RuntimeError(
-                  f"late/variant/obsolete GRN implementation remains: {present}"
-              )
+              raise RuntimeError(f"obsolete/variant condition GRN implementation remains: {present}")
 
           obsolete_files = [
               "R/zzz_grn_runtime.R",
@@ -87,23 +94,23 @@ jobs:
           ]
           present_files = [path for path in obsolete_files if Path(path).exists()]
           if present_files:
-              raise RuntimeError(
-                  f"obsolete condition files remain: {present_files}"
-              )
+              raise RuntimeError(f"obsolete condition files remain: {present_files}")
 
           namespace = Path("NAMESPACE").read_text()
           if "export(validate_condition_grn_projection_membership)" not in namespace:
               raise RuntimeError("projection membership validator is not exported")
           if "export(aggregate_condition_grn_projection_strict)" in namespace:
-              raise RuntimeError("strict aggregation variant is still exported")
+              raise RuntimeError("obsolete strict aggregation variant is still exported")
           if "export(fit_grn_from_edges)" in namespace:
               raise RuntimeError("obsolete fixed-dictionary condition GLM is still exported")
 
           description = Path("DESCRIPTION").read_text()
           required_description = [
-              "Config/Pando/ConditionGRNModelSchema: pando_condition_grn_multitask_ridge_v3",
-              "Config/Pando/ConditionGRNMethod: global-condition-union-single-no-fusion-ridge",
-              "Config/Pando/ConditionProjectionPolicy: condition-BH-supported-common-dictionary-ridge",
+              "Config/Pando/ConditionGRNModelSchema: pando_condition_grn_Estar_jointse_v1",
+              "Config/Pando/ConditionGRNMethod: global-condition-union-Estar-z025-JSE",
+              "Config/Pando/ConditionProjectionPolicy: any-condition-padj-exact-edge-union",
+              "Config/Pando/ConditionInference: fusion-component-joint-refit-condition-target-BH",
+              "Config/Pando/ConditionR2: full-data-diagnostic-only",
           ]
           missing = [x for x in required_description if x not in description]
           if missing:
@@ -114,6 +121,10 @@ jobs:
           ridge = Path("R/condition_multitask_ridge.R").read_text()
           ridge_fit = Path("R/condition_multitask_ridge_fit.R").read_text()
           significance = Path("R/condition_multitask_ridge_significance.R").read_text()
+          scheme_e = Path("R/condition_sparse_deviation.R").read_text()
+          projection = Path("R/condition_grn_projection.R").read_text()
+          standard_ridge = Path("R/standard_ridge.R").read_text()
+
           required_condition = [
               "tf_cor = 0.05, peak_cor = 0.05",
               "union_grn_edges <- function",
@@ -124,6 +135,7 @@ jobs:
           missing = [x for x in required_condition if x not in condition]
           if missing:
               raise RuntimeError(f"common dictionary source contract missing: {missing}")
+
           required_runtime = [
               "tf_cor = 0.05, peak_cor = 0.05",
               "global_edges <-",
@@ -137,68 +149,105 @@ jobs:
           missing = [x for x in required_runtime if x not in runtime]
           if missing:
               raise RuntimeError(f"condition runtime contract missing: {missing}")
+
           required_ridge = [
-              '"pando_condition_grn_multitask_ridge_v3"',
-              ".condition_ridge_penalty <- function(k, p)",
-              "diag(k * p)",
+              '"pando_condition_grn_Estar_jointse_v1"',
+              ".condition_ridge_fit <- function",
+              ".condition_scheme_e_fit(",
               "equal_condition_within_condition_rms",
           ]
           missing = [x for x in required_ridge if x not in ridge]
           if missing:
-              raise RuntimeError(f"no-fusion ridge contract missing: {missing}")
-          if "fusion_ratio" in ridge:
-              raise RuntimeError("ridge solver still contains fusion_ratio")
-          if "statistical_support_pending_local_pando_gate" in ridge_fit:
-              raise RuntimeError("obsolete local-support post-fit gate remains")
+              raise RuntimeError(f"E-star entry contract missing: {missing}")
+
+          required_scheme_e = [
+              ".condition_E_star_z <- 0.25",
+              '"information_scaled_sparse_deviation"',
+              ".condition_identifiable_contrast_tree <- function",
+              ".condition_q_orthogonal_decomposition <- function",
+              ".condition_profile_coordinate_information <- function",
+              ".condition_E_star_fit <- function",
+              ".condition_fusion_components <- function",
+              ".condition_joint_inference_design <- function",
+              ".condition_joint_inference_fit <- function",
+              ".condition_scheme_e_fit <- function",
+              "shared_by_boundary",
+              "contrast_identifiable",
+              "fused_by_penalty",
+              "condition_weight = stats::setNames(rep(1, k), conditions)",
+          ]
+          missing = [x for x in required_scheme_e if x not in scheme_e]
+          if missing:
+              raise RuntimeError(f"E-star/JSE core contract missing: {missing}")
+          forbidden_scheme_e = [
+              "fusion_ratio",
+              ".condition_E_star_z <- 0.5",
+              ".condition_E_star_z <- 1",
+              "condition_ridge_control",
+          ]
+          present = [x for x in forbidden_scheme_e if x.lower() in scheme_e.lower()]
+          if present:
+              raise RuntimeError(f"non-primary conditional penalty path remains: {present}")
+
+          required_fit = [
+              '"condition_union_Estar_z025_jointse"',
+              "beta_shared",
+              "condition_deviation",
+              "delta_beta",
+              "raw_information_condition",
+              "profile_information_delta",
+              "inference_estimate",
+              "inference_se",
+              "inference_estimable",
+              "solver_status",
+              "kkt_residual",
+              "penalty_value",
+              ".condition_bh_by_condition_target <- function",
+              '"condition_target_BH"',
+          ]
+          missing = [x for x in required_fit if x not in ridge_fit]
+          if missing:
+              raise RuntimeError(f"E-star/JSE output contract missing: {missing}")
+
           required_significance = [
               "global_support",
               "local_support",
               "coefficient$dictionary_support <- TRUE",
-              "current_scope_correlation_support",
-              "active <- statistically_supported",
-              "condition_bh_supported_common_dictionary_ridge_effects",
+              "condition_significant",
+              "edge_union_supported",
+              "supporting_conditions",
+              "all_conditions_fit_valid",
+              "active_in_regcompass",
+              '"any_condition_padj_exact_edge_union"',
               "penalty_effect",
           ]
           missing = [x for x in required_significance if x not in significance]
           if missing:
               raise RuntimeError(f"condition activity contract missing: {missing}")
-          forbidden_activity = [
-              "active <- statistically_supported & coefficient$dictionary_support",
-              "active <- statistically_supported & (global_support | local_support)",
-          ]
-          present = [x for x in forbidden_activity if x in significance]
-          if present:
-              raise RuntimeError(f"candidate provenance still vetoes fitted activity: {present}")
 
-          projection = Path("R/condition_grn_projection.R").read_text()
           required_projection = [
               ".condition_resolve_projection_targets",
               ".condition_validate_projection_cells",
+              "active_in_regcompass",
+              "penalty_effect",
               "fitted paired cell(s)",
           ]
-          missing = [
-              value for value in required_projection if value not in projection
-          ]
+          missing = [x for x in required_projection if x not in projection]
           if missing:
-              raise RuntimeError(
-                  f"projection contract is incomplete: {missing}"
-              )
+              raise RuntimeError(f"projection contract is incomplete: {missing}")
 
-          membership = Path(
-              "R/condition_grn_projection_membership.R"
-          ).read_text()
-          required_membership = [
-              "projected paired cell(s)",
-              "anyDuplicated(cell_id)",
-              "match(projected_cells, cell_id)",
+          required_standard = [
+              ".pando_standard_ridge_control <- function",
+              ".pando_standard_ridge_target <- function",
           ]
-          missing = [
-              value for value in required_membership if value not in membership
-          ]
+          missing = [x for x in required_standard if x not in standard_ridge]
           if missing:
-              raise RuntimeError(
-                  f"projection membership contract is incomplete: {missing}"
-              )
+              raise RuntimeError(f"standard ridge separation contract missing: {missing}")
+
+          profile_test = Path("tests/testthat/test-scheme-e-profile-information.R")
+          if not profile_test.exists():
+              raise RuntimeError("E-star/JSE numerical regression test is missing")
+
       - name: Parse package sources
         shell: Rscript {0}
         run: |
@@ -208,56 +257,67 @@ jobs:
             list.files("tests/testthat", pattern = "[.]R$", full.names = TRUE)
           )
           for (file in files) parse(file = file)
-      - name: Run lightweight contract tests
+
+      - name: Run lightweight E-star/JSE invariants
         shell: Rscript {0}
         run: |
-          source("R/condition_grn_projection.R")
-          source("R/condition_grn_projection_membership.R")
-          stopifnot(identical(
-            .condition_resolve_projection_targets(
-              c("tp53", "slc22a17"), c("TP53", "Slc22a17")
-            ),
-            c("TP53", "Slc22a17")
-          ))
-          ambiguous <- try(
-            .condition_resolve_projection_targets("gene", c("GENE", "gene")),
-            silent = TRUE
-          )
-          stopifnot(inherits(ambiguous, "try-error"))
-          fit <- list(
-            condition_levels = c("A", "B"),
-            condition_cell_ids = list(A = "cell1", B = "cell2")
-          )
-          cells <- .condition_validate_projection_cells(
-            fit, c("cell1", "cell2")
-          )
-          stopifnot(identical(cells$cells, c("cell1", "cell2")))
+          source("R/condition_sparse_deviation.R")
 
-          projection <- structure(list(
-            gene_score = matrix(
-              1, nrow = 2,
-              dimnames = list(c("cell1", "cell2"), "GENE")
-            )
-          ), class = c("PandoConditionProjection", "list"))
-          incomplete <- data.frame(
-            cell_id = "cell1", metacell_id = "mc1"
-          )
-          rejected <- try(
-            validate_condition_grn_projection_membership(
-              projection, incomplete
-            ),
-            silent = TRUE
-          )
-          stopifnot(inherits(rejected, "try-error"))
-          complete <- data.frame(
-            cell_id = c("cell2", "cell1", "other"),
-            metacell_id = c("mc1", "mc1", "other_mc")
-          )
-          selected <- validate_condition_grn_projection_membership(
-            projection, complete
-          )
-          stopifnot(identical(
-            as.character(selected$cell_id), c("cell1", "cell2")
+          control <- .condition_E_star_control(list(
+            solver_tol = 1e-12, solver_max_iter = 10000L
           ))
+          scalar <- .condition_E_star_fit(
+            H = matrix(4, 1, 1), r = 1.2, information = 4,
+            control = control
+          )
+          stopifnot(identical(scalar$status, "ok"))
+          stopifnot(abs(scalar$delta[[1]] - 0.175) < 1e-9)
+          stopifnot(scalar$kkt_residual < 1e-8)
+
+          q1 <- matrix(c(7, 1.2, 1.2, 3.5), 2, 2)
+          q2 <- matrix(c(2.5, -0.4, -0.4, 5), 2, 2)
+          q3 <- matrix(c(4.2, 0.7, 0.7, 6.1), 2, 2)
+          Q <- .condition_blockdiag(list(q1, q2, q3))
+          A <- kronecker(matrix(1, 3, 1), diag(2))
+          D <- matrix(0, 4, 6)
+          D[1, c(1, 3)] <- c(-1, 1)
+          D[2, c(1, 5)] <- c(-1, 1)
+          D[3, c(2, 4)] <- c(-1, 1)
+          D[4, c(2, 6)] <- c(-1, 1)
+          geometry <- .condition_q_orthogonal_decomposition(Q, A, D, 1e-12)
+          stopifnot(max(abs(D %*% geometry$R - diag(4))) < 1e-10)
+          stopifnot(max(abs(crossprod(A, Q %*% geometry$R))) < 1e-10)
+
+          H <- matrix(c(5, 2, 2, 4), 2, 2)
+          info <- .condition_profile_coordinate_information(H, 1e-12)
+          stopifnot(max(abs(info$information - 1 / diag(solve(H)))) < 1e-12)
+
+          make_fixture <- function(information, beta = 0.7) {
+            x <- lapply(information, function(one) {
+              a <- sqrt(one / 2)
+              matrix(c(-a, 0, a), ncol = 1,
+                     dimnames = list(NULL, "edge"))
+            })
+            names(x) <- paste0("C", seq_along(x))
+            residual_df <- 3L * length(x) - (length(x) + 1L)
+            residual_scale <- sqrt(residual_df / (6 * length(x)))
+            residual <- residual_scale * c(1, -2, 1)
+            y <- lapply(x, function(one) beta * one[, 1] + residual)
+            names(y) <- names(x)
+            list(x = x, y = y)
+          }
+          fixture <- make_fixture(c(100, 10, 10))
+          scaling <- list(center = c(edge = 0), scale = c(edge = 1))
+          joint <- .condition_joint_inference_design(
+            fixture$x, fixture$y, scaling, 1L,
+            list(component = matrix(1L, 3L, 1L)), 1e-12
+          )
+          rows <- .condition_joint_inference_fit(
+            joint, scaling, 1L, 3L, 1L, names(fixture$x)
+          )
+          stopifnot(identical(joint$status, "ok"))
+          stopifnot(abs(joint$sigma2 - 1) < 1e-10)
+          stopifnot(max(abs(rows$se[, 1] - 1 / sqrt(120))) < 1e-10)
+
       - name: Build source package
         run: R CMD build --no-build-vignettes --no-manual .

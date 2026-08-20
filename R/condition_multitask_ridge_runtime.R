@@ -1,7 +1,4 @@
-# Global-plus-condition common-dictionary ridge integration behind the canonical
-# infer_condition_grn.GRNData definition in condition_grn.R.
-
-.condition_ridge_fallback_key <- "condition_ridge_control"
+# Global-plus-condition common-dictionary E-star/JSE integration.
 
 .condition_candidate_support_table <- function(
     global_edges = NULL, condition_edges) {
@@ -49,9 +46,6 @@
         out$edge_id, out$source_type,
         ifelse(is.na(out$condition), "__global__", out$condition), sep = "\001"
     )
-    # Candidate discovery can encounter the same exact TF-peak-target triple by
-    # more than one motif path. The common dictionary and its provenance are
-    # exact-edge objects, so collapse those duplicates deterministically.
     out <- out[!duplicated(key), , drop = FALSE]
     out <- out[order(
         out$edge_id, out$source_type,
@@ -102,6 +96,7 @@
     small_condition_action = c("error", "drop_condition", "skip_cell_type"),
     adjust_method = "BH", padj_threshold = 0.05,
     rank_action = c("mark", "error"), min_residual_df = 1L,
+    reference_condition = NULL,
     parallel = FALSE, overwrite = FALSE, fallback_args = list(),
     verbose = TRUE, ...) {
     dots <- list(...)
@@ -118,9 +113,32 @@
     if (!is.list(fallback_args)) {
         stop("`fallback_args` must be a list.", call. = FALSE)
     }
-    control <- fallback_args[[.condition_ridge_fallback_key]]
-    fallback_args[[.condition_ridge_fallback_key]] <- NULL
-    control <- .condition_ridge_control(control)
+    if (!is.null(reference_condition)) {
+        reference_condition <- as.character(reference_condition)
+        if (length(reference_condition) != 1L || is.na(reference_condition) ||
+            !nzchar(trimws(reference_condition)) ||
+            reference_condition != trimws(reference_condition)) {
+            stop("`reference_condition` must be NULL or one complete condition label.",
+                 call. = FALSE)
+        }
+    }
+    obsolete <- intersect(
+        names(fallback_args),
+        c(
+            "condition_ridge_control", "condition_e_control",
+            "lambda_grid", "lambda_rule", "cv_folds",
+            "scheme_e_z", "z", "fusion_ratio"
+        )
+    )
+    if (length(obsolete)) {
+        stop(
+            "Conditional E-star z=0.25 no longer accepts obsolete fit-control ",
+            "arguments through `fallback_args`: ",
+            paste(obsolete, collapse = ", "), ".",
+            call. = FALSE
+        )
+    }
+    control <- .condition_E_star_control(list())
     peak_to_gene_method <- match.arg(peak_to_gene_method)
     small_condition_action <- match.arg(small_condition_action)
     rank_action <- match.arg(rank_action)
@@ -197,28 +215,36 @@
         type_cells <- rownames(metadata)[
             as.character(metadata[[cell_type_col]]) == type_label
         ]
-        type_conditions <- unique(as.character(
-            metadata[type_cells, condition_col]
-        ))
+        type_conditions <- condition_levels[
+            condition_levels %in%
+                as.character(metadata[type_cells, condition_col])
+        ]
         counts <- vapply(type_conditions, function(condition) {
             sum(as.character(metadata[type_cells, condition_col]) == condition)
         }, integer(1))
-        eligible <- type_conditions[counts >= as.integer(min_cells_per_condition)]
+        eligible <- type_conditions[
+            counts >= as.integer(min_cells_per_condition)
+        ]
         small <- setdiff(type_conditions, eligible)
         if (length(small)) {
             detail <- paste0(small, "=", counts[small], collapse = ", ")
             if (identical(small_condition_action, "error")) {
                 stop("Cell type `", type_label,
-                     "` has undersized condition(s): ", detail, call. = FALSE)
+                     "` has undersized condition(s): ", detail,
+                     call. = FALSE)
             }
             if (identical(small_condition_action, "skip_cell_type")) {
-                log_message("Skipping cell type ", type_label,
-                            " because condition(s) are undersized: ", detail,
-                            verbose = verbose)
+                log_message(
+                    "Skipping cell type ", type_label,
+                    " because condition(s) are undersized: ", detail,
+                    verbose = verbose
+                )
                 next
             }
-            log_message("Dropping undersized condition(s) for cell type ",
-                        type_label, ": ", detail, verbose = verbose)
+            log_message(
+                "Dropping undersized condition(s) for cell type ",
+                type_label, ": ", detail, verbose = verbose
+            )
         }
         if (length(eligible) < 2L) {
             if (identical(small_condition_action, "error")) {
@@ -228,10 +254,29 @@
             }
             next
         }
+        reference_condition_one <- if (is.null(reference_condition)) {
+            eligible[[1L]]
+        } else {
+            reference_condition
+        }
+        if (!reference_condition_one %in% eligible) {
+            stop(
+                "Predefined `reference_condition` `", reference_condition_one,
+                "` is not retained for cell type `", type_label,
+                "`. It must be present and pass `min_cells_per_condition`.",
+                call. = FALSE
+            )
+        }
 
-        cells_by_condition <- stats::setNames(lapply(eligible, function(condition) {
-            type_cells[as.character(metadata[type_cells, condition_col]) == condition]
-        }), eligible)
+        cells_by_condition <- stats::setNames(
+            lapply(eligible, function(condition) {
+                type_cells[
+                    as.character(metadata[type_cells, condition_col]) ==
+                        condition
+                ]
+            }),
+            eligible
+        )
         global_cells <- unique(unlist(cells_by_condition, use.names = FALSE))
         log_message(
             "Discovering pooled/global Pando candidates for cell type ",
@@ -244,8 +289,10 @@
             parallel = parallel, verbose = verbose
         )
         condition_edges <- lapply(eligible, function(condition) {
-            log_message("Discovering Pando candidates for ", type_label, " / ",
-                        condition, verbose = verbose)
+            log_message(
+                "Discovering Pando candidates for ", type_label, " / ",
+                condition, verbose = verbose
+            )
             .condition_discover_edges_compact(
                 prepared, cells_by_condition[[condition]],
                 source_label = condition, source_type = "condition",
@@ -258,9 +305,6 @@
         dictionary <- union_grn_edges(
             global_edges = global_edges, condition_edges = condition_edges
         )
-        # union_grn_edges() groups on the exact (target, tf, region) key. Keep an
-        # explicit assertion because duplicated dictionary edges would invalidate
-        # coefficient alignment across conditions.
         if (anyDuplicated(as.character(dictionary$edge_id))) {
             stop("Common condition dictionary contains duplicated exact edges.",
                  call. = FALSE)
@@ -272,8 +316,10 @@
             dictionary, support_table
         )
         if (!nrow(support_table) ||
-            !setequal(as.character(dictionary$edge_id),
-                      as.character(support_summary$edge_id)) ||
+            !setequal(
+                as.character(dictionary$edge_id),
+                as.character(support_summary$edge_id)
+            ) ||
             any(support_summary$n_sources < 1L)) {
             stop("Global/condition Pando support audit is inconsistent.",
                  call. = FALSE)
@@ -287,16 +333,21 @@
                  call. = FALSE)
         }
 
-        network_names <- stats::setNames(vapply(eligible, function(condition) {
-            paste0(
-                network_name, "__", .condition_safe_label(type_label),
-                "__condition__", .condition_safe_label(condition)
-            )
-        }, character(1)), eligible)
+        network_names <- stats::setNames(
+            vapply(eligible, function(condition) {
+                paste0(
+                    network_name, "__", .condition_safe_label(type_label),
+                    "__condition__", .condition_safe_label(condition)
+                )
+            }, character(1)),
+            eligible
+        )
         conflicts <- intersect(network_names, names(object@grn@networks))
         if (length(conflicts) && !isTRUE(overwrite)) {
-            stop("Network `", conflicts[[1L]],
-                 "` already exists; set overwrite=TRUE.", call. = FALSE)
+            stop(
+                "Network `", conflicts[[1L]],
+                "` already exists; set overwrite=TRUE.", call. = FALSE
+            )
         }
 
         skeleton <- list(
@@ -304,11 +355,14 @@
             model_schema = .condition_multitask_ridge_schema,
             fit_engine = .condition_fit_engine,
             coefficient_scale = "raw_tf_atac_interaction_units",
-            internal_predictor_scale = "equal_condition_within_condition_rms",
+            internal_predictor_scale =
+                "equal_condition_within_condition_rms",
+            inference_schema = .condition_E_star_inference_schema,
             inference_scope =
-                "approximate_ridge_wald_conditional_on_global_or_condition_pando_screened_dictionary_and_cv_lambda",
+                "E_star_z025_primary_fusion_component_joint_refit",
             cell_type = type_label,
             condition_levels = eligible,
+            reference_condition = reference_condition_one,
             condition_col = condition_col,
             cell_type_col = cell_type_col,
             condition_cell_ids = cells_by_condition,
@@ -323,6 +377,7 @@
             network_names = network_names,
             padj_threshold = padj_threshold,
             adjust_method = "BH",
+            bh_scope = "condition_target_BH",
             scale = FALSE,
             interaction = ":",
             projection_effect_column = "penalty_effect",
@@ -335,7 +390,7 @@
             peak_layer = prepared$peak_layer,
             peak_value_type = prepared$peak_value_type,
             preprocessing_fingerprint = prepared$preprocessing_fingerprint,
-            ridge_control = control
+            condition_e_control = control
         )
         class(skeleton) <- c("ConditionGRNFit", "list")
 
@@ -356,16 +411,24 @@
             network_index[[length(network_index) + 1L]] <- data.frame(
                 cell_type = type_label,
                 condition = condition,
+                reference_condition = reference_condition_one,
                 network_name = network_names[[condition]],
                 n_cells = length(cells_by_condition[[condition]]),
                 n_dictionary_edges = nrow(fitted$fit$edge_dictionary),
-                n_statistically_supported_edges =
-                    sum(one$statistically_supported %in% TRUE),
-                n_locally_supported_edges = sum(one$local_support %in% TRUE),
-                n_global_supported_edges = sum(one$global_support %in% TRUE),
-                n_projection_edges = sum(one$active %in% TRUE),
-                n_active_edges = sum(one$active %in% TRUE),
-                n_significant_edges = sum(one$active %in% TRUE),
+                n_condition_significant_edges =
+                    sum(one$condition_significant %in% TRUE),
+                n_regcompass_union_edges =
+                    sum(one$active_in_regcompass %in% TRUE),
+                n_locally_supported_edges =
+                    sum(one$local_support %in% TRUE),
+                n_global_supported_edges =
+                    sum(one$global_support %in% TRUE),
+                n_projection_edges =
+                    sum(one$active_in_regcompass %in% TRUE),
+                n_active_edges =
+                    sum(one$active_in_regcompass %in% TRUE),
+                n_significant_edges =
+                    sum(one$condition_significant %in% TRUE),
                 stringsAsFactors = FALSE
             )
         }
@@ -388,8 +451,10 @@
         .condition_fit_dictionary_policy
     object@grn@params$condition_projection_policy <-
         .condition_significant_projection_policy
-    object@grn@params$condition_ridge_control <- control
+    object@grn@params$condition_reference_condition <- reference_condition
+    object@grn@params$condition_e_control <- control
     object@grn@params$condition_grn_fits <- fits
-    object@grn@params$condition_network_index <- do.call(rbind, network_index)
+    object@grn@params$condition_network_index <-
+        do.call(rbind, network_index)
     object
 }

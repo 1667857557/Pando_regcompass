@@ -622,10 +622,15 @@ union_grn_edges <- function(global_edges = NULL, condition_edges) {
 #' on all eligible-condition cells pooled together and independently in every
 #' condition. Exact TF-peak-target triples passing both configured correlation
 #' gates in either scope are deduplicated into one frozen common dictionary.
-#' Every condition is then fitted once on that identical dictionary with a
-#' common-lambda ordinary ridge model and no cross-condition coefficient fusion.
-#' Without a usable condition column or with one condition level, standard Pando
-#' is used.
+#' Every retained condition is estimated in one K-condition E-star model at the
+#' fixed production deviation threshold z=0.25. The shared component is the
+#' unpenalized joint MLE, identifiable condition deviations receive the
+#' information-scaled sparse penalty, and zero-information tree coordinates are
+#' fixed to sharing. E-star fusion components define a reduced joint covariance;
+#' joint-refit Wald p-values are BH-adjusted within each condition x target
+#' family. RegCompass admission uses the any-condition adjusted-p-value union
+#' with an all-condition fit-validity requirement. With fewer than two usable
+#' conditions, standard Pando is used instead.
 #'
 #' @param object A `GRNData` object after motif matching.
 #' @param cell_type_col Broad cell-type metadata column.
@@ -639,13 +644,22 @@ union_grn_edges <- function(global_edges = NULL, condition_edges) {
 #'   discovery after ordinary range validation.
 #' @param min_cells_per_condition Minimum cells retained per condition.
 #' @param small_condition_action Error, drop the condition, or skip the cell type.
-#' @param adjust_method,padj_threshold Multiple-testing rule.
-#' @param rank_action,min_residual_df Ridge estimability controls.
+#' @param adjust_method,padj_threshold Conditional E-star/JSE requires BH. Raw
+#'   joint-refit Wald p-values are adjusted within each condition x target
+#'   family and condition support requires strict `padj < padj_threshold`.
+#' @param rank_action,min_residual_df Identifiable-subspace and residual-degree-
+#'   of-freedom controls for the joint E-star fit.
+#' @param reference_condition Optional predefined reference condition for the
+#'   K-condition contrast-tree geometry. It must be present and retained in every
+#'   fitted cell type. When `NULL`, the first retained condition is used. This is
+#'   a design coordinate, not a data-driven tuning parameter.
 #' @param BPPARAM Optional BiocParallel parameter.
 #' @param parallel_scope Automatic, cell-type, or target-level parallel scope.
-#' @param fallback_args Arguments used only by standard Pando fallback.
+#' @param fallback_args Arguments used only by standard Pando fallback. The
+#'   conditional route does not accept ridge-CV/lambda, alternative-z, or
+#'   fusion-ratio controls.
 #' @param ... Must be empty.
-#' @return A `GRNData` object with common-dictionary condition fits.
+#' @return A `GRNData` object with common-dictionary E-star/JSE condition fits.
 #' @export
 infer_condition_grn <- function(object, ...) {
     UseMethod(generic = "infer_condition_grn", object = object)
@@ -666,6 +680,7 @@ infer_condition_grn.GRNData <- function(
     small_condition_action = c("error", "drop_condition", "skip_cell_type"),
     adjust_method = "BH", padj_threshold = 0.05,
     rank_action = c("mark", "error"), min_residual_df = 1L,
+    reference_condition = NULL,
     parallel = FALSE, BPPARAM = NULL,
     parallel_scope = c("auto", "cell_type", "target"),
     overwrite = FALSE, fallback_args = list(), verbose = TRUE, ...) {
@@ -744,6 +759,7 @@ infer_condition_grn.GRNData <- function(
             padj_threshold = padj_threshold,
             rank_action = rank_action,
             min_residual_df = min_residual_df,
+            reference_condition = reference_condition,
             parallel = inner_parallel,
             overwrite = overwrite,
             fallback_args = fallback_args,
@@ -838,7 +854,10 @@ condition_grn_fit.GRNData <- function(
 #'
 #' @param fit A `ConditionGRNFit`.
 #' @param condition Fitted condition label.
-#' @param significant_only Return only active condition edges.
+#' @param significant_only If `TRUE`, return the exact-edge RegCompass union
+#'   admitted by all-condition fit validity plus any-condition
+#'   `padj < padj_threshold`, retaining the selected condition's own continuous
+#'   `penalty_effect`. This is not a condition-local significance filter.
 #' @return Edge table for the selected condition.
 #' @export
 condition_grn_subgraph <- function(fit, condition, significant_only = TRUE) {
@@ -855,7 +874,13 @@ condition_grn_subgraph <- function(fit, condition, significant_only = TRUE) {
         as.character(fit$coefficients$condition) == condition, , drop = FALSE
     ]
     if (isTRUE(significant_only)) {
-        answer <- answer[answer$significant %in% TRUE, , drop = FALSE]
+        if (!"active_in_regcompass" %in% colnames(answer)) {
+            stop("The condition fit lacks exact-edge RegCompass union flags.",
+                 call. = FALSE)
+        }
+        answer <- answer[
+            answer$active_in_regcompass %in% TRUE, , drop = FALSE
+        ]
     }
     answer
 }
@@ -863,13 +888,17 @@ condition_grn_subgraph <- function(fit, condition, significant_only = TRUE) {
 #' Project common-dictionary condition effects on paired cells
 #'
 #' Reconstructs TF RNA multiplied by peak ATAC on the original unscaled input and
-#' applies the condition coefficient. The default projection uses only active
-#' condition coefficients stored in `penalty_effect`.
+#' applies the continuous condition-specific E-star production coefficient.
+#' With `significant_only = TRUE`, projection first applies the RegCompass
+#' exact-edge any-condition BH union and then retains every admitted condition's
+#' own `penalty_effect`; it does not rebuild a condition-local significance
+#' topology.
 #'
 #' @param object Fitted `GRNData` object.
 #' @param fit A `ConditionGRNFit`.
 #' @param targets Optional target subset.
-#' @param significant_only Use `penalty_effect` rather than every estimate.
+#' @param significant_only Use the RegCompass exact-edge union before applying
+#'   continuous `penalty_effect`; if `FALSE`, project all finite estimates.
 #' @param return_edge_contributions Return the cell-by-edge matrix.
 #' @return A `PandoConditionProjection` list.
 #' @export
