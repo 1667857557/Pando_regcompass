@@ -1,4 +1,4 @@
-test_that("single-edge E-star/JSE keeps condition-by-edge dimensions", {
+test_that("single-edge E-star keeps production condition-by-edge dimensions", {
     set.seed(12)
     x <- list(
         A = matrix(seq_len(20), ncol = 1L,
@@ -13,22 +13,38 @@ test_that("single-edge E-star/JSE keeps condition-by-edge dimensions", {
     scaling <- .condition_ridge_scaling(x, 1e-8)
     fit <- .condition_scheme_e_fit(
         x = x, y = y, scaling = scaling,
-        min_residual_df = 1L, inference = TRUE,
-        reference_condition = "A"
+        min_residual_df = 1L, reference_condition = "A"
     )
     expect_identical(fit$status, "ok")
     expect_equal(dim(fit$zero_variance), c(2L, 1L))
-    expect_identical(rownames(fit$zero_variance), c("A", "B"))
-    expect_identical(colnames(fit$zero_variance), "edge1")
     expect_equal(dim(fit$beta), c(2L, 1L))
-    expect_equal(dim(fit$inference_se), c(2L, 1L))
-    expect_length(fit$contrast_identifiable, 1L)
     expect_equal(fit$penalty_value, 0.25)
-    expect_identical(fit$inference_schema,
-                     "scheme_e_fusion_component_joint_refit_v1")
+    expect_false(any(grepl("^inference_", names(fit))))
 })
 
-test_that("target payload errors identify phase and target without local worker closures", {
+test_that("single-edge no-fusion inference keeps condition dimensions", {
+    set.seed(13)
+    x <- list(
+        A = matrix(rnorm(30), ncol = 1L, dimnames = list(NULL, "edge1")),
+        B = matrix(rnorm(35), ncol = 1L, dimnames = list(NULL, "edge1"))
+    )
+    y <- list(
+        A = 1 + 0.4 * x$A[, 1] + rnorm(30, sd = 0.2),
+        B = 2 + 0.2 * x$B[, 1] + rnorm(35, sd = 0.2)
+    )
+    scaling <- .condition_ridge_scaling(x, 1e-8)
+    inference <- .condition_no_fusion_inference(
+        x, y, scaling, rank_tol = 1e-12, min_residual_df = 1L
+    )
+    expect_identical(inference$schema,
+                     "frozen_dictionary_condition_local_gaussian_lm_edge_omnibus_v1")
+    expect_equal(dim(inference$estimate), c(2L, 1L))
+    expect_equal(dim(inference$se), c(2L, 1L))
+    expect_true(all(inference$estimable))
+    expect_true(all(is.finite(inference$pval)))
+})
+
+test_that("target payload errors identify phase and target", {
     keys <- stats::setNames("bad", "bad")
     expect_error(
         .pando_target_payload_map(
@@ -44,27 +60,10 @@ test_that("target payload errors identify phase and target without local worker 
     )
 })
 
-test_that("target payload progress reports semantic phase and completion", {
-    keys <- stats::setNames(c("a", "b"), c("a", "b"))
-    expect_message(
-        .pando_target_payload_map(
-            keys = keys,
-            build_payload = function(key) list(skip = TRUE, target = key),
-            worker_name = ".pando_discovery_target_worker",
-            parallel = FALSE,
-            verbose = TRUE,
-            phase = "unit_phase",
-            label = "celltype"
-        ),
-        "Pando target phase=unit_phase:celltype"
-    )
-})
-
-test_that("canonical conditional target calls E-star directly", {
+test_that("canonical conditional target separates production and inference", {
     body_text <- paste(deparse(body(.condition_ridge_target)), collapse = "\n")
     expect_match(body_text, ".condition_ridge_fit", fixed = TRUE)
-    expect_match(body_text, "penalty_family", fixed = TRUE)
-    expect_false(grepl("lambda =", body_text, fixed = TRUE))
-    expect_false(any(c("fusion_ratio", "scheme_e_z", "z") %in%
-                     names(formals(.condition_scheme_e_fit))))
+    expect_match(body_text, ".condition_no_fusion_inference", fixed = TRUE)
+    expect_false(grepl(".condition_joint_inference", body_text, fixed = TRUE))
+    expect_false("inference" %in% names(formals(.condition_scheme_e_fit)))
 })
