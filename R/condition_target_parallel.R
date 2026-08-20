@@ -1,10 +1,8 @@
-# Canonical target-level execution helpers for condition and standard ridge GRNs.
+# Canonical target-level execution helpers for condition and standard GRN work.
 #
-# These helpers do not replace or wrap existing public methods. They are called
-# directly by the condition candidate-discovery and ridge-refit implementations.
 # Worker tasks contain only one target-specific compact payload plus scalar
-# diagnostic context; namespace-level worker functions avoid serializing the
-# mapper frame, accumulated outputs, or full prepared multiome matrices.
+# context; namespace-level workers avoid serializing the mapper frame,
+# accumulated outputs, or full prepared multiome matrices.
 
 .pando_condition_target_bpparam <- function() {
     value <- getOption("Pando.condition_target_BPPARAM", NULL)
@@ -340,8 +338,8 @@
 }
 
 .pando_ridge_target_payload <- function(
-    prepared, edge_dictionary, target, cells, folds, control,
-    min_residual_df, rank_action) {
+    prepared, edge_dictionary, target, cells, control,
+    min_residual_df, rank_action, reference_condition) {
     edges <- edge_dictionary[
         edge_dictionary$target == target, , drop = FALSE
     ]
@@ -358,10 +356,10 @@
         prepared = compact,
         edges = edges,
         cells = cells,
-        folds = folds,
         control = control,
         min_residual_df = min_residual_df,
-        rank_action = rank_action
+        rank_action = rank_action,
+        reference_condition = reference_condition
     )
 }
 
@@ -370,9 +368,9 @@
         prepared = payload$prepared,
         edges = payload$edges,
         cells_by_condition = payload$cells,
-        folds = payload$folds,
         control = payload$control,
         min_residual_df = payload$min_residual_df,
-        rank_action = payload$rank_action
+        rank_action = payload$rank_action,
+        reference_condition = payload$reference_condition
     )
 }
