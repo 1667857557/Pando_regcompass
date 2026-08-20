@@ -19,7 +19,7 @@ For RegCompass, regulatory regions are normally initialized from the predefined 
 
 # Production conditional GRN
 
-The production conditional engine is fixed to E-star/JSE with `z = 0.25`. There is no alternative-z grid, conditional ridge-CV lambda, fusion-ratio parameter, or data-driven sensitivity selection in this workflow.
+The production estimator is E-star with the single fixed deviation threshold `z = 0.25`. Formal edge inference is a separate no-fusion calculation on the same frozen dictionary. There is no alternative-z grid, conditional ridge-CV lambda, fusion-ratio parameter, or data-driven sensitivity selection in this workflow.
 
 ```r
 fit_object <- infer_condition_grn(
@@ -43,14 +43,12 @@ The parameters normally adjusted for a dataset are:
 - `tf_cor`, `peak_cor`: absolute Pando candidate-discovery correlation thresholds; both default to `0.05`.
 - `min_cells_per_condition`: minimum paired cells retained for each condition.
 - `small_condition_action`: `"error"`, `"drop_condition"`, or `"skip_cell_type"` for undersized conditions.
-- `padj_threshold`: strict BH threshold for condition-edge support; `padj == padj_threshold` is not significant.
-- `rank_action`, `min_residual_df`: estimability and residual-degree-of-freedom controls.
-- `reference_condition`: predefined experimental reference for the K-condition contrast-tree geometry. It must be present and retained in every fitted cell type. This is a design coordinate, not a tuning or sensitivity parameter. If omitted, the first retained condition is used and recorded.
+- `padj_threshold`: strict exact-edge whole-network BH threshold; `edge_padj == padj_threshold` is not supported.
+- `rank_action`, `min_residual_df`: estimability and residual-degree-of-freedom controls for production and no-fusion inference.
+- `reference_condition`: predefined experimental reference for the E-star K-condition contrast-tree geometry. It is a production coordinate, not an inference tuning parameter. If omitted, the first retained condition is used and recorded.
 - `parallel`, `BPPARAM`, `parallel_scope`: execution controls.
 
 Conditional ridge/CV controls such as `condition_ridge_control`, `lambda_grid`, `lambda_rule`, and `cv_folds`, as well as `scheme_e_z`, `z`, and `fusion_ratio`, are obsolete on this route and are rejected rather than silently ignored. Standard one-condition `infer_grn()` keeps its independent standard-model controls.
-
-For `K >= 3`, the predefined `reference_condition` is used to prefer a reference-star geometry whenever the relevant contrasts are identifiable. When a reference contrast for an exact edge is not identifiable, the solver first retains an identifiable non-reference contrast if available and then completes the spanning tree with zero-information boundary coordinates. The reference must be fixed from the experimental design before fitting and must not be selected after inspecting the GRN result.
 
 # Common exact-edge dictionary
 
@@ -64,9 +62,9 @@ Each exact edge uses an equal-condition within-condition RMS scale,
 s_e = \sqrt{K^{-1}\sum_c n_c^{-1}\sum_i(x_{cie}-\bar x_{ce})^2},
 \]
 
-while the Gaussian information retains the real condition cell counts through `X_c'X_c`. There is no `n_total / (K n_c)` condition-size equalization.
+while actual information differences remain in the condition design matrices and cell counts. There is no `n_total / (K n_c)` condition-size equalization.
 
-# E-star production coefficient
+# E-star z=0.25 production coefficient
 
 For stacked condition coefficients, E-star uses
 
@@ -86,49 +84,70 @@ For a scalar contrast this reduces to
 \hat\delta = \operatorname{sign}(d)\left(|d|-0.25/\sqrt{I}\right)_+.
 \]
 
-The full spanning contrast tree is retained in the production geometry. If a tree coordinate has zero profile information, its deviation is fixed exactly to zero and is marked `shared_by_boundary`; an identifiable coordinate shrunk exactly to zero is instead marked `fused_by_penalty`. These are different audit states.
+The full spanning contrast tree is retained in the production geometry. A zero-information coordinate is fixed exactly to zero and marked `shared_by_boundary`; an identifiable coordinate shrunk exactly to zero is marked `fused_by_penalty`. These states describe the production estimator only and are not reused to select statistically supported edges.
 
-`estimate` and `penalty_effect` are the same continuous production E-star coefficient in raw TF-by-ATAC units. Joint inference never overwrites them.
+`estimate` and `penalty_effect` are the same continuous production E-star coefficient in raw TF-by-ATAC units.
 
-# Fusion-component joint inference
+# Separate no-fusion inference
 
-Exact-zero tree deviations define per-edge fusion components. After the E-star structure is frozen, Pando constructs the equality-constrained reduced joint design with condition-specific intercepts and computes the full correlated covariance. This produces inference-only fields:
+For formal significance, each condition and target is refit independently with an unpenalized Gaussian linear model using an intercept and every exact edge in that target's frozen dictionary. This calculation does not use the E-star fusion graph.
+
+Condition-level inference fields are:
 
 ```text
 inference_schema
-inference_component_id
-inference_hypothesis_id
 inference_estimate
 inference_se
+inference_variance
 inference_statistic
-inference_estimable
-pval
+condition_inference_estimable
+condition_pval
+condition_inference_residual_df
+condition_inference_sigma2
+condition_inference_status
 ```
 
-Shared or partially shared edge components therefore borrow uncertainty information across the conditions in the same component while retaining covariance with the other correlated TF-by-ATAC predictors.
+An aliased coefficient is marked `condition_inference_estimable = FALSE` and its inference estimate, standard error, and P value remain unavailable; it is not replaced by zero. Estimable coefficients use the finite residual-degree-of-freedom t test used by Gaussian linear models.
 
-Raw P values are adjusted separately within each `condition x target` family. The coefficient table records `bh_scope = "condition_target_BH"` and the corresponding family size.
+These fields annotate formal inference only. They never overwrite `estimate` or `penalty_effect`.
 
-# Exact-edge RegCompass union
+# Exact-edge omnibus inference and whole-network BH
 
-For an exact edge `e`, Pando records whether every condition has a valid production coefficient and whether at least one condition has `padj < padj_threshold`. The RegCompass admission rule is:
+Each exact edge receives one raw P value across the conditions in which its no-fusion coefficient is estimable. If only one condition is estimable, the edge inherits that condition's exact t-test P value. If `m_e > 1` independent conditions are estimable,
 
 \[
-\text{edge_union_supported}_e =
-\left[\forall c:\;\text{fit_status}_{c,g(e)}=\text{"ok"}\;\land\;\beta^E_{c,e}\text{ finite}\right]
-\land
-\left[\exists c:\;q_{c,e}<\text{padj_threshold}\right].
+W_e = \sum_{c\in C_e}\frac{\hat b_{ce}^2}{\widehat{\mathrm{Var}}(\hat b_{ce})},
+\qquad W_e \sim \chi^2_{m_e}.
 \]
 
-If an exact edge is admitted, `active_in_regcompass = TRUE` for every condition row of that edge. A nonsignificant small condition therefore keeps its own continuous `penalty_effect`; it is not converted into a missing edge merely because its local power is lower.
+BH correction is then applied once across all estimable exact edges in the complete broad-cell-type network. It is not split by condition or target.
 
-`active` / `pando_estimation_active` and `active_in_regcompass` have different meanings: the former indicates a finite production E-star coefficient on the frozen dictionary, whereas the latter indicates admission to the common RegCompass topology.
+The edge-level output is stored in `fit$edge_inference`:
 
-Target full-data `R2 = 1 - RSS/TSS` is retained as a model diagnostic. It is not a conditional handoff gate and is not used to select `z`.
+```text
+edge_id target tf region atac_feature_id candidate_index
+edge_df edge_statistic edge_pval edge_padj
+edge_inference_estimable edge_inference_test
+inference_conditions all_conditions_fit_valid edge_supported
+bh_scope bh_family_size padj_threshold
+```
+
+The common topology rule is
+
+\[
+\text{edge_supported}_e=
+[\text{all conditions have valid finite production }\beta^E_{ce}]
+\land
+[\text{edge_padj}_e < \text{padj_threshold}].
+\]
+
+`active_in_regcompass` is therefore identical for every condition row of the same exact edge. Differences between conditions are represented by the continuous E-star coefficients, not by condition-specific present/absent topology.
+
+Target full-data `R2 = 1 - RSS/TSS` is retained as a production diagnostic. It is not a conditional handoff gate and is not used to select `z`.
 
 # Outputs
 
-Use `condition_grn_fit()` to retrieve the complete fit contract. Important coefficient fields include:
+Use `condition_grn_fit()` to retrieve the complete fit contract. Important condition-by-edge fields include:
 
 ```text
 target tf region edge_id condition z
@@ -136,14 +155,15 @@ estimate penalty_effect beta_shared condition_deviation
 contrast_identifiable shared_by_boundary boundary_condition
 fused_by_penalty fusion_component_id shared_edge
 raw_information_condition profile_information
-inference_estimate inference_se inference_statistic inference_estimable
-pval padj bh_scope bh_family_size condition_significant
-edge_union_supported supporting_conditions n_supporting_conditions
+inference_estimate inference_se inference_variance inference_statistic
+condition_inference_estimable condition_pval
+edge_df edge_statistic edge_pval edge_padj
+edge_inference_estimable edge_supported
 all_conditions_fit_valid active_in_regcompass
-rsq fit_status solver_status objective kkt_residual iterations
+fit_status solver_status objective kkt_residual iterations
 ```
 
-`condition_grn_subgraph(..., significant_only = TRUE)` and `project_condition_grn_cells(..., significant_only = TRUE)` use the exact-edge union handoff, not condition-local significance.
+`condition_grn_subgraph(..., significant_only = TRUE)` and `project_condition_grn_cells(..., significant_only = TRUE)` use the common exact-edge whole-network BH topology.
 
 ```r
 fit <- condition_grn_fit(fit_object, cell_type = "T_cell")
@@ -167,4 +187,4 @@ metacell_projection <- aggregate_condition_grn_projection(
 )
 ```
 
-Projection uses the admitted condition's continuous `penalty_effect * RNA(TF) * ATAC(peak)` on paired cells and aggregates only after cell-level regulatory scores are computed.
+Projection uses `penalty_effect * RNA(TF) * ATAC(peak)` for each condition on the common admitted edge set and aggregates only after cell-level regulatory scores are computed.
