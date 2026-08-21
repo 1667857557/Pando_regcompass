@@ -268,7 +268,8 @@
 
 .condition_ridge_fit_contract <- function(
     object, fit, prepared, control, rank_action = "mark",
-    min_residual_df = 1L, parallel = FALSE, verbose = TRUE) {
+    min_residual_df = 1L, parallel = FALSE, verbose = TRUE,
+    checkpoint_dir = NULL, resume = TRUE) {
     fit$adjust_method <- .condition_validate_adjust_method(fit$adjust_method)
     fit$padj_threshold <- .condition_validate_padj_threshold(fit$padj_threshold)
     control <- .condition_E_star_control(control)
@@ -289,7 +290,8 @@
         rank_action = rank_action, min_residual_df = min_residual_df,
         parallel = parallel, verbose = verbose,
         progress_phase = "E_star_z025_and_no_fusion_inference",
-        progress_label = progress_label
+        progress_label = progress_label,
+        checkpoint_dir = checkpoint_dir, resume = resume
     )
     final$fit$fit_dictionary_policy <- .condition_fit_dictionary_policy
     final$fit$candidate_edge_count <- nrow(dictionary)

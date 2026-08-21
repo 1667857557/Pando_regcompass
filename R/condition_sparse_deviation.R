@@ -127,6 +127,75 @@
     do.call(rbind, rows)
 }
 
+.condition_pair_information_blocks <- function(
+    q_blocks, conditions, rank_tol) {
+    k <- length(conditions)
+    if (length(q_blocks) != k || !k) {
+        stop("Pair-information blocks must match the conditions.",
+             call. = FALSE)
+    }
+    p <- nrow(q_blocks[[1L]])
+    if (p < 1L || any(vapply(q_blocks, function(block) {
+        !is.matrix(block) || !identical(dim(block), c(p, p)) ||
+            any(!is.finite(block))
+    }, logical(1)))) {
+        stop("Pair-information blocks must be finite square matrices.",
+             call. = FALSE)
+    }
+    eig <- lapply(q_blocks, function(block) {
+        eigen((block + t(block)) / 2, symmetric = TRUE)
+    })
+    global_scale <- max(1, unlist(lapply(eig, function(one) {
+        abs(one$values)
+    }), use.names = FALSE))
+    tolerance <- rank_tol * (k * p) * global_scale
+    decomposition <- lapply(eig, function(one) {
+        keep <- one$values > tolerance
+        if (any(keep)) {
+            vectors <- one$vectors[, keep, drop = FALSE]
+            inverse <- vectors %*% (t(vectors) / one$values[keep])
+            projector <- vectors %*% t(vectors)
+        } else {
+            inverse <- projector <- matrix(0, p, p)
+        }
+        list(inverse = inverse, projector = projector)
+    })
+    pairs <- utils::combn(seq_len(k), 2L, simplify = FALSE)
+    rows <- vector("list", p * length(pairs))
+    cursor <- 0L
+    estimability_tolerance <- max(1e-8, 40 * rank_tol)
+    for (edge in seq_len(p)) {
+        unit <- numeric(p); unit[[edge]] <- 1
+        for (pair in pairs) {
+            a <- pair[[1L]]
+            b <- pair[[2L]]
+            residual <- max(
+                abs(unit - decomposition[[a]]$projector[edge, ]),
+                abs(unit - decomposition[[b]]$projector[edge, ])
+            )
+            estimable <- residual <= estimability_tolerance
+            variance <- if (estimable) {
+                decomposition[[a]]$inverse[edge, edge] +
+                    decomposition[[b]]$inverse[edge, edge]
+            } else NA_real_
+            information <- if (estimable && is.finite(variance) &&
+                               variance > 0) 1 / variance else 0
+            cursor <- cursor + 1L
+            rows[[cursor]] <- data.frame(
+                edge_index = edge,
+                condition_a_index = a,
+                condition_b_index = b,
+                condition_a = conditions[[a]],
+                condition_b = conditions[[b]],
+                pair_information = information,
+                pair_estimable = information > 0,
+                stringsAsFactors = FALSE
+            )
+        }
+    }
+    do.call(rbind, rows)
+}
+
 .condition_maximum_spanning_tree <- function(vertices, edges, reference_index) {
     vertices <- sort(unique(as.integer(vertices)))
     if (length(vertices) < 2L) return(edges[FALSE, , drop = FALSE])
@@ -168,16 +237,19 @@
 }
 
 .condition_identifiable_contrast_tree <- function(
-    Q, p, conditions, reference_condition, rank_tol = 1e-10) {
+    Q, p, conditions, reference_condition, rank_tol = 1e-10,
+    q_blocks = NULL) {
     k <- length(conditions)
     reference_index <- match(reference_condition, conditions)
     if (is.na(reference_index)) {
         stop("`reference_condition` is not one of the fitted conditions.",
              call. = FALSE)
     }
-    pair_information <- .condition_pair_information(
-        Q, p, conditions, rank_tol
-    )
+    pair_information <- if (is.null(q_blocks)) {
+        .condition_pair_information(Q, p, conditions, rank_tol)
+    } else {
+        .condition_pair_information_blocks(q_blocks, conditions, rank_tol)
+    }
     selected_rows <- vector("list", p)
     boundary <- vector("list", p)
     vertices_used <- vector("list", p)
@@ -236,6 +308,7 @@
             R = matrix(0, nrow(Q), 0L),
             B0 = matrix(0, nrow(Q), 0L),
             shared_inverse = shared$inverse,
+            q_scale = q_scale,
             dr_error = 0,
             orthogonality_error = 0
         ))
@@ -251,8 +324,67 @@
         R = R,
         B0 = B0,
         shared_inverse = shared$inverse,
+        q_scale = q_scale,
         dr_error = dr_error,
         orthogonality_error = orthogonality_error
+    )
+}
+
+.condition_q_orthogonal_decomposition_blocks <- function(
+    q_blocks, D, rank_tol) {
+    k <- length(q_blocks)
+    if (!k) stop("Q geometry requires condition blocks.", call. = FALSE)
+    p <- nrow(q_blocks[[1L]])
+    if (p < 1L || any(vapply(q_blocks, function(block) {
+        !is.matrix(block) || !identical(dim(block), c(p, p)) ||
+            any(!is.finite(block))
+    }, logical(1)))) {
+        stop("Q geometry blocks must be finite square matrices.",
+             call. = FALSE)
+    }
+    if (!is.matrix(D) || ncol(D) != k * p || any(!is.finite(D))) {
+        stop("Q geometry contrast matrix is misaligned.", call. = FALSE)
+    }
+    q_scale <- max(1, unlist(lapply(q_blocks, function(block) {
+        abs(block)
+    }), use.names = FALSE))
+    q_scaled <- lapply(q_blocks, function(block) block / q_scale)
+    shared_system <- Reduce(`+`, q_scaled)
+    shared <- .condition_symmetric_pinv(shared_system, rank_tol)
+    if (!nrow(D)) {
+        empty <- matrix(0, k * p, 0L)
+        return(list(
+            R = empty, R_blocks = rep(list(matrix(0, p, 0L)), k),
+            B0 = empty, shared_inverse = shared$inverse,
+            q_scale = q_scale, dr_error = 0, orthogonality_error = 0
+        ))
+    }
+    dd_inverse <- .condition_symmetric_pinv(
+        tcrossprod(D), rank_tol
+    )$inverse
+    B0 <- t(D) %*% dd_inverse
+    block_index <- lapply(seq_len(k), function(condition) {
+        (condition - 1L) * p + seq_len(p)
+    })
+    B0_blocks <- lapply(block_index, function(index) {
+        B0[index, , drop = FALSE]
+    })
+    weighted_B0 <- Reduce(`+`, Map(function(block, basis) {
+        block %*% basis
+    }, q_scaled, B0_blocks))
+    shared_adjustment <- shared$inverse %*% weighted_B0
+    R_blocks <- lapply(B0_blocks, function(basis) {
+        basis - shared_adjustment
+    })
+    R <- do.call(rbind, R_blocks)
+    dr_error <- max(abs(D %*% R - diag(nrow(D))))
+    orthogonality_error <- max(abs(Reduce(`+`, Map(function(block, value) {
+        block %*% value
+    }, q_scaled, R_blocks))))
+    list(
+        R = R, R_blocks = R_blocks, B0 = B0,
+        shared_inverse = shared$inverse, q_scale = q_scale,
+        dr_error = dr_error, orthogonality_error = orthogonality_error
     )
 }
 
@@ -301,7 +433,7 @@
     max(value[active])
 }
 
-.condition_E_star_fit <- function(
+.condition_E_star_fit_reference <- function(
     H, r, information, control = .condition_E_star_control()) {
     control <- .condition_E_star_control(control)
     if (!length(r)) {
@@ -331,8 +463,16 @@
     Hs <- H[index, index, drop = FALSE]
     rs <- r[index]
     weights <- sqrt(information[index])
+    solver_scale <- max(
+        1, max(abs(Hs)), max(abs(rs)),
+        .condition_E_star_z * max(abs(weights))
+    )
+    H_solver <- Hs / solver_scale
+    r_solver <- rs / solver_scale
+    weights_solver <- weights / solver_scale
     lipschitz <- max(eigen(
-        (Hs + t(Hs)) / 2, symmetric = TRUE, only.values = TRUE
+        (H_solver + t(H_solver)) / 2,
+        symmetric = TRUE, only.values = TRUE
     )$values)
     if (!is.finite(lipschitz) || lipschitz <= 0) {
         return(list(
@@ -347,16 +487,25 @@
     kkt <- Inf
     objective <- Inf
     for (iteration in seq_len(control$solver_max_iter)) {
-        gradient <- as.numeric(Hs %*% accelerated - rs)
+        gradient <- as.numeric(H_solver %*% accelerated - r_solver)
         trial <- accelerated - gradient / lipschitz
-        threshold <- .condition_E_star_z * weights / lipschitz
+        threshold <- .condition_E_star_z * weights_solver / lipschitz
         next_value <- sign(trial) * pmax(abs(trial) - threshold, 0)
         next_momentum <- (1 + sqrt(1 + 4 * momentum^2)) / 2
         next_accelerated <- next_value +
             ((momentum - 1) / next_momentum) * (next_value - current)
-        current_gradient <- as.numeric(Hs %*% next_value - rs)
+        restart <- sum(
+            (accelerated - next_value) * (next_value - current)
+        ) > 0
+        if (isTRUE(restart)) {
+            next_momentum <- 1
+            next_accelerated <- next_value
+        }
+        current_gradient <- as.numeric(
+            H_solver %*% next_value - r_solver
+        )
         kkt <- .condition_E_star_kkt(
-            next_value, current_gradient, weights,
+            next_value, current_gradient, weights_solver,
             rep(TRUE, length(index)), .condition_E_star_z
         )
         full_delta <- numeric(length(r)); full_delta[index] <- next_value
@@ -381,6 +530,62 @@
         iterations = as.integer(iteration),
         kkt_residual = as.numeric(kkt),
         objective = as.numeric(objective)
+    )
+}
+
+.condition_E_star_fit <- function(
+    H, r, information, control = .condition_E_star_control()) {
+    control <- .condition_E_star_control(control)
+    native_loaded <- exists(
+        "condition_cpp_estar_solver", mode = "function", inherits = TRUE
+    ) && is.loaded("_Pando_condition_cpp_estar_solver")
+    if (!native_loaded) {
+        return(.condition_E_star_fit_reference(H, r, information, control))
+    }
+    if (!length(r)) {
+        return(list(
+            delta = numeric(), status = "ok", iterations = 0L,
+            kkt_residual = 0, objective = 0
+        ))
+    }
+    H <- (as.matrix(H) + t(as.matrix(H))) / 2
+    r <- as.numeric(r)
+    information <- as.numeric(information)
+    if (!identical(dim(H), c(length(r), length(r))) ||
+        length(information) != length(r) || any(!is.finite(H)) ||
+        any(!is.finite(r)) || any(!is.finite(information)) ||
+        any(information < 0)) {
+        stop("Invalid E-star profile system.", call. = FALSE)
+    }
+    active <- information > 0
+    if (!any(active)) {
+        return(list(
+            delta = numeric(length(r)), status = "ok", iterations = 0L,
+            kkt_residual = 0, objective = 0
+        ))
+    }
+    index <- which(active)
+    Hs <- H[index, index, drop = FALSE]
+    rs <- r[index]
+    weights <- sqrt(information[index])
+    solver_scale <- max(
+        1, max(abs(Hs)), max(abs(rs)),
+        .condition_E_star_z * max(abs(weights))
+    )
+    lipschitz <- max(eigen(
+        (Hs / solver_scale + t(Hs / solver_scale)) / 2,
+        symmetric = TRUE, only.values = TRUE
+    )$values)
+    if (!is.finite(lipschitz) || lipschitz <= 0) {
+        return(list(
+            delta = numeric(length(r)),
+            status = "invalid_profile_information", iterations = 0L,
+            kkt_residual = Inf, objective = Inf
+        ))
+    }
+    condition_cpp_estar_solver(
+        H, r, information, .condition_E_star_z, control$solver_tol,
+        control$solver_max_iter, solver_scale, lipschitz
     )
 }
 
@@ -556,21 +761,25 @@
         raw_information[i, keep] <- diag(q[[i]]) * scaling$scale[keep]^2
     }
 
-    Q <- .condition_blockdiag(q)
-    h <- unlist(h_condition, use.names = FALSE)
-    A <- kronecker(matrix(1, nrow = k, ncol = 1), diag(p))
     tree <- .condition_identifiable_contrast_tree(
-        Q = Q, p = p, conditions = conditions,
-        reference_condition = reference_condition, rank_tol = control$rank_tol
+        Q = NULL, p = p, conditions = conditions,
+        reference_condition = reference_condition, rank_tol = control$rank_tol,
+        q_blocks = q
     )
-    geometry <- .condition_q_orthogonal_decomposition(
-        Q, A, tree$D, control$rank_tol
+    geometry <- .condition_q_orthogonal_decomposition_blocks(
+        q, tree$D, control$rank_tol
     )
-    shared_score <- as.numeric(crossprod(A, h))
-    mu <- as.numeric(geometry$shared_inverse %*% shared_score)
-    H <- crossprod(geometry$R, Q %*% geometry$R)
+    shared_score <- Reduce(`+`, h_condition)
+    mu <- as.numeric(
+        geometry$shared_inverse %*% (shared_score / geometry$q_scale)
+    )
+    H <- Reduce(`+`, Map(function(R_block, q_block) {
+        crossprod(R_block, q_block %*% R_block)
+    }, geometry$R_blocks, q))
     H <- (H + t(H)) / 2
-    r <- as.numeric(crossprod(geometry$R, h))
+    r <- as.numeric(Reduce(`+`, Map(function(R_block, h_block) {
+        crossprod(R_block, h_block)
+    }, geometry$R_blocks, h_condition)))
     coordinate_information <- .condition_profile_coordinate_information(
         H, control$rank_tol
     )
@@ -584,7 +793,9 @@
         ))
     }
     delta <- solved$delta
-    beta_vector <- as.numeric(A %*% mu + geometry$R %*% delta)
+    beta_vector <- as.numeric(
+        rep(mu, times = k) + geometry$R %*% delta
+    )
     tree$metadata$profile_information <- coordinate_information$information
     tree$metadata$contrast_identifiable <- coordinate_information$estimable
     tree$metadata$shared_by_boundary <- !coordinate_information$estimable

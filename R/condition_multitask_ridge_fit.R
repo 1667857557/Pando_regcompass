@@ -169,12 +169,15 @@
 .condition_ridge_target <- function(
     prepared, edges, cells_by_condition, folds = NULL, control,
     min_residual_df, rank_action, reference_condition = NULL) {
-    x <- .condition_ridge_predictors(prepared, edges, cells_by_condition)
+    native_input <- .condition_native_predictors_scaling(
+        prepared, edges, cells_by_condition, control$scale_floor
+    )
+    x <- native_input$x
     y <- lapply(cells_by_condition, function(cells) {
         as.numeric(prepared$gene_data[cells, edges$target[[1L]]])
     })
     names(y) <- names(cells_by_condition)
-    scaling <- .condition_ridge_scaling(x, control$scale_floor)
+    scaling <- native_input$scaling
     fit <- .condition_ridge_fit(
         x = x, y = y, scaling = scaling,
         min_residual_df = min_residual_df, control = control,
@@ -348,7 +351,8 @@
 .condition_ridge_fit_contract_one_pass <- function(
     object, fit, prepared, control, rank_action = "mark",
     min_residual_df = 1L, parallel = FALSE, verbose = TRUE,
-    progress_phase = NULL, progress_label = NULL) {
+    progress_phase = NULL, progress_label = NULL,
+    checkpoint_dir = NULL, resume = TRUE) {
     .condition_validate_dictionary(fit$edge_dictionary, prepared)
     cells <- fit$condition_cell_ids[fit$condition_levels]
     if (length(cells) < 2L) {
@@ -363,6 +367,17 @@
     names(targets) <- targets
     if (is.null(progress_phase)) progress_phase <- "condition_Estar_z025"
     if (is.null(progress_label)) progress_label <- fit$cell_type %||% ""
+    checkpoint_fingerprint <- if (is.null(checkpoint_dir)) NULL else {
+        .condition_hash_object(list(
+            schema = "pando_Estar_target_checkpoint_input_v4_native_core",
+            preprocessing_fingerprint = prepared$preprocessing_fingerprint,
+            edge_id = as.character(fit$edge_dictionary$edge_id),
+            condition_cells = cells, control = control,
+            rank_action = rank_action,
+            min_residual_df = as.numeric(min_residual_df),
+            reference_condition = fit$reference_condition
+        ))
+    }
 
     result <- .pando_target_payload_map(
         keys = targets,
@@ -382,7 +397,10 @@
         parallel = parallel,
         verbose = verbose,
         phase = progress_phase,
-        label = progress_label
+        label = progress_label,
+        checkpoint_dir = checkpoint_dir,
+        resume = resume,
+        checkpoint_fingerprint = checkpoint_fingerprint
     )
 
     coefficient <- do.call(rbind, lapply(result, `[[`, "coefficients"))
