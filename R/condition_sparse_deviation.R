@@ -536,6 +536,12 @@
 .condition_E_star_fit <- function(
     H, r, information, control = .condition_E_star_control()) {
     control <- .condition_E_star_control(control)
+    native_loaded <- exists(
+        "condition_cpp_estar_solver", mode = "function", inherits = TRUE
+    ) && is.loaded("_Pando_condition_cpp_estar_solver")
+    if (!native_loaded) {
+        return(.condition_E_star_fit_reference(H, r, information, control))
+    }
     if (!length(r)) {
         return(list(
             delta = numeric(), status = "ok", iterations = 0L,
