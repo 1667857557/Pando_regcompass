@@ -35,6 +35,8 @@ infer_condition_grn(object, ...)
   parallel = FALSE,
   BPPARAM = NULL,
   parallel_scope = c("auto", "cell_type", "target"),
+  checkpoint_dir = NULL,
+  resume = TRUE,
   overwrite = FALSE,
   fallback_args = list(),
   verbose = TRUE,
@@ -60,6 +62,8 @@ infer_condition_grn(object, ...)
 \item{parallel}{Enable target/cell-type parallel execution.}
 \item{BPPARAM}{\code{NULL}, \code{FALSE}, or a \code{BiocParallelParam}.}
 \item{parallel_scope}{Parallelization level: \code{"auto"}, \code{"cell_type"}, or \code{"target"}.}
+\item{checkpoint_dir}{Optional persistent directory for target-level checkpoints. Candidate discovery and E-star/separate-inference results are saved after every target and reused only when their exact input fingerprint matches.}
+\item{resume}{Reuse valid target checkpoints when \code{checkpoint_dir} is supplied. Set to \code{FALSE} to recompute and replace them.}
 \item{overwrite}{Replace generated networks with matching names.}
 \item{fallback_args}{Additional arguments used only by the standard Pando fallback. The conditional route does not accept ridge-CV/lambda, fusion-ratio, alternative-z, or sensitivity-grid controls.}
 \item{verbose}{Display progress messages.}

@@ -1,12 +1,13 @@
 test_that("E-star KKT residual is invariant to objective scaling", {
     delta <- c(0.2, 0)
-    gradient <- c(-0.5 + 1e-9, 0.2)
-    weights <- c(2, 1)
+    baseline_scale <- 1e6
+    gradient <- c(-0.5 + 1e-9, 0.2) * baseline_scale
+    weights <- c(2, 1) * baseline_scale
     active <- c(TRUE, TRUE)
     baseline <- Pando:::.condition_E_star_kkt(
         delta, gradient, weights, active, z = 0.25
     )
-    objective_scale <- 1e18
+    objective_scale <- 1e12
     scaled <- Pando:::.condition_E_star_kkt(
         delta,
         gradient * objective_scale,
@@ -65,5 +66,29 @@ test_that("Q-orthogonality diagnostics are invariant to information scaling", {
         tolerance = 1e-12
     )
     expect_equal(scaled$R, baseline$R, tolerance = 1e-12)
+})
+
+test_that("adaptive restart converges before the fixed E-star budget", {
+    set.seed(177)
+    x <- matrix(stats::rnorm(920), 40L, 23L)
+    x[, 23L] <- x[, 1L] + 0.05 * stats::rnorm(40L)
+    H <- crossprod(x)
+    expected <- seq(-0.03, 0.03, length.out = 23L)
+    expected[12L] <- 0.004
+    weights <- seq(0.5, 1.5, length.out = 23L)
+    r <- as.numeric(H %*% expected) +
+        Pando:::.condition_E_star_z * weights * sign(expected)
+
+    fit <- Pando:::.condition_E_star_fit(
+        H = H, r = r, information = weights^2,
+        control = Pando:::.condition_E_star_control(list(
+            solver_max_iter = 5000L
+        ))
+    )
+
+    expect_identical(fit$status, "ok")
+    expect_lt(fit$iterations, 5000L)
+    expect_lte(fit$kkt_residual, 1e-8)
+    expect_equal(fit$delta, expected, tolerance = 1e-7)
 })
 

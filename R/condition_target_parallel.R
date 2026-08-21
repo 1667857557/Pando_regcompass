@@ -32,6 +32,85 @@
     if (nzchar(label)) paste0(phase, ":", label) else phase
 }
 
+.pando_target_checkpoint_schema <- "pando_target_checkpoint_v1"
+
+.pando_target_checkpoint_config <- function(
+    checkpoint_dir = NULL, resume = TRUE, phase_label, fingerprint = NULL) {
+    if (is.null(checkpoint_dir)) return(NULL)
+    if (!is.character(checkpoint_dir) || length(checkpoint_dir) != 1L ||
+        is.na(checkpoint_dir) || !nzchar(trimws(checkpoint_dir))) {
+        stop("`checkpoint_dir` must be NULL or one non-empty path.",
+             call. = FALSE)
+    }
+    if (!is.logical(resume) || length(resume) != 1L || is.na(resume)) {
+        stop("`resume` must be either TRUE or FALSE.", call. = FALSE)
+    }
+    fingerprint <- as.character(fingerprint %||% "")
+    if (length(fingerprint) != 1L || is.na(fingerprint) ||
+        !nzchar(fingerprint)) {
+        stop("Checkpointing requires one non-empty input fingerprint.",
+             call. = FALSE)
+    }
+    safe_phase <- gsub("[^[:alnum:]_.-]+", "_", phase_label)
+    directory <- file.path(
+        normalizePath(checkpoint_dir, winslash = "/", mustWork = FALSE),
+        paste0(safe_phase, "__", substr(fingerprint, 1L, 16L))
+    )
+    dir.create(directory, recursive = TRUE, showWarnings = FALSE)
+    if (!dir.exists(directory)) {
+        stop("Could not create Pando target checkpoint directory: ",
+             directory, call. = FALSE)
+    }
+    list(
+        directory = directory, resume = resume,
+        phase_label = phase_label, fingerprint = fingerprint
+    )
+}
+
+.pando_target_checkpoint_path <- function(config, key) {
+    key_hash <- .condition_hash_object(as.character(key))
+    file.path(config$directory, paste0(key_hash, ".rds"))
+}
+
+.pando_read_target_checkpoint <- function(config, key) {
+    if (is.null(config) || !isTRUE(config$resume)) {
+        return(list(hit = FALSE, result = NULL))
+    }
+    path <- .pando_target_checkpoint_path(config, key)
+    if (!file.exists(path)) return(list(hit = FALSE, result = NULL))
+    payload <- tryCatch(readRDS(path), error = function(error) NULL)
+    valid <- is.list(payload) &&
+        identical(payload$schema_version, .pando_target_checkpoint_schema) &&
+        identical(as.character(payload$key), as.character(key)) &&
+        identical(payload$phase_label, config$phase_label) &&
+        identical(payload$fingerprint, config$fingerprint) &&
+        "result" %in% names(payload)
+    if (!valid) return(list(hit = FALSE, result = NULL))
+    list(hit = TRUE, result = payload$result)
+}
+
+.pando_write_target_checkpoint <- function(config, key, result) {
+    if (is.null(config)) return(invisible(FALSE))
+    path <- .pando_target_checkpoint_path(config, key)
+    payload <- list(
+        schema_version = .pando_target_checkpoint_schema,
+        key = as.character(key),
+        phase_label = config$phase_label,
+        fingerprint = config$fingerprint,
+        result = result
+    )
+    temporary <- tempfile("pando_target_", tmpdir = dirname(path),
+                          fileext = ".rds")
+    on.exit(unlink(temporary), add = TRUE)
+    saveRDS(payload, temporary, version = 2L)
+    if (file.exists(path)) unlink(path)
+    if (!file.rename(temporary, path)) {
+        stop("Could not publish Pando target checkpoint for `",
+             key, "`.", call. = FALSE)
+    }
+    invisible(TRUE)
+}
+
 .pando_target_execute_task <- function(task) {
     on.exit(invisible(gc(verbose = FALSE, full = TRUE)), add = TRUE)
     if (!is.list(task) || !is.character(task$worker_name) ||
@@ -44,8 +123,14 @@
     if (!is.function(worker)) {
         stop("Unknown Pando target worker: ", task$worker_name, call. = FALSE)
     }
+    cached <- .pando_read_target_checkpoint(task$checkpoint, task$key)
+    if (isTRUE(cached$hit)) return(cached$result)
     tryCatch(
-        worker(task$payload),
+        {
+            result <- worker(task$payload)
+            .pando_write_target_checkpoint(task$checkpoint, task$key, result)
+            result
+        },
         error = function(error) {
             stop(
                 "Pando target task failed [phase=", task$phase_label,
@@ -58,7 +143,8 @@
 
 .pando_target_payload_map <- function(
     keys, build_payload, worker_name, parallel = FALSE, verbose = TRUE,
-    phase = "target_work", label = NULL) {
+    phase = "target_work", label = NULL, checkpoint_dir = NULL,
+    resume = TRUE, checkpoint_fingerprint = NULL) {
     if (!length(keys)) return(list())
     if (!is.function(build_payload)) {
         stop("Target payload mapping requires a payload builder.", call. = FALSE)
@@ -82,8 +168,28 @@
     phase_label <- .pando_target_phase_label(phase, label)
     out <- vector("list", length(keys))
     names(out) <- key_names
-    batch_size <- min(length(keys), .pando_target_worker_limit(parallel))
-    starts <- seq.int(1L, length(keys), by = batch_size)
+    checkpoint <- .pando_target_checkpoint_config(
+        checkpoint_dir = checkpoint_dir, resume = resume,
+        phase_label = phase_label, fingerprint = checkpoint_fingerprint
+    )
+    cached <- lapply(seq_along(keys), function(i) {
+        .pando_read_target_checkpoint(checkpoint, key_names[[i]])
+    })
+    cached_hit <- vapply(cached, `[[`, logical(1), "hit")
+    if (any(cached_hit)) {
+        out[cached_hit] <- lapply(cached[cached_hit], `[[`, "result")
+    }
+    pending <- which(!cached_hit)
+    if (!length(pending)) {
+        if (isTRUE(verbose)) {
+            message("Pando target phase=", phase_label,
+                    " | resumed=", length(keys), "/", length(keys),
+                    " (100.0%);pending=0")
+        }
+        return(out)
+    }
+    batch_size <- min(length(pending), .pando_target_worker_limit(parallel))
+    starts <- seq.int(1L, length(pending), by = batch_size)
     n_batches <- length(starts)
 
     if (isTRUE(verbose)) {
@@ -92,20 +198,25 @@
             " | started | targets=", length(keys),
             ";batch_size=", batch_size,
             ";batches=", n_batches,
-            ";parallel=", isTRUE(parallel)
+            ";parallel=", isTRUE(parallel),
+            ";resumed=", sum(cached_hit)
         )
     }
 
     for (batch_index in seq_along(starts)) {
         start <- starts[[batch_index]]
-        index <- seq.int(start, min(length(keys), start + batch_size - 1L))
+        pending_index <- seq.int(
+            start, min(length(pending), start + batch_size - 1L)
+        )
+        index <- pending[pending_index]
         payloads <- lapply(index, function(i) build_payload(keys[[i]]))
         tasks <- lapply(seq_along(payloads), function(j) {
             list(
                 key = key_names[index[[j]]],
                 phase_label = phase_label,
                 worker_name = worker_name,
-                payload = payloads[[j]]
+                payload = payloads[[j]],
+                checkpoint = checkpoint
             )
         })
         names(tasks) <- key_names[index]
@@ -131,8 +242,12 @@
         if (isTRUE(verbose)) {
             message(
                 "Pando target phase=", phase_label,
-                " | completed=", max(index), "/", length(keys),
-                " (", sprintf("%.1f", 100 * max(index) / length(keys)), "%)",
+                " | completed=", sum(cached_hit) + max(pending_index),
+                "/", length(keys),
+                " (", sprintf(
+                    "%.1f", 100 * (sum(cached_hit) + max(pending_index)) /
+                        length(keys)
+                ), "%)",
                 ";batch=", batch_index, "/", n_batches
             )
         }
@@ -270,7 +385,8 @@
 
 .condition_discover_edges_compact <- function(
     prepared, cells, source_label, source_type, tf_cor, peak_cor,
-    parallel = FALSE, verbose = TRUE) {
+    parallel = FALSE, verbose = TRUE, checkpoint_dir = NULL,
+    resume = TRUE) {
     cells <- intersect(as.character(cells), rownames(prepared$gene_data))
     if (length(cells) < 3L) {
         stop("Candidate discovery requires at least three paired cells.",
@@ -291,6 +407,16 @@
     } else {
         "candidate_global"
     }
+    checkpoint_fingerprint <- if (is.null(checkpoint_dir)) NULL else {
+        .condition_hash_object(list(
+            schema = "pando_candidate_target_checkpoint_input_v1",
+            preprocessing_fingerprint = prepared$preprocessing_fingerprint,
+            features = as.character(features), cells = as.character(cells),
+            source_label = as.character(source_label),
+            source_type = as.character(source_type),
+            tf_cor = as.numeric(tf_cor), peak_cor = as.numeric(peak_cor)
+        ))
+    }
     rows <- .pando_target_payload_map(
         keys = features,
         build_payload = function(target) {
@@ -308,7 +434,10 @@
         parallel = parallel,
         verbose = verbose,
         phase = phase,
-        label = source_label
+        label = source_label,
+        checkpoint_dir = checkpoint_dir,
+        resume = resume,
+        checkpoint_fingerprint = checkpoint_fingerprint
     )
     rows <- rows[!vapply(rows, is.null, logical(1))]
     if (!length(rows)) {

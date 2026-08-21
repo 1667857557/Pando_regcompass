@@ -657,6 +657,12 @@ union_grn_edges <- function(global_edges = NULL, condition_edges) {
 #'   This is a production-model coordinate, not an inference tuning parameter.
 #' @param BPPARAM Optional BiocParallel parameter.
 #' @param parallel_scope Automatic, cell-type, or target-level parallel scope.
+#' @param checkpoint_dir Optional persistent directory for target-level
+#'   checkpoints. Candidate discovery and E-star/separate-inference results are
+#'   saved after every target and reused only when their input fingerprint
+#'   matches exactly.
+#' @param resume Logical. Reuse valid target checkpoints when `checkpoint_dir`
+#'   is supplied. Set to `FALSE` to recompute and replace them.
 #' @param fallback_args Arguments used only by standard Pando fallback. The
 #'   conditional route does not accept ridge-CV/lambda, alternative-z, or
 #'   fusion-ratio controls.
@@ -687,6 +693,7 @@ infer_condition_grn.GRNData <- function(
     reference_condition = NULL,
     parallel = FALSE, BPPARAM = NULL,
     parallel_scope = c("auto", "cell_type", "target"),
+    checkpoint_dir = NULL, resume = TRUE,
     overwrite = FALSE, fallback_args = list(), verbose = TRUE, ...) {
     dots <- list(...)
     if (length(dots)) {
@@ -765,6 +772,8 @@ infer_condition_grn.GRNData <- function(
             min_residual_df = min_residual_df,
             reference_condition = reference_condition,
             parallel = inner_parallel,
+            checkpoint_dir = checkpoint_dir,
+            resume = resume,
             overwrite = overwrite,
             fallback_args = fallback_args,
             verbose = verbose

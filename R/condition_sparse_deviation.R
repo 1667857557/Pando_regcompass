@@ -331,8 +331,16 @@
     Hs <- H[index, index, drop = FALSE]
     rs <- r[index]
     weights <- sqrt(information[index])
+    solver_scale <- max(
+        1, max(abs(Hs)), max(abs(rs)),
+        .condition_E_star_z * max(abs(weights))
+    )
+    H_solver <- Hs / solver_scale
+    r_solver <- rs / solver_scale
+    weights_solver <- weights / solver_scale
     lipschitz <- max(eigen(
-        (Hs + t(Hs)) / 2, symmetric = TRUE, only.values = TRUE
+        (H_solver + t(H_solver)) / 2,
+        symmetric = TRUE, only.values = TRUE
     )$values)
     if (!is.finite(lipschitz) || lipschitz <= 0) {
         return(list(
@@ -347,16 +355,25 @@
     kkt <- Inf
     objective <- Inf
     for (iteration in seq_len(control$solver_max_iter)) {
-        gradient <- as.numeric(Hs %*% accelerated - rs)
+        gradient <- as.numeric(H_solver %*% accelerated - r_solver)
         trial <- accelerated - gradient / lipschitz
-        threshold <- .condition_E_star_z * weights / lipschitz
+        threshold <- .condition_E_star_z * weights_solver / lipschitz
         next_value <- sign(trial) * pmax(abs(trial) - threshold, 0)
         next_momentum <- (1 + sqrt(1 + 4 * momentum^2)) / 2
         next_accelerated <- next_value +
             ((momentum - 1) / next_momentum) * (next_value - current)
-        current_gradient <- as.numeric(Hs %*% next_value - rs)
+        restart <- sum(
+            (accelerated - next_value) * (next_value - current)
+        ) > 0
+        if (isTRUE(restart)) {
+            next_momentum <- 1
+            next_accelerated <- next_value
+        }
+        current_gradient <- as.numeric(
+            H_solver %*% next_value - r_solver
+        )
         kkt <- .condition_E_star_kkt(
-            next_value, current_gradient, weights,
+            next_value, current_gradient, weights_solver,
             rep(TRUE, length(index)), .condition_E_star_z
         )
         full_delta <- numeric(length(r)); full_delta[index] <- next_value

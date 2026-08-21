@@ -98,6 +98,7 @@
     rank_action = c("mark", "error"), min_residual_df = 1L,
     reference_condition = NULL,
     parallel = FALSE, overwrite = FALSE, fallback_args = list(),
+    checkpoint_dir = NULL, resume = TRUE,
     verbose = TRUE, ...) {
     dots <- list(...)
     if (length(dots)) {
@@ -112,6 +113,15 @@
     }
     if (!is.list(fallback_args)) {
         stop("`fallback_args` must be a list.", call. = FALSE)
+    }
+    if (!is.null(checkpoint_dir) &&
+        (!is.character(checkpoint_dir) || length(checkpoint_dir) != 1L ||
+         is.na(checkpoint_dir) || !nzchar(trimws(checkpoint_dir)))) {
+        stop("`checkpoint_dir` must be NULL or one non-empty path.",
+             call. = FALSE)
+    }
+    if (!is.logical(resume) || length(resume) != 1L || is.na(resume)) {
+        stop("`resume` must be either TRUE or FALSE.", call. = FALSE)
     }
     if (!is.null(reference_condition)) {
         reference_condition <- as.character(reference_condition)
@@ -286,7 +296,8 @@
             prepared, global_cells,
             source_label = "global", source_type = "global",
             tf_cor = tf_cor, peak_cor = peak_cor,
-            parallel = parallel, verbose = verbose
+            parallel = parallel, verbose = verbose,
+            checkpoint_dir = checkpoint_dir, resume = resume
         )
         condition_edges <- lapply(eligible, function(condition) {
             log_message(
@@ -297,7 +308,8 @@
                 prepared, cells_by_condition[[condition]],
                 source_label = condition, source_type = "condition",
                 tf_cor = tf_cor, peak_cor = peak_cor,
-                parallel = parallel, verbose = verbose
+                parallel = parallel, verbose = verbose,
+                checkpoint_dir = checkpoint_dir, resume = resume
             )
         })
         names(condition_edges) <- eligible
@@ -396,7 +408,8 @@
             object = object, fit = skeleton, prepared = prepared,
             control = control, rank_action = rank_action,
             min_residual_df = min_residual_df,
-            parallel = parallel, verbose = verbose
+            parallel = parallel, verbose = verbose,
+            checkpoint_dir = checkpoint_dir, resume = resume
         )
         object <- fitted$object
         fits[[type_label]] <- fitted$fit
