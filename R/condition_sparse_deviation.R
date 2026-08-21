@@ -330,6 +330,64 @@
     )
 }
 
+.condition_q_orthogonal_decomposition_blocks <- function(
+    q_blocks, D, rank_tol) {
+    k <- length(q_blocks)
+    if (!k) stop("Q geometry requires condition blocks.", call. = FALSE)
+    p <- nrow(q_blocks[[1L]])
+    if (p < 1L || any(vapply(q_blocks, function(block) {
+        !is.matrix(block) || !identical(dim(block), c(p, p)) ||
+            any(!is.finite(block))
+    }, logical(1)))) {
+        stop("Q geometry blocks must be finite square matrices.",
+             call. = FALSE)
+    }
+    if (!is.matrix(D) || ncol(D) != k * p || any(!is.finite(D))) {
+        stop("Q geometry contrast matrix is misaligned.", call. = FALSE)
+    }
+    q_scale <- max(1, unlist(lapply(q_blocks, function(block) {
+        abs(block)
+    }), use.names = FALSE))
+    q_scaled <- lapply(q_blocks, function(block) block / q_scale)
+    shared_system <- Reduce(`+`, q_scaled)
+    shared <- .condition_symmetric_pinv(shared_system, rank_tol)
+    if (!nrow(D)) {
+        empty <- matrix(0, k * p, 0L)
+        return(list(
+            R = empty, R_blocks = rep(list(matrix(0, p, 0L)), k),
+            B0 = empty, shared_inverse = shared$inverse,
+            q_scale = q_scale, dr_error = 0, orthogonality_error = 0
+        ))
+    }
+    dd_inverse <- .condition_symmetric_pinv(
+        tcrossprod(D), rank_tol
+    )$inverse
+    B0 <- t(D) %*% dd_inverse
+    block_index <- lapply(seq_len(k), function(condition) {
+        (condition - 1L) * p + seq_len(p)
+    })
+    B0_blocks <- lapply(block_index, function(index) {
+        B0[index, , drop = FALSE]
+    })
+    weighted_B0 <- Reduce(`+`, Map(function(block, basis) {
+        block %*% basis
+    }, q_scaled, B0_blocks))
+    shared_adjustment <- shared$inverse %*% weighted_B0
+    R_blocks <- lapply(B0_blocks, function(basis) {
+        basis - shared_adjustment
+    })
+    R <- do.call(rbind, R_blocks)
+    dr_error <- max(abs(D %*% R - diag(nrow(D))))
+    orthogonality_error <- max(abs(Reduce(`+`, Map(function(block, value) {
+        block %*% value
+    }, q_scaled, R_blocks))))
+    list(
+        R = R, R_blocks = R_blocks, B0 = B0,
+        shared_inverse = shared$inverse, q_scale = q_scale,
+        dr_error = dr_error, orthogonality_error = orthogonality_error
+    )
+}
+
 .condition_profile_coordinate_information <- function(H, rank_tol) {
     if (!nrow(H)) {
         return(list(
@@ -375,7 +433,7 @@
     max(value[active])
 }
 
-.condition_E_star_fit <- function(
+.condition_E_star_fit_reference <- function(
     H, r, information, control = .condition_E_star_control()) {
     control <- .condition_E_star_control(control)
     if (!length(r)) {
@@ -472,6 +530,56 @@
         iterations = as.integer(iteration),
         kkt_residual = as.numeric(kkt),
         objective = as.numeric(objective)
+    )
+}
+
+.condition_E_star_fit <- function(
+    H, r, information, control = .condition_E_star_control()) {
+    control <- .condition_E_star_control(control)
+    if (!length(r)) {
+        return(list(
+            delta = numeric(), status = "ok", iterations = 0L,
+            kkt_residual = 0, objective = 0
+        ))
+    }
+    H <- (as.matrix(H) + t(as.matrix(H))) / 2
+    r <- as.numeric(r)
+    information <- as.numeric(information)
+    if (!identical(dim(H), c(length(r), length(r))) ||
+        length(information) != length(r) || any(!is.finite(H)) ||
+        any(!is.finite(r)) || any(!is.finite(information)) ||
+        any(information < 0)) {
+        stop("Invalid E-star profile system.", call. = FALSE)
+    }
+    active <- information > 0
+    if (!any(active)) {
+        return(list(
+            delta = numeric(length(r)), status = "ok", iterations = 0L,
+            kkt_residual = 0, objective = 0
+        ))
+    }
+    index <- which(active)
+    Hs <- H[index, index, drop = FALSE]
+    rs <- r[index]
+    weights <- sqrt(information[index])
+    solver_scale <- max(
+        1, max(abs(Hs)), max(abs(rs)),
+        .condition_E_star_z * max(abs(weights))
+    )
+    lipschitz <- max(eigen(
+        (Hs / solver_scale + t(Hs / solver_scale)) / 2,
+        symmetric = TRUE, only.values = TRUE
+    )$values)
+    if (!is.finite(lipschitz) || lipschitz <= 0) {
+        return(list(
+            delta = numeric(length(r)),
+            status = "invalid_profile_information", iterations = 0L,
+            kkt_residual = Inf, objective = Inf
+        ))
+    }
+    condition_cpp_estar_solver(
+        H, r, information, .condition_E_star_z, control$solver_tol,
+        control$solver_max_iter, solver_scale, lipschitz
     )
 }
 
@@ -647,24 +755,25 @@
         raw_information[i, keep] <- diag(q[[i]]) * scaling$scale[keep]^2
     }
 
-    Q <- .condition_blockdiag(q)
-    h <- unlist(h_condition, use.names = FALSE)
-    A <- kronecker(matrix(1, nrow = k, ncol = 1), diag(p))
     tree <- .condition_identifiable_contrast_tree(
-        Q = Q, p = p, conditions = conditions,
+        Q = NULL, p = p, conditions = conditions,
         reference_condition = reference_condition, rank_tol = control$rank_tol,
         q_blocks = q
     )
-    geometry <- .condition_q_orthogonal_decomposition(
-        Q, A, tree$D, control$rank_tol
+    geometry <- .condition_q_orthogonal_decomposition_blocks(
+        q, tree$D, control$rank_tol
     )
-    shared_score <- as.numeric(crossprod(A, h))
+    shared_score <- Reduce(`+`, h_condition)
     mu <- as.numeric(
         geometry$shared_inverse %*% (shared_score / geometry$q_scale)
     )
-    H <- crossprod(geometry$R, Q %*% geometry$R)
+    H <- Reduce(`+`, Map(function(R_block, q_block) {
+        crossprod(R_block, q_block %*% R_block)
+    }, geometry$R_blocks, q))
     H <- (H + t(H)) / 2
-    r <- as.numeric(crossprod(geometry$R, h))
+    r <- as.numeric(Reduce(`+`, Map(function(R_block, h_block) {
+        crossprod(R_block, h_block)
+    }, geometry$R_blocks, h_condition)))
     coordinate_information <- .condition_profile_coordinate_information(
         H, control$rank_tol
     )
@@ -678,7 +787,9 @@
         ))
     }
     delta <- solved$delta
-    beta_vector <- as.numeric(A %*% mu + geometry$R %*% delta)
+    beta_vector <- as.numeric(
+        rep(mu, times = k) + geometry$R %*% delta
+    )
     tree$metadata$profile_information <- coordinate_information$information
     tree$metadata$contrast_identifiable <- coordinate_information$estimable
     tree$metadata$shared_by_boundary <- !coordinate_information$estimable

@@ -169,12 +169,15 @@
 .condition_ridge_target <- function(
     prepared, edges, cells_by_condition, folds = NULL, control,
     min_residual_df, rank_action, reference_condition = NULL) {
-    x <- .condition_ridge_predictors(prepared, edges, cells_by_condition)
+    native_input <- .condition_native_predictors_scaling(
+        prepared, edges, cells_by_condition, control$scale_floor
+    )
+    x <- native_input$x
     y <- lapply(cells_by_condition, function(cells) {
         as.numeric(prepared$gene_data[cells, edges$target[[1L]]])
     })
     names(y) <- names(cells_by_condition)
-    scaling <- .condition_ridge_scaling(x, control$scale_floor)
+    scaling <- native_input$scaling
     fit <- .condition_ridge_fit(
         x = x, y = y, scaling = scaling,
         min_residual_df = min_residual_df, control = control,
@@ -366,7 +369,7 @@
     if (is.null(progress_label)) progress_label <- fit$cell_type %||% ""
     checkpoint_fingerprint <- if (is.null(checkpoint_dir)) NULL else {
         .condition_hash_object(list(
-            schema = "pando_Estar_target_checkpoint_input_v3_qscale_block_pair",
+            schema = "pando_Estar_target_checkpoint_input_v4_native_core",
             preprocessing_fingerprint = prepared$preprocessing_fingerprint,
             edge_id = as.character(fit$edge_dictionary$edge_id),
             condition_cells = cells, control = control,

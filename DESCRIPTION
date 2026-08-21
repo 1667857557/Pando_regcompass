@@ -53,6 +53,7 @@ biocViews:
 Depends:
     R (>= 4.0.0)
 Imports:
+    Rcpp,
     bayestestR,
     dplyr,
     foreach,
@@ -84,6 +85,9 @@ Imports:
     tools,
     utils,
     uwot
+LinkingTo:
+    Rcpp
+SystemRequirements: C++17
 Suggests:
     BiocParallel,
     brms,
