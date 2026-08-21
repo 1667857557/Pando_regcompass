@@ -226,7 +226,11 @@
 }
 
 .condition_q_orthogonal_decomposition <- function(Q, A, D, rank_tol) {
-    shared <- .condition_symmetric_pinv(crossprod(A, Q %*% A), rank_tol)
+    q_scale <- max(1, max(abs(Q)))
+    Q_scaled <- Q / q_scale
+    shared <- .condition_symmetric_pinv(
+        crossprod(A, Q_scaled %*% A), rank_tol
+    )
     if (!nrow(D)) {
         return(list(
             R = matrix(0, nrow(Q), 0L),
@@ -239,9 +243,10 @@
     dd <- tcrossprod(D)
     dd_inverse <- .condition_symmetric_pinv(dd, rank_tol)$inverse
     B0 <- t(D) %*% dd_inverse
-    R <- B0 - A %*% shared$inverse %*% crossprod(A, Q %*% B0)
+    R <- B0 -
+        A %*% shared$inverse %*% crossprod(A, Q_scaled %*% B0)
     dr_error <- max(abs(D %*% R - diag(nrow(D))))
-    orthogonality_error <- max(abs(crossprod(A, Q %*% R)))
+    orthogonality_error <- max(abs(crossprod(A, Q_scaled %*% R)))
     list(
         R = R,
         B0 = B0,
@@ -284,12 +289,15 @@
 .condition_E_star_kkt <- function(delta, gradient, weights, active, z) {
     if (!length(delta) || !any(active)) return(0)
     value <- numeric(length(delta))
+    scale <- pmax(1, abs(gradient), z * weights)
     nonzero <- active & abs(delta) > 1e-12
     zero <- active & !nonzero
     value[nonzero] <- abs(
         gradient[nonzero] + z * weights[nonzero] * sign(delta[nonzero])
-    )
-    value[zero] <- pmax(0, abs(gradient[zero]) - z * weights[zero])
+    ) / scale[nonzero]
+    value[zero] <- pmax(
+        0, abs(gradient[zero]) - z * weights[zero]
+    ) / scale[zero]
     max(value[active])
 }
 
@@ -667,3 +675,4 @@
         dr_error = geometry$dr_error
     )
 }
+
