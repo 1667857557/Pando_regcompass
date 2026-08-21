@@ -127,6 +127,75 @@
     do.call(rbind, rows)
 }
 
+.condition_pair_information_blocks <- function(
+    q_blocks, conditions, rank_tol) {
+    k <- length(conditions)
+    if (length(q_blocks) != k || !k) {
+        stop("Pair-information blocks must match the conditions.",
+             call. = FALSE)
+    }
+    p <- nrow(q_blocks[[1L]])
+    if (p < 1L || any(vapply(q_blocks, function(block) {
+        !is.matrix(block) || !identical(dim(block), c(p, p)) ||
+            any(!is.finite(block))
+    }, logical(1)))) {
+        stop("Pair-information blocks must be finite square matrices.",
+             call. = FALSE)
+    }
+    eig <- lapply(q_blocks, function(block) {
+        eigen((block + t(block)) / 2, symmetric = TRUE)
+    })
+    global_scale <- max(1, unlist(lapply(eig, function(one) {
+        abs(one$values)
+    }), use.names = FALSE))
+    tolerance <- rank_tol * (k * p) * global_scale
+    decomposition <- lapply(eig, function(one) {
+        keep <- one$values > tolerance
+        if (any(keep)) {
+            vectors <- one$vectors[, keep, drop = FALSE]
+            inverse <- vectors %*% (t(vectors) / one$values[keep])
+            projector <- vectors %*% t(vectors)
+        } else {
+            inverse <- projector <- matrix(0, p, p)
+        }
+        list(inverse = inverse, projector = projector)
+    })
+    pairs <- utils::combn(seq_len(k), 2L, simplify = FALSE)
+    rows <- vector("list", p * length(pairs))
+    cursor <- 0L
+    estimability_tolerance <- max(1e-8, 40 * rank_tol)
+    for (edge in seq_len(p)) {
+        unit <- numeric(p); unit[[edge]] <- 1
+        for (pair in pairs) {
+            a <- pair[[1L]]
+            b <- pair[[2L]]
+            residual <- max(
+                abs(unit - decomposition[[a]]$projector[edge, ]),
+                abs(unit - decomposition[[b]]$projector[edge, ])
+            )
+            estimable <- residual <= estimability_tolerance
+            variance <- if (estimable) {
+                decomposition[[a]]$inverse[edge, edge] +
+                    decomposition[[b]]$inverse[edge, edge]
+            } else NA_real_
+            information <- if (estimable && is.finite(variance) &&
+                               variance > 0) 1 / variance else 0
+            cursor <- cursor + 1L
+            rows[[cursor]] <- data.frame(
+                edge_index = edge,
+                condition_a_index = a,
+                condition_b_index = b,
+                condition_a = conditions[[a]],
+                condition_b = conditions[[b]],
+                pair_information = information,
+                pair_estimable = information > 0,
+                stringsAsFactors = FALSE
+            )
+        }
+    }
+    do.call(rbind, rows)
+}
+
 .condition_maximum_spanning_tree <- function(vertices, edges, reference_index) {
     vertices <- sort(unique(as.integer(vertices)))
     if (length(vertices) < 2L) return(edges[FALSE, , drop = FALSE])
@@ -168,16 +237,19 @@
 }
 
 .condition_identifiable_contrast_tree <- function(
-    Q, p, conditions, reference_condition, rank_tol = 1e-10) {
+    Q, p, conditions, reference_condition, rank_tol = 1e-10,
+    q_blocks = NULL) {
     k <- length(conditions)
     reference_index <- match(reference_condition, conditions)
     if (is.na(reference_index)) {
         stop("`reference_condition` is not one of the fitted conditions.",
              call. = FALSE)
     }
-    pair_information <- .condition_pair_information(
-        Q, p, conditions, rank_tol
-    )
+    pair_information <- if (is.null(q_blocks)) {
+        .condition_pair_information(Q, p, conditions, rank_tol)
+    } else {
+        .condition_pair_information_blocks(q_blocks, conditions, rank_tol)
+    }
     selected_rows <- vector("list", p)
     boundary <- vector("list", p)
     vertices_used <- vector("list", p)
@@ -236,6 +308,7 @@
             R = matrix(0, nrow(Q), 0L),
             B0 = matrix(0, nrow(Q), 0L),
             shared_inverse = shared$inverse,
+            q_scale = q_scale,
             dr_error = 0,
             orthogonality_error = 0
         ))
@@ -251,6 +324,7 @@
         R = R,
         B0 = B0,
         shared_inverse = shared$inverse,
+        q_scale = q_scale,
         dr_error = dr_error,
         orthogonality_error = orthogonality_error
     )
@@ -578,13 +652,16 @@
     A <- kronecker(matrix(1, nrow = k, ncol = 1), diag(p))
     tree <- .condition_identifiable_contrast_tree(
         Q = Q, p = p, conditions = conditions,
-        reference_condition = reference_condition, rank_tol = control$rank_tol
+        reference_condition = reference_condition, rank_tol = control$rank_tol,
+        q_blocks = q
     )
     geometry <- .condition_q_orthogonal_decomposition(
         Q, A, tree$D, control$rank_tol
     )
     shared_score <- as.numeric(crossprod(A, h))
-    mu <- as.numeric(geometry$shared_inverse %*% shared_score)
+    mu <- as.numeric(
+        geometry$shared_inverse %*% (shared_score / geometry$q_scale)
+    )
     H <- crossprod(geometry$R, Q %*% geometry$R)
     H <- (H + t(H)) / 2
     r <- as.numeric(crossprod(geometry$R, h))

@@ -366,7 +366,7 @@
     if (is.null(progress_label)) progress_label <- fit$cell_type %||% ""
     checkpoint_fingerprint <- if (is.null(checkpoint_dir)) NULL else {
         .condition_hash_object(list(
-            schema = "pando_Estar_target_checkpoint_input_v1",
+            schema = "pando_Estar_target_checkpoint_input_v3_qscale_block_pair",
             preprocessing_fingerprint = prepared$preprocessing_fingerprint,
             edge_id = as.character(fit$edge_dictionary$edge_id),
             condition_cells = cells, control = control,
