@@ -226,7 +226,11 @@
 }
 
 .condition_q_orthogonal_decomposition <- function(Q, A, D, rank_tol) {
-    shared <- .condition_symmetric_pinv(crossprod(A, Q %*% A), rank_tol)
+    q_scale <- max(1, max(abs(Q)))
+    Q_scaled <- Q / q_scale
+    shared <- .condition_symmetric_pinv(
+        crossprod(A, Q_scaled %*% A), rank_tol
+    )
     if (!nrow(D)) {
         return(list(
             R = matrix(0, nrow(Q), 0L),
@@ -239,9 +243,10 @@
     dd <- tcrossprod(D)
     dd_inverse <- .condition_symmetric_pinv(dd, rank_tol)$inverse
     B0 <- t(D) %*% dd_inverse
-    R <- B0 - A %*% shared$inverse %*% crossprod(A, Q %*% B0)
+    R <- B0 -
+        A %*% shared$inverse %*% crossprod(A, Q_scaled %*% B0)
     dr_error <- max(abs(D %*% R - diag(nrow(D))))
-    orthogonality_error <- max(abs(crossprod(A, Q %*% R)))
+    orthogonality_error <- max(abs(crossprod(A, Q_scaled %*% R)))
     list(
         R = R,
         B0 = B0,
@@ -284,58 +289,16 @@
 .condition_E_star_kkt <- function(delta, gradient, weights, active, z) {
     if (!length(delta) || !any(active)) return(0)
     value <- numeric(length(delta))
+    scale <- pmax(1, abs(gradient), z * weights)
     nonzero <- active & abs(delta) > 1e-12
     zero <- active & !nonzero
     value[nonzero] <- abs(
         gradient[nonzero] + z * weights[nonzero] * sign(delta[nonzero])
-    )
-    value[zero] <- pmax(0, abs(gradient[zero]) - z * weights[zero])
+    ) / scale[nonzero]
+    value[zero] <- pmax(
+        0, abs(gradient[zero]) - z * weights[zero]
+    ) / scale[zero]
     max(value[active])
-}
-
-.condition_E_star_coordinate_descent <- function(
-    H, r, weights, initial, z, tol, max_iter) {
-    diagonal <- diag(H)
-    diagonal_floor <- .Machine$double.eps *
-        max(1, max(abs(diagonal), na.rm = TRUE))
-    usable <- is.finite(diagonal) & diagonal > diagonal_floor
-    current <- as.numeric(initial)
-    current[!is.finite(current) | !usable] <- 0
-    gradient <- as.numeric(H %*% current - r)
-    kkt <- Inf
-    converged <- FALSE
-
-    for (iteration in seq_len(max_iter)) {
-        for (j in which(usable)) {
-            old <- current[[j]]
-            partial <- diagonal[[j]] * old - gradient[[j]]
-            updated <- sign(partial) *
-                max(abs(partial) - z * weights[[j]], 0) / diagonal[[j]]
-            difference <- updated - old
-            if (difference != 0) {
-                current[[j]] <- updated
-                gradient <- gradient + H[, j] * difference
-            }
-        }
-        kkt <- .condition_E_star_kkt(
-            current, gradient, weights,
-            rep(TRUE, length(current)), z
-        )
-        if (is.finite(kkt) && kkt <= tol) {
-            converged <- TRUE
-            break
-        }
-    }
-
-    objective <- 0.5 * drop(crossprod(current, H %*% current)) -
-        drop(crossprod(r, current)) + z * sum(weights * abs(current))
-    list(
-        delta = current,
-        status = if (converged) "ok" else "max_iter",
-        iterations = as.integer(iteration),
-        kkt_residual = as.numeric(kkt),
-        objective = as.numeric(objective)
-    )
 }
 
 .condition_E_star_fit <- function(
@@ -410,23 +373,6 @@
             converged <- TRUE
             break
         }
-    }
-    if (!converged) {
-        fallback_max_iter <- as.integer(min(
-            .Machine$integer.max,
-            max(50000, 10 * as.numeric(control$solver_max_iter))
-        ))
-        fallback <- .condition_E_star_coordinate_descent(
-            H = Hs, r = rs, weights = weights, initial = current,
-            z = .condition_E_star_z,
-            tol = max(control$solver_tol, 1e-10),
-            max_iter = fallback_max_iter
-        )
-        current <- fallback$delta
-        kkt <- fallback$kkt_residual
-        objective <- fallback$objective
-        iteration <- as.integer(iteration + fallback$iterations)
-        converged <- identical(fallback$status, "ok")
     }
     delta[index] <- current
     list(
